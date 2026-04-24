@@ -59,6 +59,7 @@ from pmst_overlap_common import (
 IFS_ROOT_DEFAULT = "/public/home/sd3team/sd3_database/src_data/IFS/nc_0p1"
 VIS_MLP_ROOT = "/public/home/putianshu/vis_mlp"
 IFS_BASELINE_ROOT = os.path.join(VIS_MLP_ROOT, "ifs_baseline")
+IFS_INTERP_DIR_DEFAULT = os.path.join(IFS_BASELINE_ROOT, "ifs_interp_out")
 BASE_PATH = VIS_MLP_ROOT
 TIANJI_FILE_DEFAULT = os.path.join(BASE_PATH, "tianji_auto_station", "merged_final_all_vars.nc")
 VEG_FILE_DEFAULT = "/public/home/putianshu/vis_cnn/data_vegtype.nc"
@@ -246,10 +247,27 @@ def _parse_ifs_interp_input_paths(ifs_interp_nc: str, ifs_interp_glob: str) -> L
     raw =[os.path.realpath(p.strip()) for p in (ifs_interp_nc or "").split(",") if p.strip()]
     if (ifs_interp_glob or "").strip():
         raw.extend(sorted(glob.glob(os.path.realpath(ifs_interp_glob.strip()))))
-    return list(dict.fromkeys(raw))
+    return [p for p in dict.fromkeys(raw) if os.path.isfile(p)]
+
+def _discover_default_ifs_interp_paths(year: int, interp_dir: str) -> List[str]:
+    """Auto-discover station-interpolated IFS files, preferring them over raw grids."""
+    if not interp_dir or not os.path.isdir(interp_dir):
+        return []
+    patterns = [
+        os.path.join(interp_dir, f"ifs_interp_*_{year}.nc"),
+        os.path.join(interp_dir, "**", f"ifs_interp_*_{year}.nc"),
+        os.path.join(interp_dir, f"interpolated_ifs_{year}.nc"),
+        os.path.join(interp_dir, "**", f"interpolated_ifs_{year}.nc"),
+    ]
+    raw: List[str] = []
+    for pat in patterns:
+        raw.extend(sorted(glob.glob(pat, recursive=True)))
+    return [os.path.realpath(p) for p in dict.fromkeys(raw) if os.path.isfile(p)]
 
 def _load_single_interp(path_nc: str):
-    with xr.open_dataset(path_nc, engine="h5netcdf") as ds:
+    with xr.open_dataset(path_nc) as ds:
+        if "ifs_interp" not in ds.data_vars:
+            raise KeyError(f"{path_nc}: expected data var 'ifs_interp', got {list(ds.data_vars)}")
         return ds["ifs_interp"].values.astype(np.float32), pd.DatetimeIndex(ds["time"].values), ds["station_id"].values,[normalize_var_coord(v) for v in ds["variable"].values], path_nc
 
 def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeIndex, station_ids_tj: np.ndarray) -> np.ndarray:
@@ -260,6 +278,11 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
     ref_shape_ts, ref_times, ref_stations = None, None, None
     for arr, ifs_times, ifs_stations, var_coord, path_nc in results:
         if ref_shape_ts is None: ref_shape_ts, ref_times, ref_stations = (arr.shape[0], arr.shape[1]), ifs_times, ifs_stations
+        elif (arr.shape[0], arr.shape[1]) != ref_shape_ts:
+            raise ValueError(f"{path_nc}: shape {(arr.shape[0], arr.shape[1])} != first interp file {ref_shape_ts}")
+        for vn in var_coord:
+            if vn in merged_var_names:
+                raise ValueError(f"Duplicate interpolated IFS variable {vn!r} in {path_nc}")
         merged_var_names.extend(var_coord)
         chunks.append(arr)
 
@@ -280,6 +303,8 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
     nt, ns = len(tj_times), len(station_ids_tj)
     fields = {}
     for name in OVERLAP_CANONICAL:
+        if name not in merged_var_names:
+            raise KeyError(f"Interpolated IFS files missing {name!r}; have {merged_var_names}")
         vi = merged_var_names.index(name)
         slot = np.full((nt, ns), np.nan, dtype=np.float32)
         if np.any(valid_t_mask): slot[valid_t_mask, :] = big[valid_time_idx[:, None], st_cols[None, :], vi]
@@ -510,6 +535,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ifs_interp_nc", default="")
     ap.add_argument("--ifs_interp_glob", default="")
+    ap.add_argument("--ifs_interp_dir", default=IFS_INTERP_DIR_DEFAULT)
+    ap.add_argument(
+        "--no_auto_ifs_interp",
+        action="store_true",
+        help="Disable auto-discovery of station-interpolated IFS files and use gridded --ifs_root fallback.",
+    )
     ap.add_argument("--ifs_root", default=IFS_ROOT_DEFAULT)
     ap.add_argument("--tianji_file", default=TIANJI_FILE_DEFAULT)
     ap.add_argument("--veg_file", default=VEG_FILE_DEFAULT)
@@ -576,9 +607,18 @@ def main():
         
         # 1. 填充气象场
         interp_paths = _parse_ifs_interp_input_paths(args.ifs_interp_nc, args.ifs_interp_glob)
+        if not interp_paths and not args.no_auto_ifs_interp:
+            interp_paths = _discover_default_ifs_interp_paths(args.year, args.ifs_interp_dir)
+            if interp_paths:
+                print(
+                    f"[INFO] Auto-discovered {len(interp_paths)} interpolated IFS files under {args.ifs_interp_dir}.",
+                    flush=True,
+                )
         if interp_paths:
             # 兼容旧的高维读取逻辑，读取后转置进共享内存
             print(f"[INFO] Using interpolated IFS files: {len(interp_paths)}", flush=True)
+            for p in interp_paths:
+                print(f"  -> {p}", flush=True)
             X_met = _fill_from_interp_nc_multi(interp_paths, times, stations)
             X_dyn[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
             del X_met; gc.collect()
@@ -638,6 +678,8 @@ def main():
         "ifs_source": source_tag,
         "ifs_interp_nc": args.ifs_interp_nc or None,
         "ifs_interp_glob": args.ifs_interp_glob or None,
+        "ifs_interp_dir": args.ifs_interp_dir,
+        "no_auto_ifs_interp": bool(args.no_auto_ifs_interp),
         "ifs_interp_nc_list": interp_paths if interp_paths else None,
         "ifs_root": args.ifs_root,
         "year": args.year,
