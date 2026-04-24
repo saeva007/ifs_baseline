@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 IFS overlap baseline aligned to Tianji: PMST 27-dyn + 36-FE, month-tail split.
-[HPC Chief Architect Version - 100% Aligned]:
-  - Pure ProcessPoolExecutor with Shared Memory (Zero IPC / Zero Concatenation).
-  - Cache-locality maximized: Processed by (Station, Time) in L3 cache.
-  - Transparent Transposition: Reverts to original (Time, Station) flattened layout 
-    to strictly align with S1 row order and downstream baseline builds.
+
+Fast/robust version:
+  - Skips broken IFS NetCDF files before xarray opens the multi-file dataset.
+  - Opens gridded IFS variables sequentially to avoid h5netcdf/HDF5 parallel-open failures.
+  - Keeps the canonical 27-channel PMST dynamic layout.
+  - Streams sliding-window samples directly into split .npy memmaps instead of materializing
+    the full flattened dataset in RAM.
 """
 
 from __future__ import annotations
@@ -17,10 +19,7 @@ import glob
 import json
 import os
 import time
-import multiprocessing
-from multiprocessing import shared_memory
-from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # ================== 架构底线：必须扼杀底层 C 库的多线程暴增 ==================
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -34,22 +33,26 @@ import pandas as pd
 import xarray as xr
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy.spatial import cKDTree
-from joblib import Parallel, delayed
 
 from pmst_overlap_common import (
     OVERLAP_CANONICAL,
+    OVERLAP_PMST_INDICES,
+    PM10_IDX,
+    PM25_IDX,
+    PMST_MET_DIM,
     TOTAL_DYN,
-    append_pm10_channel,
-    append_pm25_channel,
+    U10_IDX,
+    V10_IDX,
+    WSPD10_IDX,
     build_static_features,
     build_station_reindex_map,
     compute_fog_features_pmst,
     cyclical_time_features,
+    get_monthly_split_mask_last_days,
     load_pm10_dataarray,
     load_pm25_dataarray,
     normalize_var_coord,
     scatter_overlap_fields,
-    save_chunked_monthtail,
     calculate_zenith_angle,
 )
 
@@ -73,6 +76,7 @@ UNIQUE_VEG_IDS = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
 VAL_LAST_DAYS_DEFAULT = 3
 TEST_LAST_DAYS_DEFAULT = 3
 GAP_HOURS_DEFAULT = 24
+WINDOW_CHUNK_DEFAULT = 64
 
 
 class IfsVarSpec:
@@ -108,18 +112,91 @@ def _list_real_files(folder: str, ifs_root: str, year: int) -> List[str]:
     d = os.path.join(ifs_root, folder)
     return[fp for fp in sorted(glob.glob(os.path.join(d, f"*{year}*.nc"))) if _real_exists(fp)]
 
+def _netcdf_kind(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            sig = f.read(8)
+    except OSError:
+        return "missing"
+    if sig == b"\x89HDF\r\n\x1a\n":
+        return "hdf5"
+    if sig[:3] == b"CDF":
+        return "cdf"
+    return "unknown"
+
+def _filter_openable_ifs_files(files: Sequence[str], var_name: str, folder: str) -> Tuple[List[str], str]:
+    good_by_kind: Dict[str, List[str]] = {"hdf5": [], "cdf": []}
+    bad: List[Tuple[str, str]] = []
+    for fp in files:
+        kind = _netcdf_kind(fp)
+        if kind not in good_by_kind:
+            bad.append((fp, f"not a NetCDF file (signature={kind})"))
+            continue
+        engine = "h5netcdf" if kind == "hdf5" else "scipy"
+        try:
+            with xr.open_dataset(fp, engine=engine) as ds:
+                if var_name not in ds.data_vars:
+                    bad.append((fp, f"missing var {var_name!r}; vars={list(ds.data_vars)}"))
+                    continue
+                if "time" not in ds.coords and "time" not in ds.dims:
+                    bad.append((fp, "missing time coordinate"))
+                    continue
+            good_by_kind[kind].append(fp)
+        except Exception as e:
+            bad.append((fp, f"{type(e).__name__}: {e}"))
+    kind = "hdf5" if len(good_by_kind["hdf5"]) >= len(good_by_kind["cdf"]) else "cdf"
+    good = good_by_kind[kind]
+    skipped_other = good_by_kind["cdf" if kind == "hdf5" else "hdf5"]
+    if skipped_other:
+        print(
+            f"[WARN] Skipping {len(skipped_other)} {folder} files with mixed NetCDF storage; "
+            f"using {kind} files only.",
+            flush=True,
+        )
+    for fp, reason in bad[:20]:
+        print(f"[WARN] Skipping bad IFS file for {folder}: {fp} ({reason})", flush=True)
+    if len(bad) > 20:
+        print(f"[WARN] ... skipped {len(bad) - 20} more bad files for {folder}", flush=True)
+    engine = "h5netcdf" if kind == "hdf5" else "scipy"
+    return good, engine
+
 def _open_ifs_concat(folder: str, var_name: str, ifs_root: str, year: int) -> xr.Dataset:
     files = _list_real_files(folder, ifs_root, year)
     if not files: raise FileNotFoundError(f"No files for {folder} {year}")
+    files, engine = _filter_openable_ifs_files(files, var_name, folder)
+    if not files:
+        raise FileNotFoundError(f"No openable NetCDF files for {folder} {year}")
     try:
-        return xr.open_mfdataset(files, combine="by_coords", parallel=True, engine="h5netcdf")
+        ds = xr.open_mfdataset(
+            files,
+            combine="by_coords",
+            parallel=False,
+            engine=engine,
+            chunks={"time": 24},
+            data_vars="minimal",
+            coords="minimal",
+            compat="override",
+        )
     except ValueError as e:
         if "monotonic" in str(e) or "time" in str(e):
-            ds = xr.open_mfdataset(files, combine="nested", concat_dim="time",
-                                   coords="minimal", compat="override", parallel=True, engine="h5netcdf")
+            ds = xr.open_mfdataset(
+                files,
+                combine="nested",
+                concat_dim="time",
+                coords="minimal",
+                compat="override",
+                parallel=False,
+                engine=engine,
+                chunks={"time": 24},
+            )
             _, unique_indices = np.unique(ds["time"].values, return_index=True)
-            return ds.isel(time=unique_indices)
-        raise e
+            ds = ds.isel(time=np.sort(unique_indices)).sortby("time")
+        else:
+            raise e
+    if var_name not in ds.data_vars:
+        ds.close()
+        raise KeyError(f"IFS dataset {folder} missing var {var_name}. got={list(ds.data_vars)}")
+    return ds
 
 def _nearest_index(grid: np.ndarray, pts: np.ndarray) -> np.ndarray:
     grid, pts = np.asarray(grid).astype(np.float64), np.asarray(pts).astype(np.float64)
@@ -138,10 +215,9 @@ def _load_single_interp(path_nc: str):
         return ds["ifs_interp"].values.astype(np.float32), pd.DatetimeIndex(ds["time"].values), ds["station_id"].values,[normalize_var_coord(v) for v in ds["variable"].values], path_nc
 
 def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeIndex, station_ids_tj: np.ndarray) -> np.ndarray:
-    print(f"[INFO] Merging {len(paths_nc)} interp files (Multithreaded I/O)...", flush=True)
+    print(f"[INFO] Merging {len(paths_nc)} interp files...", flush=True)
     merged_var_names, chunks = [],[]
-    num_io_threads = min(len(paths_nc), max(1, multiprocessing.cpu_count() - 2))
-    results = Parallel(n_jobs=num_io_threads, prefer="threads")(delayed(_load_single_interp)(p) for p in paths_nc)
+    results = [_load_single_interp(p) for p in paths_nc]
 
     ref_shape_ts, ref_times, ref_stations = None, None, None
     for arr, ifs_times, ifs_stations, var_coord, path_nc in results:
@@ -174,74 +250,219 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
     return scatter_overlap_fields(nt, ns, fields)
 
 # ================== 核心优化组件 ==================
-def fetch_pm_channel_safe(func, pm_da, times, stations) -> np.ndarray:
-    """安全隔离器：创建一个 0 特征宽度的 Dummy Array 让原函数执行，只截取返回的新增 PM 层"""
-    dummy_base = np.zeros((len(times), len(stations), 0), dtype=np.float32)
-    res = func(dummy_base, pm_da, times, stations)
-    return res[..., 0]  # 返回 shape (nt, ns)
+def _extract_pm_channel(pm_da: Optional[xr.DataArray], times: pd.DatetimeIndex, station_ids: np.ndarray) -> np.ndarray:
+    """Return PM channel as (nt, ns) ug/m^3 without concatenating dynamic arrays."""
+    nt, ns = len(times), len(station_ids)
+    if pm_da is None:
+        return np.zeros((nt, ns), dtype=np.float32)
+
+    pm_da = pm_da.load()
+    time_vals = pm_da["time"].values
+    if np.issubdtype(time_vals.dtype, np.datetime64):
+        time_index = pd.DatetimeIndex(time_vals)
+    else:
+        time_index = pd.to_datetime(time_vals, unit="s", origin="unix")
+    sid_index = pd.Index(pm_da["station_id"].values)
+    sids = station_ids.astype(pm_da["station_id"].dtype)
+    time_pos = time_index.get_indexer(times, method="nearest", tolerance=pd.Timedelta(minutes=90))
+    sid_pos = sid_index.get_indexer(sids)
+
+    nt_pm, ns_pm = pm_da.shape
+    pm_grid = np.full((nt, ns), np.nan, dtype=np.float32)
+    ok_mask = (time_pos[:, None] >= 0) & (sid_pos[None, :] >= 0)
+    if ok_mask.any():
+        base = np.asarray(pm_da.values).reshape(-1)
+        linear_idx_grid = time_pos[:, None] * ns_pm + sid_pos[None, :]
+        pm_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
+    pm_grid = np.maximum(pm_grid, 0.0)
+    pm_ug = pm_grid * 1e12
+    med = np.nanmedian(pm_ug)
+    if not np.isfinite(med):
+        med = 0.0
+    return np.where(np.isfinite(pm_ug), pm_ug, med).astype(np.float32)
+
+def _fill_wspd10_in_place(buffer_array: np.ndarray, station_chunk: int = 512) -> None:
+    for st0 in range(0, buffer_array.shape[0], station_chunk):
+        st1 = min(st0 + station_chunk, buffer_array.shape[0])
+        u = buffer_array[st0:st1, :, U10_IDX]
+        v = buffer_array[st0:st1, :, V10_IDX]
+        buffer_array[st0:st1, :, WSPD10_IDX] = np.sqrt(u * u + v * v).astype(np.float32)
 
 @_timer
 def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex, 
                             lats: np.ndarray, lons: np.ndarray, 
                             buffer_array: np.ndarray, start_idx: int):
-    """Xarray -> 共享内存的零拷贝注入 (Station-First Layout)"""
-    ifs_datasets = {c: _open_ifs_concat(s.folder, s.var_name, ifs_root, year) for c, s in IFS_MAP.items()}
-    first = next(iter(ifs_datasets.values()))
-    
-    lat_grid = first["latitude"].values if "latitude" in first else first["lat"].values
-    lon_grid = first["longitude"].values if "longitude" in first else first["lon"].values
-    lat_idx, lon_idx = _nearest_index(lat_grid, lats), _nearest_index(lon_grid, lons % 360)
+    """Xarray -> station-first memmap injection in PMST 27-channel layout."""
+    _ = start_idx
+    lat_idx = lon_idx = None
 
-    ifs_time = pd.DatetimeIndex(first["time"].values)
-    time_pos = ifs_time.get_indexer(tj_times, method="nearest", tolerance=pd.Timedelta(minutes=90))
-    valid_t_mask = time_pos >= 0
-    time_idx = time_pos[valid_t_mask]
+    for canon in OVERLAP_CANONICAL:
+        spec = IFS_MAP[canon]
+        ds = _open_ifs_concat(spec.folder, spec.var_name, ifs_root, year)
+        try:
+            lat_name = "latitude" if "latitude" in ds.coords or "latitude" in ds.dims else "lat"
+            lon_name = "longitude" if "longitude" in ds.coords or "longitude" in ds.dims else "lon"
+            if lat_idx is None or lon_idx is None:
+                lat_grid = ds[lat_name].values
+                lon_grid = ds[lon_name].values
+                lat_idx = _nearest_index(lat_grid, lats)
+                lon_idx = _nearest_index(lon_grid, lons % 360)
 
-    time_idx_xr = xr.DataArray(time_idx, dims=["time"])
-    lat_idx_xr = xr.DataArray(lat_idx, dims=["station"])
-    lon_idx_xr = xr.DataArray(lon_idx, dims=["station"])
+            ifs_time = pd.DatetimeIndex(ds["time"].values)
+            time_pos = ifs_time.get_indexer(tj_times, method="nearest", tolerance=pd.Timedelta(minutes=90))
+            valid_t_mask = time_pos >= 0
+            if not valid_t_mask.any():
+                raise RuntimeError(f"No overlapping times between Tianji and IFS for {canon}")
 
-    for i, canon in enumerate(OVERLAP_CANONICAL):
-        da = ifs_datasets[canon][IFS_MAP[canon].var_name]
-        lat_dim = "latitude" if "latitude" in da.dims else "lat"
-        lon_dim = "longitude" if "longitude" in da.dims else "lon"
-        
-        isel_dict = {"time": time_idx_xr, lat_dim: lat_idx_xr, lon_dim: lon_idx_xr}
-        for dim in da.dims:
-            if dim not in isel_dict: isel_dict[dim] = 0
-                
-        # 极速提取：shape (valid_nt, ns)
-        extracted = da.isel(**isel_dict).compute().values
-        # 直接填充进共享内存，并转置为 (ns, valid_nt)
-        buffer_array[:, valid_t_mask, start_idx + i] = extracted.T
-        print(f"  -> {canon} mapped directly into Shared Memory.", flush=True)
+            da = ds[spec.var_name]
+            lat_dim = "latitude" if "latitude" in da.dims else "lat"
+            lon_dim = "longitude" if "longitude" in da.dims else "lon"
+            isel_dict = {
+                "time": xr.DataArray(time_pos[valid_t_mask], dims=["time"]),
+                lat_dim: xr.DataArray(lat_idx, dims=["station"]),
+                lon_dim: xr.DataArray(lon_idx, dims=["station"]),
+            }
+            for dim in da.dims:
+                if dim not in isel_dict:
+                    isel_dict[dim] = 0
 
-    return len(OVERLAP_CANONICAL)
+            extracted = da.isel(**isel_dict).load().values.astype(np.float32, copy=False)
+            pmst_idx = OVERLAP_PMST_INDICES[canon]
+            buffer_array[:, :, pmst_idx] = np.nan
+            buffer_array[:, valid_t_mask, pmst_idx] = extracted.T
+            print(f"  -> {canon} mapped into PMST channel {pmst_idx}.", flush=True)
+        finally:
+            ds.close()
 
-def process_station_chunk(shm_name: str, shape: Tuple[int, int, int], 
-                          st_start: int, st_end: int, 
-                          window_size: int, step: int, total_dyn: int):
-    """子进程：完美匹配缓存连续性的滑动窗口计算，返回未展平的高维张量以供后续主进程修正行维度"""
-    existing_shm = shared_memory.SharedMemory(name=shm_name)
-    X_dyn_view = np.ndarray(shape, dtype=np.float32, buffer=existing_shm.buf)
-    
-    my_stations = X_dyn_view[st_start:st_end, :, :]
-    
-    # 滑动窗口: (n_stations, n_windows, total_dyn, window_size)
-    strided = sliding_window_view(my_stations, window_shape=window_size, axis=1)[:, ::step, :, :]
-    n_s, n_w, d, w = strided.shape
-    
-    # x_samp shape: (n_s, n_w, window_size, total_dyn)
-    x_samp = strided.transpose(0, 1, 3, 2)
-    
-    # 压平前缀喂给你的源函数
-    fe = compute_fog_features_pmst(x_samp.reshape(n_s * n_w, w, d), w, d)
-    
-    # 将其重构为三维，以便于在外层统一进行维度互换
-    fe_3d = fe.reshape(n_s, n_w, -1)
-    
-    existing_shm.close()
-    return x_samp, fe_3d
+    _fill_wspd10_in_place(buffer_array)
+    return PMST_MET_DIM
+
+def _write_split_metadata(
+    out_dir: str,
+    splits: Dict[str, np.ndarray],
+    y_flat: np.ndarray,
+    times_all: np.ndarray,
+    stations_all: np.ndarray,
+    lats_all: np.ndarray,
+    lons_all: np.ndarray,
+) -> None:
+    for tag, ix in splits.items():
+        if len(ix) == 0:
+            continue
+        np.save(os.path.join(out_dir, f"y_{tag}.npy"), y_flat[ix])
+        pd.DataFrame(
+            {"time": times_all[ix], "station_id": stations_all[ix], "lat": lats_all[ix], "lon": lons_all[ix]}
+        ).to_csv(os.path.join(out_dir, f"meta_{tag}.csv"), index=False)
+
+def _prepare_split_memmaps(
+    out_dir: str,
+    splits: Dict[str, np.ndarray],
+    total_dim: int,
+) -> Dict[str, np.memmap]:
+    out: Dict[str, np.memmap] = {}
+    for tag, ix in splits.items():
+        if len(ix) == 0:
+            continue
+        print(f"    Creating {tag} memmap (N={len(ix)})", flush=True)
+        out[tag] = np.lib.format.open_memmap(
+            os.path.join(out_dir, f"X_{tag}.npy"),
+            mode="w+",
+            dtype="float32",
+            shape=(len(ix), total_dim),
+        )
+    return out
+
+def save_streamed_monthtail(
+    X_dyn: np.ndarray,
+    X_stat: np.ndarray,
+    y_full: np.ndarray,
+    times: pd.DatetimeIndex,
+    stations: np.ndarray,
+    lats: np.ndarray,
+    lons: np.ndarray,
+    out_dir: str,
+    window: int,
+    step: int,
+    gap_hours: int,
+    val_last_days: int,
+    test_last_days: int,
+    window_chunk: int,
+) -> Tuple[int, int, int]:
+    """Write train/val/test arrays in time-major order without materializing all windows."""
+    if step < 1:
+        raise ValueError(f"step must be >= 1, got {step}")
+    if window < 7:
+        raise ValueError("window must be >= 7 because fog features use -4 and -7 lags")
+    nt, ns = len(times), len(stations)
+    if nt < window:
+        raise ValueError(f"Not enough timesteps ({nt}) for window={window}")
+
+    n_wins = (nt - window) // step + 1
+    sample_times = times[window - 1 :: step][:n_wins]
+    total_rows = n_wins * ns
+
+    y_flat = np.where(y_full <= MAX_VIS_THRESHOLD, y_full, np.nan)[window - 1 :: step].reshape(-1)
+    mask = ~np.isnan(y_flat) & (y_flat >= 0) & (y_flat <= MAX_VIS_THRESHOLD)
+    valid_idxs = np.where(mask)[0]
+    print(f"  Valid Samples: {len(valid_idxs)} ({len(valid_idxs) / max(total_rows, 1):.1%})", flush=True)
+
+    times_all = np.repeat(sample_times.values, ns)
+    stations_all = np.tile(stations, n_wins)
+    lats_all = np.tile(lats, n_wins)
+    lons_all = np.tile(lons, n_wins)
+    valid_times = pd.DatetimeIndex(times_all[valid_idxs])
+    tr_m, val_m, test_m = get_monthly_split_mask_last_days(valid_times, gap_hours, val_last_days, test_last_days)
+    splits = {"train": valid_idxs[tr_m], "val": valid_idxs[val_m], "test": valid_idxs[test_m]}
+
+    dummy_fe_dim = compute_fog_features_pmst(np.zeros((1, window, TOTAL_DYN), dtype=np.float32), window, TOTAL_DYN).shape[1]
+    dyn_dim = window * TOTAL_DYN
+    stat_dim = X_stat.shape[1]
+    fe_dim = dummy_fe_dim + 4
+    total_dim = dyn_dim + stat_dim + fe_dim
+
+    _write_split_metadata(out_dir, splits, y_flat, times_all, stations_all, lats_all, lons_all)
+    split_fps = _prepare_split_memmaps(out_dir, splits, total_dim)
+
+    try:
+        for w0 in range(0, n_wins, window_chunk):
+            w1 = min(w0 + window_chunk, n_wins)
+            t0 = w0 * step
+            t1 = (w1 - 1) * step + window
+            block = X_dyn[:, t0:t1, :]
+            win_view = sliding_window_view(block, window_shape=window, axis=1)[:, ::step, :, :]
+            win_view = win_view[:, : (w1 - w0), :, :]
+            samples = np.ascontiguousarray(win_view.transpose(1, 0, 3, 2).reshape(-1, window, TOTAL_DYN))
+            fe_base = compute_fog_features_pmst(samples, window, TOTAL_DYN)
+            chunk_times = np.repeat(sample_times[w0:w1].values, ns)
+            time_fe = cyclical_time_features(pd.DatetimeIndex(chunk_times))
+            global_start = w0 * ns
+            global_end = w1 * ns
+
+            for tag, ix in splits.items():
+                if len(ix) == 0:
+                    continue
+                lo = int(np.searchsorted(ix, global_start, side="left"))
+                hi = int(np.searchsorted(ix, global_end, side="left"))
+                if hi <= lo:
+                    continue
+                g_ix = ix[lo:hi]
+                local_ix = g_ix - global_start
+                fp = split_fps[tag]
+                fp[lo:hi, :dyn_dim] = samples[local_ix].reshape(len(local_ix), dyn_dim)
+                fp[lo:hi, dyn_dim : dyn_dim + stat_dim] = X_stat[g_ix % ns]
+                fp[lo:hi, dyn_dim + stat_dim : dyn_dim + stat_dim + dummy_fe_dim] = fe_base[local_ix]
+                fp[lo:hi, dyn_dim + stat_dim + dummy_fe_dim :] = time_fe[local_ix]
+
+            del samples, fe_base, time_fe, win_view
+            gc.collect()
+            print(f"    Streamed windows {w0}:{w1} / {n_wins}", flush=True)
+    finally:
+        for fp in split_fps.values():
+            fp.flush()
+            del fp
+        gc.collect()
+
+    return n_wins, dummy_fe_dim, fe_dim
 
 
 @_timer
@@ -264,11 +485,11 @@ def main():
     ap.add_argument("--val_last_days", type=int, default=VAL_LAST_DAYS_DEFAULT)
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
+    ap.add_argument("--window_chunk", type=int, default=WINDOW_CHUNK_DEFAULT)
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
-    NUM_CORES = max(1, multiprocessing.cpu_count() - 2)
-    print(f"[INFO] Booting architecture with {NUM_CORES} pure worker processes.", flush=True)
+    print(f"[INFO] Booting streaming builder with window_chunk={args.window_chunk}.", flush=True)
 
     with xr.open_dataset(args.tianji_file, engine="h5netcdf") as ds_tj:
         ds_tj = ds_tj.assign_coords(time=ds_tj.time - pd.Timedelta(hours=8))
@@ -282,121 +503,102 @@ def main():
     data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
     data_oro = xr.open_dataset(args.oro_file, engine="h5netcdf")
     X_stat = build_static_features(lats, lons, data_veg, data_oro, UNIQUE_VEG_IDS)
+    data_veg.close()
+    data_oro.close()
 
-    # 确定特征数量与内存布局: (NS, NT, F)
+    # 确定特征数量与内存布局: (NS, NT, 27)
     nt, ns = len(times), len(stations)
-    total_features = len(OVERLAP_CANONICAL) + 3 # met + zenith + pm10 + pm2.5
+    total_features = TOTAL_DYN
+    scratch_path = os.path.join(args.out_dir, "_tmp_X_dyn_pmst27.npy")
     bytes_size = ns * nt * total_features * 4
-    
-    print(f"[INFO] Allocating Zero-copy RAM Pool ({bytes_size / 1e9:.2f} GB)...", flush=True)
-    shm = shared_memory.SharedMemory(create=True, size=bytes_size)
+    print(f"[INFO] Creating dynamic memmap {scratch_path} ({bytes_size / 1e9:.2f} GB logical)...", flush=True)
     
     try:
-        X_dyn = np.ndarray((ns, nt, total_features), dtype=np.float32, buffer=shm.buf)
-        X_dyn.fill(np.nan)
+        X_dyn = np.lib.format.open_memmap(
+            scratch_path,
+            mode="w+",
+            dtype="float32",
+            shape=(ns, nt, total_features),
+        )
+        X_dyn.fill(0.0)
         
         # 1. 填充气象场
         interp_paths = _parse_ifs_interp_input_paths(args.ifs_interp_nc, args.ifs_interp_glob)
-        current_idx = 0
         if interp_paths:
             # 兼容旧的高维读取逻辑，读取后转置进共享内存
             X_met = _fill_from_interp_nc_multi(interp_paths, times, stations)
-            feat_len = len(OVERLAP_CANONICAL)
-            X_dyn[:, :, current_idx:current_idx+feat_len] = X_met.transpose(1, 0, 2)
-            current_idx += feat_len
+            X_dyn[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
             del X_met; gc.collect()
             source_tag = "ifs_interp_nc"
         else:
-            feat_len = fetch_ifs_data_in_place(args.ifs_root, args.year, times, lats, lons, X_dyn, current_idx)
-            current_idx += feat_len
+            fetch_ifs_data_in_place(args.ifs_root, args.year, times, lats, lons, X_dyn, 0)
             source_tag = "ifs_gridded"
 
         # 2. 填充 Zenith 与 PM
-        print("[INFO] Computing and writing Zenith & PM to Shared Pool...", flush=True)
+        print("[INFO] Computing and writing Zenith & PM to dynamic memmap...", flush=True)
         zenith = calculate_zenith_angle(lats, lons, times)  # (nt, ns, 1)
-        X_dyn[:, :, current_idx] = zenith.squeeze(-1).T     # 转置写入
-        current_idx += 1
+        X_dyn[:, :, PMST_MET_DIM] = zenith.squeeze(-1).T     # 转置写入
+        del zenith; gc.collect()
 
         pm10_da = load_pm10_dataarray(args.pm10_file, args.pm10_dir)
-        pm10_arr = fetch_pm_channel_safe(append_pm10_channel, pm10_da, times, stations) # (nt, ns)
-        X_dyn[:, :, current_idx] = pm10_arr.T
-        current_idx += 1
+        pm10_arr = _extract_pm_channel(pm10_da, times, stations) # (nt, ns)
+        X_dyn[:, :, PM10_IDX] = pm10_arr.T
+        del pm10_arr, pm10_da; gc.collect()
         
         pm25_da = load_pm25_dataarray(args.pm25_file, args.pm25_dir)
-        pm25_arr = fetch_pm_channel_safe(append_pm25_channel, pm25_da, times, stations) # (nt, ns)
-        X_dyn[:, :, current_idx] = pm25_arr.T
+        pm25_arr = _extract_pm_channel(pm25_da, times, stations) # (nt, ns)
+        X_dyn[:, :, PM25_IDX] = pm25_arr.T
+        del pm25_arr, pm25_da; gc.collect()
 
-        # 3. 极速并发运算 (Map)
-        print("[INFO] Igniting ProcessPool for cache-locality optimization...", flush=True)
-        station_indices = np.array_split(np.arange(ns), NUM_CORES)
-        tasks = [
-            (shm.name, (ns, nt, total_features), idx[0], idx[-1] + 1, args.window, args.step, TOTAL_DYN)
-            for idx in station_indices if len(idx) > 0
-        ]
+        X_dyn.flush()
 
-        with ProcessPoolExecutor(max_workers=NUM_CORES) as executor:
-            process_results = list(executor.map(lambda p: process_station_chunk(*p), tasks))
-
-        # 4. 获取结果块 (Reduce)
-        X_dyn_3d = np.concatenate([r[0] for r in process_results], axis=0) # (ns, nw, win, dyn)
-        FE_3d = np.concatenate([r[1] for r in process_results], axis=0)    # (ns, nw, fe_dim)
-        del process_results; gc.collect()
-
-        # =========================================================================
-        #[业务对齐底线]：完美还原为 S1 的 Time-Major 行顺序！
-        # 将 axis=0 (Station) 和 axis=1 (Window/Time) 互换。
-        # 互换后： (nw, ns, win, dyn) -> 压平 -> 与原脚本完全一致
-        # =========================================================================
-        print("[INFO] Transposing axes to strictly align with S1 Time-Major Row Order...", flush=True)
-        n_wins = X_dyn_3d.shape[1]
-        
-        X_dyn_flat = X_dyn_3d.transpose(1, 0, 2, 3).reshape(n_wins * ns, -1)
-        fe_flat = FE_3d.transpose(1, 0, 2).reshape(n_wins * ns, -1)
-        del X_dyn_3d, FE_3d; gc.collect()
-
+        print("[INFO] Streaming windows directly into split dataset files...", flush=True)
+        n_wins, fog_fe_dim, fe_dim = save_streamed_monthtail(
+            X_dyn,
+            X_stat,
+            y,
+            times,
+            stations,
+            lats,
+            lons,
+            args.out_dir,
+            args.window,
+            args.step,
+            args.gap_hours,
+            args.val_last_days,
+            args.test_last_days,
+            max(1, args.window_chunk),
+        )
     finally:
-        # 极客底线：绝不留内存泄漏
-        shm.close()
-        shm.unlink()
-        print("[INFO] Shared memory pool wiped gracefully.", flush=True)
-
-    print("[INFO] Processing Targets and Labels...", flush=True)
-    y = np.where(y <= MAX_VIS_THRESHOLD, y, np.nan)
-    # y原本就是 (nt, ns)，这里的切片和 reshape(-1) 恰好产生的是 Time-Major 顺序！
-    y = y[args.window - 1 :: args.step].reshape(-1)
-
-    # 制作坐标系的 Time-Major 对齐索引
-    m_t = np.repeat(times[args.window - 1 :: args.step].values, ns) #[T0,T0,T0... T1,T1,T1...]
-    m_s = np.tile(stations, n_wins)                                 # [S0,S1,S2... S0,S1,S2...]
-    m_la = np.tile(lats, n_wins)
-    m_lo = np.tile(lons, n_wins)
-
-    time_feats = cyclical_time_features(pd.DatetimeIndex(m_t))
-    fe_flat = np.concatenate([fe_flat, time_feats], axis=1).astype(np.float32)
-    X_stat_flat = np.tile(X_stat, (n_wins, 1)).astype(np.float32)
-
-    print("[INFO] Saving chunks to target directory...", flush=True)
-    mask = ~np.isnan(y) & (y >= 0) & (y <= MAX_VIS_THRESHOLD)
-    save_chunked_monthtail(
-        X_dyn_flat, X_stat_flat, fe_flat, y, mask,
-        (m_t, m_s, m_la, m_lo), args.out_dir, args.gap_hours,
-        args.val_last_days, args.test_last_days,
-    )
+        try:
+            del X_dyn
+        except UnboundLocalError:
+            pass
+        gc.collect()
+        if os.path.exists(scratch_path):
+            os.remove(scratch_path)
+        print("[INFO] Temporary dynamic memmap cleaned.", flush=True)
 
     cfg = {
         "dataset": "ifs_overlap_pmst27_monthtail",
         "ifs_source": source_tag,
         "ifs_interp_nc": args.ifs_interp_nc or None,
+        "ifs_interp_glob": args.ifs_interp_glob or None,
+        "ifs_interp_nc_list": interp_paths if interp_paths else None,
         "ifs_root": args.ifs_root,
         "year": args.year,
         "overlap_vars": OVERLAP_CANONICAL,
+        "ifs_map_gridded": {k: {"folder": v.folder, "var_name": v.var_name} for k, v in IFS_MAP.items()},
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
-        "fe_dim": int(fe_flat.shape[1]),
+        "fe_dim": int(fe_dim),
+        "fog_fe_dim": int(fog_fe_dim),
         "window": args.window,
         "step": args.step,
+        "n_windows": int(n_wins),
+        "window_chunk": args.window_chunk,
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,
-        "architect_note": "100% Time-Major Aligned, Zero-Copy Shared Memory Accelerated"
+        "architect_note": "Time-major aligned, PMST-27 layout, streamed window writer"
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
