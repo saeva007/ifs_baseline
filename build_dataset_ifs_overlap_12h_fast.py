@@ -124,7 +124,7 @@ def _netcdf_kind(path: str) -> str:
         return "cdf"
     return "unknown"
 
-def _filter_openable_ifs_files(files: Sequence[str], var_name: str, folder: str) -> Tuple[List[str], str]:
+def _filter_ifs_files_by_signature(files: Sequence[str], folder: str) -> Tuple[List[str], str]:
     good_by_kind: Dict[str, List[str]] = {"hdf5": [], "cdf": []}
     bad: List[Tuple[str, str]] = []
     for fp in files:
@@ -132,18 +132,8 @@ def _filter_openable_ifs_files(files: Sequence[str], var_name: str, folder: str)
         if kind not in good_by_kind:
             bad.append((fp, f"not a NetCDF file (signature={kind})"))
             continue
-        engine = "h5netcdf" if kind == "hdf5" else "scipy"
-        try:
-            with xr.open_dataset(fp, engine=engine) as ds:
-                if var_name not in ds.data_vars:
-                    bad.append((fp, f"missing var {var_name!r}; vars={list(ds.data_vars)}"))
-                    continue
-                if "time" not in ds.coords and "time" not in ds.dims:
-                    bad.append((fp, "missing time coordinate"))
-                    continue
-            good_by_kind[kind].append(fp)
-        except Exception as e:
-            bad.append((fp, f"{type(e).__name__}: {e}"))
+        good_by_kind[kind].append(fp)
+
     kind = "hdf5" if len(good_by_kind["hdf5"]) >= len(good_by_kind["cdf"]) else "cdf"
     good = good_by_kind[kind]
     skipped_other = good_by_kind["cdf" if kind == "hdf5" else "hdf5"]
@@ -157,26 +147,68 @@ def _filter_openable_ifs_files(files: Sequence[str], var_name: str, folder: str)
         print(f"[WARN] Skipping bad IFS file for {folder}: {fp} ({reason})", flush=True)
     if len(bad) > 20:
         print(f"[WARN] ... skipped {len(bad) - 20} more bad files for {folder}", flush=True)
+
     engine = "h5netcdf" if kind == "hdf5" else "scipy"
+    print(
+        f"[INFO] {folder}: {len(good)} candidate {kind} NetCDF files after fast signature filter.",
+        flush=True,
+    )
     return good, engine
+
+def _filter_openable_ifs_files(files: Sequence[str], var_name: str, folder: str, engine: str) -> List[str]:
+    good: List[str] = []
+    bad: List[Tuple[str, str]] = []
+    total = len(files)
+    print(f"[INFO] {folder}: deep-checking {total} files after open failure...", flush=True)
+    for i, fp in enumerate(files, 1):
+        try:
+            with xr.open_dataset(fp, engine=engine) as ds:
+                if var_name not in ds.data_vars:
+                    bad.append((fp, f"missing var {var_name!r}; vars={list(ds.data_vars)}"))
+                    continue
+                if "time" not in ds.coords and "time" not in ds.dims:
+                    bad.append((fp, "missing time coordinate"))
+                    continue
+            good.append(fp)
+        except Exception as e:
+            bad.append((fp, f"{type(e).__name__}: {e}"))
+        if i == 1 or i % 50 == 0 or i == total:
+            print(f"[INFO] {folder}: checked {i}/{total}, good={len(good)}, bad={len(bad)}", flush=True)
+    for fp, reason in bad[:20]:
+        print(f"[WARN] Skipping bad IFS file for {folder}: {fp} ({reason})", flush=True)
+    if len(bad) > 20:
+        print(f"[WARN] ... skipped {len(bad) - 20} more bad files for {folder}", flush=True)
+    return good
+
+def _zero_memmap_in_chunks(arr: np.ndarray, station_chunk: int = 256) -> None:
+    ns = arr.shape[0]
+    print(f"[INFO] Initializing dynamic memmap to zeros by station chunks (ns={ns}).", flush=True)
+    for st0 in range(0, ns, station_chunk):
+        st1 = min(st0 + station_chunk, ns)
+        arr[st0:st1, :, :] = 0.0
+        if st0 == 0 or st1 == ns or (st1 // station_chunk) % 10 == 0:
+            print(f"[INFO] Initialized stations {st0}:{st1} / {ns}", flush=True)
+
+def _open_mfdataset_checked(files: Sequence[str], engine: str) -> xr.Dataset:
+    return xr.open_mfdataset(
+        files,
+        combine="by_coords",
+        parallel=False,
+        engine=engine,
+        chunks={"time": 24},
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+    )
 
 def _open_ifs_concat(folder: str, var_name: str, ifs_root: str, year: int) -> xr.Dataset:
     files = _list_real_files(folder, ifs_root, year)
     if not files: raise FileNotFoundError(f"No files for {folder} {year}")
-    files, engine = _filter_openable_ifs_files(files, var_name, folder)
+    files, engine = _filter_ifs_files_by_signature(files, folder)
     if not files:
         raise FileNotFoundError(f"No openable NetCDF files for {folder} {year}")
     try:
-        ds = xr.open_mfdataset(
-            files,
-            combine="by_coords",
-            parallel=False,
-            engine=engine,
-            chunks={"time": 24},
-            data_vars="minimal",
-            coords="minimal",
-            compat="override",
-        )
+        ds = _open_mfdataset_checked(files, engine)
     except ValueError as e:
         if "monotonic" in str(e) or "time" in str(e):
             ds = xr.open_mfdataset(
@@ -193,6 +225,12 @@ def _open_ifs_concat(folder: str, var_name: str, ifs_root: str, year: int) -> xr
             ds = ds.isel(time=np.sort(unique_indices)).sortby("time")
         else:
             raise e
+    except OSError as e:
+        print(f"[WARN] {folder}: open_mfdataset failed ({e}); isolating bad files.", flush=True)
+        files = _filter_openable_ifs_files(files, var_name, folder, engine)
+        if not files:
+            raise FileNotFoundError(f"No openable NetCDF files for {folder} {year}") from e
+        ds = _open_mfdataset_checked(files, engine)
     if var_name not in ds.data_vars:
         ds.close()
         raise KeyError(f"IFS dataset {folder} missing var {var_name}. got={list(ds.data_vars)}")
@@ -298,6 +336,7 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
 
     for canon in OVERLAP_CANONICAL:
         spec = IFS_MAP[canon]
+        print(f"[INFO] Loading IFS variable {canon} from {spec.folder}/{spec.var_name}...", flush=True)
         ds = _open_ifs_concat(spec.folder, spec.var_name, ifs_root, year)
         try:
             lat_name = "latitude" if "latitude" in ds.coords or "latitude" in ds.dims else "lat"
@@ -326,6 +365,7 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
                 if dim not in isel_dict:
                     isel_dict[dim] = 0
 
+            print(f"[INFO] {canon}: sampling {valid_t_mask.sum()} times x {len(lats)} stations.", flush=True)
             extracted = da.isel(**isel_dict).load().values.astype(np.float32, copy=False)
             pmst_idx = OVERLAP_PMST_INDICES[canon]
             buffer_array[:, :, pmst_idx] = np.nan
@@ -511,6 +551,18 @@ def main():
     total_features = TOTAL_DYN
     scratch_path = os.path.join(args.out_dir, "_tmp_X_dyn_pmst27.npy")
     bytes_size = ns * nt * total_features * 4
+    win, step = args.window, args.step
+    n_wins_preview = (nt - win) // step + 1 if nt >= win and step >= 1 else 0
+    print(
+        "[mem] nt={} ns={} n_wins={} window_chunk={} dynamic_staging ~{:.2f} GiB".format(
+            nt,
+            ns,
+            n_wins_preview,
+            args.window_chunk,
+            bytes_size / (1024 ** 3),
+        ),
+        flush=True,
+    )
     print(f"[INFO] Creating dynamic memmap {scratch_path} ({bytes_size / 1e9:.2f} GB logical)...", flush=True)
     
     try:
@@ -520,17 +572,19 @@ def main():
             dtype="float32",
             shape=(ns, nt, total_features),
         )
-        X_dyn.fill(0.0)
+        _zero_memmap_in_chunks(X_dyn)
         
         # 1. 填充气象场
         interp_paths = _parse_ifs_interp_input_paths(args.ifs_interp_nc, args.ifs_interp_glob)
         if interp_paths:
             # 兼容旧的高维读取逻辑，读取后转置进共享内存
+            print(f"[INFO] Using interpolated IFS files: {len(interp_paths)}", flush=True)
             X_met = _fill_from_interp_nc_multi(interp_paths, times, stations)
             X_dyn[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
             del X_met; gc.collect()
             source_tag = "ifs_interp_nc"
         else:
+            print(f"[INFO] Using gridded IFS root: {args.ifs_root}", flush=True)
             fetch_ifs_data_in_place(args.ifs_root, args.year, times, lats, lons, X_dyn, 0)
             source_tag = "ifs_gridded"
 
