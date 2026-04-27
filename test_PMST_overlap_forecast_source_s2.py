@@ -74,6 +74,7 @@ HIGHER_IS_BETTER = {
     "clear_csi",
     "low_vis_precision",
     "low_vis_pod",
+    "low_vis_recall",
     "low_vis_f1",
     "low_vis_csi",
     "fog_ap",
@@ -103,6 +104,7 @@ BOOTSTRAP_DEFAULT_METRICS = [
     "mist_far",
     "low_vis_csi",
     "low_vis_precision",
+    "low_vis_recall",
     "low_vis_fpr",
     "accuracy",
 ]
@@ -529,6 +531,7 @@ def compute_metrics(
     low_pod = safe_div(low_tp, low_tp + low_fn)
     metrics["low_vis_precision"] = low_precision
     metrics["low_vis_pod"] = low_pod
+    metrics["low_vis_recall"] = low_pod
     metrics["low_vis_f1"] = safe_div(2.0 * low_precision * low_pod, low_precision + low_pod)
     metrics["low_vis_csi"] = safe_div(low_tp, low_tp + low_fp + low_fn)
     metrics["low_vis_far"] = safe_div(low_fp, low_tp + low_fp)
@@ -983,6 +986,7 @@ def write_report(
             "mist_far",
             "low_vis_csi",
             "low_vis_precision",
+            "low_vis_recall",
             "low_vis_fpr",
             "accuracy",
             "multiclass_brier",
