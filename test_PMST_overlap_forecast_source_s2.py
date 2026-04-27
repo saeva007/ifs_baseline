@@ -97,14 +97,17 @@ BOOTSTRAP_DEFAULT_METRICS = [
     "fog_csi",
     "fog_pod",
     "fog_precision",
+    "fog_f1",
     "fog_far",
     "mist_csi",
     "mist_pod",
     "mist_precision",
+    "mist_f1",
     "mist_far",
     "low_vis_csi",
     "low_vis_precision",
     "low_vis_recall",
+    "low_vis_f1",
     "low_vis_fpr",
     "accuracy",
 ]
@@ -176,6 +179,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--allow_partial_load", action="store_true")
     ap.add_argument("--limit_samples", type=int, default=0, help="Smoke-test limit for val/test rows; 0 means all.")
     ap.add_argument("--no_per_sample_csv", action="store_true")
+    ap.add_argument("--no_figures", action="store_true", help="Skip publication-style summary figures.")
     return ap.parse_args()
 
 
@@ -979,14 +983,17 @@ def write_report(
             "fog_csi",
             "fog_pod",
             "fog_precision",
+            "fog_f1",
             "fog_far",
             "mist_csi",
             "mist_pod",
             "mist_precision",
+            "mist_f1",
             "mist_far",
             "low_vis_csi",
             "low_vis_precision",
             "low_vis_recall",
+            "low_vis_f1",
             "low_vis_fpr",
             "accuracy",
             "multiclass_brier",
@@ -1005,6 +1012,175 @@ def write_report(
         if not boot_df.empty:
             f.write("\nPaired bootstrap 95% CI for delta_tianji_minus_ifs\n")
             f.write(boot_df.to_csv(index=False))
+
+
+def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str]:
+    """One publication-style figure for Fog/Mist/low-vis key metrics."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # pragma: no cover - plotting env dependent.
+        print(f"[WARN] matplotlib unavailable; skip key-metrics figure: {exc}", flush=True)
+        return []
+
+    source_order = [s for s in ("tianji", "ifs") if s in set(overall_df["source"].astype(str))]
+    if not source_order:
+        return []
+
+    row_by_source = {
+        str(row["source"]): row
+        for _, row in overall_df.iterrows()
+        if str(row.get("source", "")) in source_order
+    }
+    source_labels = {
+        "tianji": "Tianji-trained",
+        "ifs": "IFS-trained",
+    }
+    source_colors = {
+        "tianji": "#2E5A87",
+        "ifs": "#6C6C6C",
+    }
+
+    panels = [
+        (
+            "Fog (0-500 m)",
+            [
+                ("fog_precision", "Precision"),
+                ("fog_pod", "Recall"),
+                ("fog_f1", "F1"),
+                ("fog_csi", "CSI"),
+            ],
+        ),
+        (
+            "Mist (500-1000 m)",
+            [
+                ("mist_precision", "Precision"),
+                ("mist_pod", "Recall"),
+                ("mist_f1", "F1"),
+                ("mist_csi", "CSI"),
+            ],
+        ),
+        (
+            "Low visibility (<1000 m)",
+            [
+                ("low_vis_precision", "Precision"),
+                ("low_vis_recall", "Recall"),
+                ("low_vis_f1", "F1"),
+                ("low_vis_csi", "CSI"),
+                ("low_vis_fpr", "FPR"),
+            ],
+        ),
+    ]
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Serif",
+            "font.size": 9,
+            "axes.labelsize": 10,
+            "axes.titlesize": 11,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 8,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "savefig.bbox": "tight",
+            "axes.grid": True,
+            "grid.alpha": 0.25,
+            "axes.axisbelow": True,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+
+    n_sources = len(source_order)
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=True, constrained_layout=True)
+    panel_letters = ["a", "b", "c"]
+
+    for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
+        x = np.arange(len(metrics), dtype=np.float64)
+        width = min(0.34, 0.78 / max(n_sources, 1))
+        for src_idx, source in enumerate(source_order):
+            row = row_by_source[source]
+            vals: List[float] = []
+            finite_flags: List[bool] = []
+            for metric, _ in metrics:
+                val = row.get(metric, np.nan)
+                try:
+                    val = float(val)
+                except Exception:
+                    val = math.nan
+                finite_flags.append(bool(np.isfinite(val)))
+                vals.append(val if np.isfinite(val) else 0.0)
+
+            offset = (src_idx - (n_sources - 1) / 2.0) * width
+            bars = ax.bar(
+                x + offset,
+                vals,
+                width * 0.92,
+                label=source_labels.get(source, source) if ax_idx == 0 else None,
+                color=source_colors.get(source, "#7F7F7F"),
+                edgecolor="white",
+                linewidth=0.45,
+                alpha=0.96,
+            )
+            for bar, val, ok in zip(bars, vals, finite_flags):
+                if ok:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        min(val + 0.025, 1.03),
+                        f"{val:.2f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                        rotation=90,
+                    )
+
+        ax.set_title(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
+        ax.set_ylim(0, 1.05)
+        ax.grid(axis="y", alpha=0.28)
+        ax.grid(axis="x", visible=False)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        ax.text(
+            -0.13,
+            1.04,
+            f"({panel_letters[ax_idx]})",
+            transform=ax.transAxes,
+            fontsize=11,
+            fontweight="bold",
+            va="bottom",
+        )
+        if ax_idx == 0:
+            ax.set_ylabel("Score")
+        if title.startswith("Low visibility"):
+            ax.text(
+                0.98,
+                0.96,
+                "FPR lower is better",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=7.5,
+                color="#444444",
+            )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=len(handles), frameon=False)
+
+    out_paths = [
+        out_dir / "fig_forecast_source_key_metrics.png",
+        out_dir / "fig_forecast_source_key_metrics.pdf",
+    ]
+    for path in out_paths:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        print(f"  [Fig] Saved -> {path}", flush=True)
+    plt.close(fig)
+    return [str(p) for p in out_paths]
 
 
 def main() -> None:
@@ -1194,6 +1370,9 @@ def main() -> None:
         boot_df,
         len(y),
     )
+
+    if not args.no_figures:
+        plot_key_metrics_figure(overall_df, out_dir)
 
     print("\n[OK] wrote paired evaluation outputs to:", out_dir, flush=True)
     print(delta_df[delta_df["metric"].isin(BOOTSTRAP_DEFAULT_METRICS)].to_string(index=False), flush=True)
