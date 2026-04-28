@@ -11,6 +11,10 @@ It is intended as a controlled data-source experiment for the paper:
 same PMST architecture, same overlap variable layout, same observed
 500/1000 m labels, paired test samples by (time, station_id), and
 validation-only calibration/threshold selection.
+
+Optionally, it also matches the raw IFS diagnostic visibility product
+(VIS_IDW_KDTree_*.nc by default) to the same test rows, following the
+loader used by vis_eval/run_paper_eval_pm10_pm25_11_s2.ipynb.
 """
 
 from __future__ import annotations
@@ -50,12 +54,17 @@ DEFAULT_TIANJI_DIR = os.path.join(
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
+DEFAULT_IFS_FORECAST_NC = os.path.join(VIS_MLP_ROOT, "VIS_IDW_KDTree_20250101_20251231.nc")
 DEFAULT_OUT_DIR = os.path.join(
     IFS_BASELINE_ROOT, "paper_eval_overlap_forecast_source_s2"
 )
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
-SOURCE_LABELS = {"tianji": "Tianji-trained/Tianji-input", "ifs": "IFS-trained/IFS-input"}
+SOURCE_LABELS = {
+    "tianji": "Tianji-trained/Tianji-input PMST",
+    "ifs": "IFS-trained/IFS-input PMST",
+    "ifs_diagnostic": "IFS diagnostic visibility",
+}
 HIGHER_IS_BETTER = {
     "accuracy",
     "macro_f1",
@@ -152,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--ifs_ckpt", default="")
     ap.add_argument("--tianji_scaler", default="")
     ap.add_argument("--ifs_scaler", default="")
+    ap.add_argument("--ifs_forecast_nc", default=os.environ.get("IFS_FORECAST_NC", DEFAULT_IFS_FORECAST_NC))
+    ap.add_argument("--ifs_forecast_var", default=os.environ.get("IFS_FORECAST_VAR", "VIS"))
     ap.add_argument("--checkpoint_tag", default="S2_PhaseB_best_score")
     ap.add_argument("--out_dir", default=DEFAULT_OUT_DIR)
     ap.add_argument("--window", type=int, default=12)
@@ -180,6 +191,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--limit_samples", type=int, default=0, help="Smoke-test limit for val/test rows; 0 means all.")
     ap.add_argument("--no_per_sample_csv", action="store_true")
     ap.add_argument("--no_figures", action="store_true", help="Skip publication-style summary figures.")
+    ap.add_argument(
+        "--skip_ifs_forecast_baseline",
+        action="store_true",
+        help="Skip the raw IFS diagnostic-visibility baseline matched from --ifs_forecast_nc.",
+    )
     return ap.parse_args()
 
 
@@ -644,6 +660,107 @@ def rows_from_metrics(source: str, metrics: Dict[str, float], extra: Optional[Di
     return row
 
 
+def classify_visibility_values(
+    vis_values: np.ndarray,
+    fog_threshold: float = 500.0,
+    mist_threshold: float = 1000.0,
+) -> np.ndarray:
+    """Map continuous visibility in meters to the 0/1/2 paper classes."""
+    vis = np.asarray(vis_values, dtype=np.float64)
+    cls = np.full(vis.shape, 2, dtype=np.int64)
+    cls[vis < mist_threshold] = 1
+    cls[vis < fog_threshold] = 0
+    return cls
+
+
+def normalize_station_ids_for_lookup(station_values) -> pd.Series:
+    station = pd.Series(station_values)
+    numeric = pd.to_numeric(station, errors="coerce")
+    out = station.astype(str)
+    numeric_mask = numeric.notna()
+    if numeric_mask.any():
+        out.loc[numeric_mask] = numeric.loc[numeric_mask].astype(np.int64).astype(str)
+    return out
+
+
+def station_ids_for_ifs_lookup(meta: pd.DataFrame) -> pd.Series:
+    out = normalize_station_ids_for_lookup(meta["station_id"].to_numpy())
+    out.index = meta.index
+    return out
+
+
+def load_ifs_forecast_baseline(
+    meta: pd.DataFrame,
+    ifs_nc_path: str,
+    vis_var: str = "VIS",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Match raw IFS diagnostic visibility to the evaluation samples.
+
+    This mirrors vis_eval.plot_spatial.load_ifs_baseline: match by exact
+    (time, station_id), then classify VIS with the paper's 500/1000 m thresholds.
+    """
+    if "time" not in meta.columns or "station_id" not in meta.columns:
+        raise KeyError("IFS diagnostic matching requires meta columns: time, station_id")
+    if not ifs_nc_path or not os.path.exists(ifs_nc_path):
+        raise FileNotFoundError(f"IFS diagnostic NetCDF not found: {ifs_nc_path}")
+
+    try:
+        import xarray as xr
+    except ImportError as exc:
+        raise ImportError("xarray is required to read the IFS diagnostic NetCDF.") from exc
+
+    ds_ifs = xr.open_dataset(ifs_nc_path)
+    try:
+        if vis_var not in ds_ifs:
+            raise KeyError(f"Variable '{vis_var}' not found in {ifs_nc_path}")
+        if "time" not in ds_ifs.coords or "station" not in ds_ifs.coords:
+            raise KeyError("IFS diagnostic dataset must provide 'time' and 'station' coordinates.")
+
+        vis_da = ds_ifs[vis_var]
+        if "time" in vis_da.dims and "station" in vis_da.dims:
+            vis_da = vis_da.squeeze().transpose("time", "station", ...)
+        if vis_da.ndim != 2:
+            raise ValueError(f"IFS diagnostic variable '{vis_var}' must be 2D time x station, got {vis_da.shape}")
+
+        ifs_vis = np.asarray(vis_da.values, dtype=np.float64)
+        ifs_times = pd.to_datetime(ds_ifs["time"].values)
+        ifs_stations = pd.Index(normalize_station_ids_for_lookup(ds_ifs["station"].values))
+
+        time_lookup = pd.Series(np.arange(len(ifs_times), dtype=np.int64), index=pd.Index(ifs_times))
+        station_lookup = pd.Series(np.arange(len(ifs_stations), dtype=np.int64), index=ifs_stations)
+
+        meta_times = pd.to_datetime(meta["time"], errors="coerce")
+        meta_stations = station_ids_for_ifs_lookup(meta)
+        time_idx = meta_times.map(time_lookup)
+        station_idx = meta_stations.map(station_lookup)
+        key_valid = time_idx.notna() & station_idx.notna()
+
+        ifs_vis_raw = np.full(len(meta), np.nan, dtype=np.float64)
+        ifs_preds = np.full(len(meta), -1, dtype=np.int64)
+        ifs_valid = np.zeros(len(meta), dtype=bool)
+
+        if key_valid.any():
+            key_valid_pos = np.flatnonzero(key_valid.to_numpy())
+            t_idx = time_idx.iloc[key_valid_pos].astype(np.int64).to_numpy()
+            s_idx = station_idx.iloc[key_valid_pos].astype(np.int64).to_numpy()
+            matched_vis = np.asarray(ifs_vis[t_idx, s_idx], dtype=np.float64)
+            finite = np.isfinite(matched_vis)
+            matched_pos = key_valid_pos[finite]
+            ifs_vis_raw[matched_pos] = matched_vis[finite]
+            ifs_preds[matched_pos] = classify_visibility_values(matched_vis[finite])
+            ifs_valid[matched_pos] = True
+
+        print(
+            f"[IFS diagnostic] Matched {int(ifs_valid.sum())}/{len(meta)} finite samples "
+            f"from {os.path.basename(ifs_nc_path)}::{vis_var}",
+            flush=True,
+        )
+        return ifs_preds, ifs_vis_raw, ifs_valid
+    finally:
+        ds_ifs.close()
+
+
 def normalize_key_frame(meta: pd.DataFrame) -> pd.DataFrame:
     if "time" not in meta.columns or "station_id" not in meta.columns:
         raise KeyError("meta csv must contain time and station_id columns for paired alignment")
@@ -812,38 +929,50 @@ def evaluate_one_source(
     )
 
 
+def compare_metric_sets(
+    metrics_left: Dict[str, float],
+    metrics_right: Dict[str, float],
+    left_name: str,
+    right_name: str,
+    metric_names: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    if metric_names is None:
+        metric_names = sorted((set(metrics_left) & set(metrics_right)) - {"n"})
+    rows = []
+    delta_col = f"delta_{left_name}_minus_{right_name}"
+    better_col = f"{left_name}_better"
+    for m in metric_names:
+        if m not in metrics_left or m not in metrics_right:
+            continue
+        left_val = metrics_left[m]
+        right_val = metrics_right[m]
+        if not isinstance(left_val, (int, float, np.floating)) or not isinstance(right_val, (int, float, np.floating)):
+            continue
+        direction = metric_direction(m)
+        delta = float(left_val) - float(right_val)
+        if direction == "lower":
+            left_better = delta < 0
+        else:
+            left_better = delta > 0
+        rows.append(
+            {
+                "metric": m,
+                left_name: float(left_val),
+                right_name: float(right_val),
+                delta_col: delta,
+                "preferred_direction": direction,
+                better_col: bool(left_better),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def compare_overall(
     metrics_t: Dict[str, float],
     metrics_i: Dict[str, float],
     metric_names: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
-    if metric_names is None:
-        metric_names = sorted((set(metrics_t) & set(metrics_i)) - {"n"})
-    rows = []
-    for m in metric_names:
-        if m not in metrics_t or m not in metrics_i:
-            continue
-        t_val = metrics_t[m]
-        i_val = metrics_i[m]
-        if not isinstance(t_val, (int, float, np.floating)) or not isinstance(i_val, (int, float, np.floating)):
-            continue
-        direction = metric_direction(m)
-        delta = float(t_val) - float(i_val)
-        if direction == "lower":
-            t_better = delta < 0
-        else:
-            t_better = delta > 0
-        rows.append(
-            {
-                "metric": m,
-                "tianji": float(t_val),
-                "ifs": float(i_val),
-                "delta_tianji_minus_ifs": delta,
-                "preferred_direction": direction,
-                "tianji_better": bool(t_better),
-            }
-        )
-    return pd.DataFrame(rows)
+    return compare_metric_sets(metrics_t, metrics_i, "tianji", "ifs", metric_names)
 
 
 def bootstrap_delta_ci(
@@ -924,9 +1053,21 @@ def write_report(
     delta_df: pd.DataFrame,
     boot_df: pd.DataFrame,
     n_pair: int,
+    ifs_diagnostic_df: Optional[pd.DataFrame] = None,
+    ifs_diagnostic_delta_df: Optional[pd.DataFrame] = None,
+    n_ifs_diagnostic: int = 0,
 ) -> None:
     def fmt(metric: str, source: str) -> str:
         row = overall_df.loc[overall_df["source"] == source]
+        if row.empty or metric not in row.columns:
+            return "NA"
+        val = row.iloc[0][metric]
+        return "NA" if pd.isna(val) else f"{float(val):.4f}"
+
+    def fmt_from(df: pd.DataFrame, metric: str, source: str) -> str:
+        if df is None or df.empty:
+            return "NA"
+        row = df.loc[df["source"] == source]
         if row.empty or metric not in row.columns:
             return "NA"
         val = row.iloc[0][metric]
@@ -938,7 +1079,8 @@ def write_report(
         f.write("Purpose: controlled comparison of two train_PMST_overlap_baseline_s2.py models.\n")
         f.write("Interpretation: this tests forecast-field source quality under the same PMST\n")
         f.write("architecture, same observed 0-500 m / 500-1000 m / >=1000 m labels, and\n")
-        f.write("paired test samples. It is not the IFS diagnostic-visibility baseline.\n\n")
+        f.write("paired test samples. A separate matched section compares against the raw\n")
+        f.write("IFS diagnostic-visibility product when --ifs_forecast_nc is available.\n\n")
         f.write(f"Paired test rows: {n_pair}\n")
         f.write(f"Threshold mode: {args.threshold_mode}\n")
         f.write(f"Temperature scaling: {not args.no_temp_scaling}\n")
@@ -1013,6 +1155,43 @@ def write_report(
             f.write("\nPaired bootstrap 95% CI for delta_tianji_minus_ifs\n")
             f.write(boot_df.to_csv(index=False))
 
+        if ifs_diagnostic_df is not None and not ifs_diagnostic_df.empty:
+            f.write("\nIFS diagnostic-visibility matched comparison\n")
+            f.write("-" * 52 + "\n")
+            f.write("Scope: only test rows with matched finite IFS VIS values.\n")
+            f.write(f"IFS diagnostic file: {args.ifs_forecast_nc}\n")
+            f.write(f"IFS diagnostic variable: {args.ifs_forecast_var}\n")
+            f.write(f"Matched rows: {n_ifs_diagnostic}\n")
+            f.write(
+                "metric,tianji_pmst,ifs_input_pmst,ifs_diagnostic,"
+                "delta_tianji_minus_ifs_diagnostic,preferred_direction,tianji_better\n"
+            )
+            diag_delta_lookup = (
+                ifs_diagnostic_delta_df.set_index("metric")
+                if ifs_diagnostic_delta_df is not None and not ifs_diagnostic_delta_df.empty
+                else pd.DataFrame()
+            )
+            for m in key_metrics:
+                if m not in ifs_diagnostic_df.columns:
+                    continue
+                diag_val = fmt_from(ifs_diagnostic_df, m, "ifs_diagnostic")
+                if diag_val == "NA":
+                    continue
+                delta_val = "NA"
+                direction = metric_direction(m)
+                better = "NA"
+                if m in diag_delta_lookup.index:
+                    r = diag_delta_lookup.loc[m]
+                    delta_val = f"{float(r['delta_tianji_minus_ifs_diagnostic']):.4f}"
+                    direction = str(r["preferred_direction"])
+                    better = str(bool(r["tianji_better"]))
+                f.write(
+                    f"{m},{fmt_from(ifs_diagnostic_df, m, 'tianji')},"
+                    f"{fmt_from(ifs_diagnostic_df, m, 'ifs')},"
+                    f"{diag_val},"
+                    f"{delta_val},{direction},{better}\n"
+                )
+
 
 def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str]:
     """One publication-style figure for Fog/Mist/low-vis key metrics."""
@@ -1025,7 +1204,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         print(f"[WARN] matplotlib unavailable; skip key-metrics figure: {exc}", flush=True)
         return []
 
-    source_order = [s for s in ("tianji", "ifs") if s in set(overall_df["source"].astype(str))]
+    source_order = [s for s in ("tianji", "ifs", "ifs_diagnostic") if s in set(overall_df["source"].astype(str))]
     if not source_order:
         return []
 
@@ -1037,10 +1216,12 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_labels = {
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
+        "ifs_diagnostic": "IFS diagnostic VIS",
     }
     source_colors = {
         "tianji": "#2E5A87",
         "ifs": "#6C6C6C",
+        "ifs_diagnostic": "#E69F00",
     }
 
     panels = [
@@ -1296,6 +1477,92 @@ def main() -> None:
     write_confusion_csv(out_dir / "confusion_tianji.csv", y, t_preds)
     write_confusion_csv(out_dir / "confusion_ifs.csv", y, i_preds)
 
+    ifs_diag_preds: Optional[np.ndarray] = None
+    ifs_diag_vis_raw: Optional[np.ndarray] = None
+    ifs_diag_valid: Optional[np.ndarray] = None
+    ifs_diag_metrics_df: Optional[pd.DataFrame] = None
+    ifs_diag_delta_df: Optional[pd.DataFrame] = None
+    if not args.skip_ifs_forecast_baseline:
+        try:
+            ifs_diag_preds, ifs_diag_vis_raw, ifs_diag_valid = load_ifs_forecast_baseline(
+                meta_common,
+                args.ifs_forecast_nc,
+                args.ifs_forecast_var,
+            )
+        except Exception as exc:
+            print(f"[WARN] IFS diagnostic baseline skipped: {exc}", flush=True)
+            ifs_diag_valid = np.zeros(len(y), dtype=bool)
+
+        if ifs_diag_valid is not None and int(ifs_diag_valid.sum()) > 0 and ifs_diag_preds is not None:
+            valid_diag = ifs_diag_valid
+            y_diag = y[valid_diag]
+            t_preds_diag = t_preds[valid_diag]
+            i_preds_diag = i_preds[valid_diag]
+            d_preds_diag = ifs_diag_preds[valid_diag]
+            t_probs_diag = t_probs[valid_diag]
+            i_probs_diag = i_probs[valid_diag]
+
+            metrics_t_diag = compute_metrics(y_diag, t_preds_diag, probs=t_probs_diag)
+            metrics_i_diag = compute_metrics(y_diag, i_preds_diag, probs=i_probs_diag)
+            metrics_d_diag = compute_metrics(y_diag, d_preds_diag, probs=None)
+
+            ifs_diag_metrics_df = pd.DataFrame(
+                [
+                    rows_from_metrics(
+                        "tianji",
+                        metrics_t_diag,
+                        {
+                            "sample_scope": "ifs_diagnostic_matched_test",
+                            "matched_rows": int(valid_diag.sum()),
+                            "temperature": evals["tianji"].temperature,
+                            "fog_threshold": evals["tianji"].thresholds.get("fog"),
+                            "mist_threshold": evals["tianji"].thresholds.get("mist"),
+                        },
+                    ),
+                    rows_from_metrics(
+                        "ifs",
+                        metrics_i_diag,
+                        {
+                            "sample_scope": "ifs_diagnostic_matched_test",
+                            "matched_rows": int(valid_diag.sum()),
+                            "temperature": evals["ifs"].temperature,
+                            "fog_threshold": evals["ifs"].thresholds.get("fog"),
+                            "mist_threshold": evals["ifs"].thresholds.get("mist"),
+                        },
+                    ),
+                    rows_from_metrics(
+                        "ifs_diagnostic",
+                        metrics_d_diag,
+                        {
+                            "sample_scope": "ifs_diagnostic_matched_test",
+                            "matched_rows": int(valid_diag.sum()),
+                            "ifs_forecast_nc": args.ifs_forecast_nc,
+                            "ifs_forecast_var": args.ifs_forecast_var,
+                        },
+                    ),
+                ]
+            )
+            ifs_diag_metrics_df.to_csv(out_dir / "ifs_diagnostic_matched_metrics.csv", index=False)
+            ifs_diag_delta_df = compare_metric_sets(
+                metrics_t_diag,
+                metrics_d_diag,
+                "tianji",
+                "ifs_diagnostic",
+            )
+            ifs_diag_delta_df.to_csv(
+                out_dir / "metric_deltas_tianji_minus_ifs_diagnostic.csv",
+                index=False,
+            )
+            compare_metric_sets(metrics_i_diag, metrics_d_diag, "ifs", "ifs_diagnostic").to_csv(
+                out_dir / "metric_deltas_ifs_pmst_minus_ifs_diagnostic.csv",
+                index=False,
+            )
+            write_confusion_csv(out_dir / "confusion_tianji_ifs_diagnostic_matched.csv", y_diag, t_preds_diag)
+            write_confusion_csv(out_dir / "confusion_ifs_pmst_ifs_diagnostic_matched.csv", y_diag, i_preds_diag)
+            write_confusion_csv(out_dir / "confusion_ifs_diagnostic.csv", y_diag, d_preds_diag)
+        elif not args.skip_ifs_forecast_baseline:
+            print("[WARN] IFS diagnostic baseline matched 0 finite test samples.", flush=True)
+
     scenario_rows = []
     for scenario, mask in scenario_masks(meta_common).items():
         mt = compute_metrics(y[mask], t_preds[mask], probs=t_probs[mask])
@@ -1316,6 +1583,25 @@ def main() -> None:
         pd.concat(scenario_delta_rows, ignore_index=True).to_csv(
             out_dir / "scenario_metric_deltas_tianji_minus_ifs.csv", index=False
         )
+
+    if ifs_diag_valid is not None and ifs_diag_preds is not None and int(ifs_diag_valid.sum()) > 0:
+        diag_scenario_rows = []
+        for scenario, mask in scenario_masks(meta_common).items():
+            diag_mask = mask & ifs_diag_valid
+            if int(diag_mask.sum()) == 0:
+                continue
+            mt = compute_metrics(y[diag_mask], t_preds[diag_mask], probs=t_probs[diag_mask])
+            mi = compute_metrics(y[diag_mask], i_preds[diag_mask], probs=i_probs[diag_mask])
+            md = compute_metrics(y[diag_mask], ifs_diag_preds[diag_mask], probs=None)
+            extra = {"scenario": scenario, "sample_scope": "ifs_diagnostic_matched_test"}
+            diag_scenario_rows.append(rows_from_metrics("tianji", mt, extra))
+            diag_scenario_rows.append(rows_from_metrics("ifs", mi, extra))
+            diag_scenario_rows.append(rows_from_metrics("ifs_diagnostic", md, extra))
+        if diag_scenario_rows:
+            pd.DataFrame(diag_scenario_rows).to_csv(
+                out_dir / "ifs_diagnostic_scenario_metrics.csv",
+                index=False,
+            )
 
     boot_df = pd.DataFrame()
     if not args.skip_bootstrap and args.bootstrap > 0:
@@ -1342,8 +1628,24 @@ def main() -> None:
             sample_df[f"{source}_p_mist"] = probs[:, 1]
             sample_df[f"{source}_p_clear"] = probs[:, 2]
             sample_df[f"{source}_correct"] = preds == y
+        if ifs_diag_preds is not None and ifs_diag_vis_raw is not None and ifs_diag_valid is not None:
+            sample_df["ifs_diagnostic_valid"] = ifs_diag_valid
+            sample_df["ifs_diagnostic_vis_m"] = ifs_diag_vis_raw
+            sample_df["ifs_diagnostic_pred"] = ifs_diag_preds
+            sample_df["ifs_diagnostic_correct"] = ifs_diag_valid & (ifs_diag_preds == y)
         sample_df["tianji_wins"] = sample_df["tianji_correct"] & ~sample_df["ifs_correct"]
         sample_df["ifs_wins"] = sample_df["ifs_correct"] & ~sample_df["tianji_correct"]
+        if "ifs_diagnostic_correct" in sample_df.columns:
+            sample_df["tianji_wins_vs_ifs_diagnostic"] = (
+                sample_df["ifs_diagnostic_valid"]
+                & sample_df["tianji_correct"]
+                & ~sample_df["ifs_diagnostic_correct"]
+            )
+            sample_df["ifs_diagnostic_wins_vs_tianji"] = (
+                sample_df["ifs_diagnostic_valid"]
+                & sample_df["ifs_diagnostic_correct"]
+                & ~sample_df["tianji_correct"]
+            )
         sample_df.to_csv(out_dir / "per_sample_paired_eval.csv", index=False)
 
     run_config = {
@@ -1351,6 +1653,13 @@ def main() -> None:
         "specs": {k: vars(v) for k, v in specs.items()},
         "build_configs": build_configs,
         "paired_rows": int(len(y)),
+        "evaluation_scope": "test split; validation split is used only for calibration/threshold selection",
+        "ifs_diagnostic": {
+            "enabled": bool(not args.skip_ifs_forecast_baseline),
+            "path": args.ifs_forecast_nc,
+            "variable": args.ifs_forecast_var,
+            "matched_rows": int(ifs_diag_valid.sum()) if ifs_diag_valid is not None else 0,
+        },
         "class_definition": {
             "0": "0 <= visibility < 500 m",
             "1": "500 <= visibility < 1000 m",
@@ -1369,13 +1678,28 @@ def main() -> None:
         delta_df,
         boot_df,
         len(y),
+        ifs_diagnostic_df=ifs_diag_metrics_df,
+        ifs_diagnostic_delta_df=ifs_diag_delta_df,
+        n_ifs_diagnostic=int(ifs_diag_valid.sum()) if ifs_diag_valid is not None else 0,
     )
 
     if not args.no_figures:
-        plot_key_metrics_figure(overall_df, out_dir)
+        plot_key_metrics_figure(
+            ifs_diag_metrics_df if ifs_diag_metrics_df is not None and not ifs_diag_metrics_df.empty else overall_df,
+            out_dir,
+        )
 
     print("\n[OK] wrote paired evaluation outputs to:", out_dir, flush=True)
     print(delta_df[delta_df["metric"].isin(BOOTSTRAP_DEFAULT_METRICS)].to_string(index=False), flush=True)
+    if ifs_diag_delta_df is not None and not ifs_diag_delta_df.empty:
+        print(
+            "\n[IFS diagnostic matched deltas: Tianji PMST minus IFS diagnostic VIS]",
+            flush=True,
+        )
+        print(
+            ifs_diag_delta_df[ifs_diag_delta_df["metric"].isin(BOOTSTRAP_DEFAULT_METRICS)].to_string(index=False),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
