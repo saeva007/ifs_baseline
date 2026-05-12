@@ -1276,12 +1276,35 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     )
 
     n_sources = len(source_order)
-    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=True, constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=False, constrained_layout=True)
     panel_letters = ["a", "b", "c"]
+
+    def _adaptive_score_ylim(values: Sequence[float]) -> float:
+        arr = np.asarray(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return 0.20
+        vmax = float(np.nanmax(arr))
+        if vmax <= 0:
+            return 0.10
+        padded = vmax * 1.22
+        if padded >= 0.92:
+            return 1.0
+        step = 0.02 if padded <= 0.20 else 0.05 if padded <= 0.50 else 0.10
+        return max(step * 3, math.ceil(padded / step) * step)
 
     for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
         x = np.arange(len(metrics), dtype=np.float64)
         width = min(0.34, 0.78 / max(n_sources, 1))
+        panel_values: List[float] = []
+        for source in source_order:
+            row = row_by_source[source]
+            for metric, _ in metrics:
+                try:
+                    panel_values.append(float(row.get(metric, np.nan)))
+                except Exception:
+                    panel_values.append(math.nan)
+        y_max = _adaptive_score_ylim(panel_values)
         for src_idx, source in enumerate(source_order):
             row = row_by_source[source]
             vals: List[float] = []
@@ -1310,7 +1333,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 if ok:
                     ax.text(
                         bar.get_x() + bar.get_width() / 2.0,
-                        min(val + 0.025, 1.03),
+                        min(val + y_max * 0.025, y_max * 0.98),
                         f"{val:.2f}",
                         ha="center",
                         va="bottom",
@@ -1321,7 +1344,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         ax.set_title(title)
         ax.set_xticks(x)
         ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
-        ax.set_ylim(0, 1.05)
+        ax.set_ylim(0, y_max)
         ax.grid(axis="y", alpha=0.28)
         ax.grid(axis="x", visible=False)
         for spine in ("top", "right"):
