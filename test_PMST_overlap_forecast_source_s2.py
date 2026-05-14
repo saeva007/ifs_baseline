@@ -1287,11 +1287,14 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         vmax = float(np.nanmax(arr))
         if vmax <= 0:
             return 0.10
-        padded = vmax * 1.22
-        if padded >= 0.92:
-            return 1.0
-        step = 0.02 if padded <= 0.20 else 0.05 if padded <= 0.50 else 0.10
-        return max(step * 3, math.ceil(padded / step) * step)
+        padded = min(1.0, vmax + max(0.025, 0.10 * vmax))
+        step = 0.02 if padded <= 0.20 else 0.05
+        upper = max(step * 3, math.ceil(padded / step) * step)
+        if vmax < 0.80:
+            upper = min(upper, 0.85)
+        elif vmax < 0.90:
+            upper = min(upper, 0.95)
+        return min(1.0, upper)
 
     for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
         x = np.arange(len(metrics), dtype=np.float64)
