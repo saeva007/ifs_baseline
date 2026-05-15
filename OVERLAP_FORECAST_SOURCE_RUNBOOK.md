@@ -5,7 +5,9 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 
 ## Scope
 
-- Data-build submit script: `sub_ifs_data.slurm`
+- S1 data-build submit script: `sub_s1_overlap_data.slurm`
+- Tianji S2 data-build submit script: `sub_tianji_overlap_data.slurm`
+- IFS S2 data-build submit script: `sub_ifs_data.slurm`
 - Training submit script: `sub_ifs_overlap_baseline.slurm`
 - S1 data builder: `build_s1_pm10_overlap_from_full.py`
 - Tianji S2 data builder: `build_dataset_tianji_overlap_12h.py`
@@ -15,9 +17,8 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 - S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
 - Paired evaluator: `test_PMST_overlap_forecast_source_s2.py`
 
-All three data-build paths now have a Slurm entry point through
-`sub_ifs_data.slurm` using `DATA_SOURCE=s1_overlap`, `DATA_SOURCE=tianji`, or
-`DATA_SOURCE=ifs`.
+Each data-build path has its own Slurm entry point. Keep
+`sub_ifs_data.slurm` for IFS-input data only.
 
 ## Required Order
 
@@ -34,13 +35,13 @@ Run this when the full S1 PM10+PM2.5 source dataset changed, when the overlap S1
 dataset is missing, or when you need to verify the 27-dyn layout from scratch.
 
 ```bash
-sbatch --export=ALL,DATA_SOURCE=s1_overlap sub_ifs_data.slurm
+sbatch sub_s1_overlap_data.slurm
 ```
 
 Optional explicit paths:
 
 ```bash
-sbatch --export=ALL,DATA_SOURCE=s1_overlap,DATA_EXTRA_ARGS="--source_dir /public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25 --out_dir /public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap" sub_ifs_data.slurm
+sbatch --export=ALL,SOURCE_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25,OUT_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap sub_s1_overlap_data.slurm
 ```
 
 Do not use `--merge_train_val` for the paper experiment.
@@ -57,7 +58,7 @@ fails if the row layout is not `27 dyn + 36 FE`.
 ### 3. Rebuild Tianji-Input S2 Overlap Data
 
 ```bash
-sbatch --export=ALL,DATA_SOURCE=tianji sub_ifs_data.slurm
+sbatch sub_tianji_overlap_data.slurm
 ```
 
 This uses `merged_final_all_vars.nc` raw times as UTC and writes
@@ -66,15 +67,15 @@ This uses `merged_final_all_vars.nc` raw times as UTC and writes
 ### 4. Rebuild IFS-Input S2 Overlap Data
 
 ```bash
-sbatch --export=ALL,DATA_SOURCE=ifs sub_ifs_data.slurm
+sbatch sub_ifs_data.slurm
 ```
 
 By default this uses `build_dataset_ifs_overlap_12h_fast.py`, auto-discovers
 station-interpolated IFS inputs, uses raw Tianji UTC times, and writes the same
-`raw_utc_no_shift` marker. Use `DATA_EXTRA_ARGS` for explicit IFS inputs:
+`raw_utc_no_shift` marker. Use `IFS_INTERP_GLOB` for explicit IFS inputs:
 
 ```bash
-sbatch --export=ALL,DATA_SOURCE=ifs,DATA_EXTRA_ARGS="--ifs_interp_glob '/public/home/putianshu/vis_mlp/ifs_baseline/ifs_interp_out/**/ifs_interp_*_2025.nc'" sub_ifs_data.slurm
+sbatch "--export=ALL,IFS_INTERP_GLOB=/public/home/putianshu/vis_mlp/ifs_baseline/ifs_interp_out/**/ifs_interp_*_2025.nc" sub_ifs_data.slurm
 ```
 
 ### 5. Train Tianji-Input S2
