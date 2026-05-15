@@ -52,11 +52,19 @@ if [[ "${MERGE_TRAIN_VAL}" == "1" || "${MERGE_TRAIN_VAL}" == "true" ]]; then
     PY_ARGS+=(--merge_train_val)
 fi
 
-# shellcheck disable=SC2206
-EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
-
 echo "Running Python script: ${SCRIPT_PATH}"
-echo "PY_ARGS=${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
-python "${SCRIPT_PATH}" "${PY_ARGS[@]}" "${EXTRA_TOKENS[@]}"
+if [[ -n "${DATA_EXTRA_ARGS}" ]]; then
+    # shellcheck disable=SC2206
+    EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
+    PY_ARGS+=("${EXTRA_TOKENS[@]}")
+fi
+
+if ((${#PY_ARGS[@]} > 0)); then
+    echo "PY_ARGS=${PY_ARGS[*]}"
+    python "${SCRIPT_PATH}" "${PY_ARGS[@]}"
+else
+    echo "PY_ARGS="
+    python "${SCRIPT_PATH}"
+fi
 
 echo "S1 overlap data build finished at: $(date)"

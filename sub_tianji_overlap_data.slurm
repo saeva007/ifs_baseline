@@ -90,11 +90,14 @@ if [[ "${KEEP_STAGING}" == "1" || "${KEEP_STAGING}" == "true" ]]; then
     PY_ARGS+=(--keep_staging)
 fi
 
-# shellcheck disable=SC2206
-EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
-
 echo "Running Python script: ${SCRIPT_PATH}"
-echo "PY_ARGS=${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
-python "${SCRIPT_PATH}" "${PY_ARGS[@]}" "${EXTRA_TOKENS[@]}"
+if [[ -n "${DATA_EXTRA_ARGS}" ]]; then
+    # shellcheck disable=SC2206
+    EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
+    PY_ARGS+=("${EXTRA_TOKENS[@]}")
+fi
+
+echo "PY_ARGS=${PY_ARGS[*]}"
+python "${SCRIPT_PATH}" "${PY_ARGS[@]}"
 
 echo "Tianji overlap data build finished at: $(date)"

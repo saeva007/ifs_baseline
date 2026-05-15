@@ -111,12 +111,15 @@ if [[ "${NO_AUTO_IFS_INTERP}" == "1" || "${NO_AUTO_IFS_INTERP}" == "true" ]]; th
     PY_ARGS+=(--no_auto_ifs_interp)
 fi
 
-# shellcheck disable=SC2206
-EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
-
 # 4. 执行数据处理
 echo "Running Python script: ${SCRIPT_PATH}"
-echo "PY_ARGS=${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
-python "${SCRIPT_PATH}" "${PY_ARGS[@]}" "${EXTRA_TOKENS[@]}"
+if [[ -n "${DATA_EXTRA_ARGS}" ]]; then
+    # shellcheck disable=SC2206
+    EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
+    PY_ARGS+=("${EXTRA_TOKENS[@]}")
+fi
+
+echo "PY_ARGS=${PY_ARGS[*]}"
+python "${SCRIPT_PATH}" "${PY_ARGS[@]}"
 
 echo "Job finished at: $(date)"
