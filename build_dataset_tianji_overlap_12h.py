@@ -123,7 +123,7 @@ def main():
     data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
     data_oro = xr.open_dataset(args.oro_file, engine="h5netcdf")
     ds_in = xr.open_dataset(args.input_file, engine="h5netcdf")
-    ds_in = ds_in.assign_coords(time=ds_in.time - pd.Timedelta(hours=8))
+    print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
 
     if "vis" in ds_in.data_vars:
         ds_in = ds_in.rename({"vis": "visibility"})
@@ -303,6 +303,9 @@ def main():
         "window": args.window,
         "step": args.step,
         "split": "month_tail",
+        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "time_coordinate": "UTC",
+        "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,
         "gap_hours": args.gap_hours,

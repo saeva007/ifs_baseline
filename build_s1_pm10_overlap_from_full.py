@@ -9,8 +9,8 @@
 其余 24 维气象槽置 0；天顶角与 PM10、PM2.5 保持原值；按新 dyn 重算 32 维雾 FE，
 后 4 维时间周期特征从源行原样保留（与样本标签时刻一致）。静态+植被列不变。
 
-注意：PMST_net_test_10_s1_pm10.py 的 load_data 只读取 X_train.npy 并在其上做随机 10%验证划分；
-若需与 notebook 的 X_val.npy 一致，可另做评估；默认仍写出 X_train/X_val 两份（与源目录结构相同）。
+注意：当前 overlap S1 训练脚本要求显式 X_train/y_train 与 X_val/y_val；
+默认写出两份 split 以保留源数据的验证边界。论文实验不要使用 --merge_train_val。
 
 用法:
   /path/to/python build_s1_pm10_overlap_from_full.py \\
@@ -161,6 +161,7 @@ def main():
         "dataset": "s1_pm10_overlap_derived_from_full",
         "source_dir": args.source_dir,
         "row_layout": f"{BASE_DYN} dyn + {STATIC_VEG} static/veg + {FE_DIM} FE",
+        "source_row_requirement": "12*27 dyn + 5 static + 1 veg + 36 FE",
         "overlap_channels": OVERLAP_CANONICAL,
         "note": "FE: 32-d fog recompute from masked dyn +4-d cyclical time kept from source row.",
     }

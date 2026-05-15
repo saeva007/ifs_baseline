@@ -29,13 +29,38 @@ export OPENBLAS_NUM_THREADS=32
 export MKL_NUM_THREADS=32
 
 # 3. 脚本路径
-SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_dataset_ifs_overlap_12h_fast.py"
+# DATA_SOURCE=s1_overlap -> derive overlap S1 dataset from the full 27-dyn S1 dataset
+# DATA_SOURCE=tianji     -> build Tianji-input overlap dataset with the same split and layout
+# DATA_SOURCE=ifs        -> build IFS-input overlap dataset (default)
+DATA_SOURCE="${DATA_SOURCE:-ifs}"
+DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
+
+case "${DATA_SOURCE}" in
+    s1_overlap)
+        SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_s1_pm10_overlap_from_full.py"
+        PY_ARGS=()
+        ;;
+    ifs)
+        SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_dataset_ifs_overlap_12h_fast.py"
+        PY_ARGS=(--year 2025 --window 12 --step 1)
+        ;;
+    tianji)
+        SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_dataset_tianji_overlap_12h.py"
+        PY_ARGS=(--window 12 --step 1)
+        ;;
+    *)
+        echo "Unknown DATA_SOURCE=${DATA_SOURCE} (use s1_overlap | tianji | ifs)" >&2
+        exit 1
+        ;;
+esac
+
+# shellcheck disable=SC2206
+EXTRA_TOKENS=( ${DATA_EXTRA_ARGS} )
 
 # 4. 执行数据处理
 echo "Running Python script: ${SCRIPT_PATH}"
-python "${SCRIPT_PATH}" \
-    --year 2025 \
-    --window 12 \
-    --step 1
+echo "DATA_SOURCE=${DATA_SOURCE}"
+echo "PY_ARGS=${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
+python "${SCRIPT_PATH}" "${PY_ARGS[@]}" "${EXTRA_TOKENS[@]}"
 
 echo "Job finished at: $(date)"

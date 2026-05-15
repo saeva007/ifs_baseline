@@ -76,7 +76,7 @@ export OMP_NUM_THREADS=4
 # 计算节点上的 srun 步常不继承登录式 PATH；用绝对路径调用 torchrun，避免 “command not found”。
 TORCHRUN_BIN="$(command -v torchrun)"
 # 【已修复：添加空格 || [ 】
-if [ -z "${TORCHRUN_BIN}" ] ||[ ! -x "${TORCHRUN_BIN}" ]; then
+if [ -z "${TORCHRUN_BIN}" ] || [ ! -x "${TORCHRUN_BIN}" ]; then
     echo "ERROR: torchrun not found after conda activate torch (PATH=${PATH:-})" >&2
     exit 1
 fi

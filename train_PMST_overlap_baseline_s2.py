@@ -182,7 +182,7 @@ CONFIG = {
     'FE_EXTRA_DIMS':          36,
     'GRAD_CLIP_NORM':         0.5,
     'REG_LOSS_ALPHA':         0.1,
-    'VAL_SPLIT_RATIO':        0.1,
+    'VAL_SPLIT_RATIO':        0.0,  # Unused: overlap S2 requires explicit month-tail X_val/y_val.
 
     # ========== target_achievement 权重 ==========
     'TARGET_RECALL_500_GOAL':    0.65,
@@ -824,36 +824,59 @@ class PMSTDataset(Dataset):
         final = np.nan_to_num(final, nan=0.0)
         return torch.from_numpy(final).float(), self.y_cls[idx], self.y_reg[idx], self.y_raw[idx]
 
+def _resolve_dyn_and_fe_dims(total_dim: int, win_size: int):
+    rest = int(total_dim) - 6
+    if rest <= 0:
+        raise ValueError(f"total_dim={total_dim} too small for static+veg")
+    for dyn in (27, 26, 25, 24):
+        fe = rest - dyn * int(win_size)
+        if 20 <= fe <= 64:
+            return dyn, fe
+    raise ValueError(
+        f"Cannot resolve dyn/FE: total_dim={total_dim}, WINDOW={win_size}, rest={rest}. "
+        "Rebuild the overlap dataset or check its row layout."
+    )
+
+
+def _validate_feature_layout(path_X: str, split: str, win_size: int, expected_dyn=None, expected_fe=None):
+    X_shape = np.load(path_X, mmap_mode="r").shape
+    if len(X_shape) != 2:
+        raise ValueError(f"X_{split}.npy must be 2D [N, D], got shape={X_shape}")
+    dyn_vars_count, inferred_extra_dim = _resolve_dyn_and_fe_dims(int(X_shape[1]), win_size)
+    if expected_dyn is not None and dyn_vars_count != expected_dyn:
+        raise ValueError(
+            f"X_{split}.npy dyn layout mismatch: got dyn={dyn_vars_count}, expected {expected_dyn}"
+        )
+    if expected_fe is not None and inferred_extra_dim != expected_fe:
+        raise ValueError(
+            f"X_{split}.npy FE layout mismatch: got FE={inferred_extra_dim}, expected {expected_fe}"
+        )
+    return X_shape, dyn_vars_count, inferred_extra_dim
+
+
 def infer_fe_extra_dims_from_x_train(data_dir: str, win_size: int) -> int:
     path_x = os.path.join(data_dir, "X_train.npy")
     if not os.path.isfile(path_x):
         raise FileNotFoundError(f"Cannot infer FE dims: missing {path_x}")
-    X_m_shape = np.load(path_x, mmap_mode="r").shape
-    total_dim = int(X_m_shape[1])
-    dyn_vars_count = int(CONFIG.get('DYN_VARS_COUNT', 25))
-    base_dim = int(win_size * dyn_vars_count + 5 + 1)
-    inferred = total_dim - base_dim
-    if inferred <= 0:
-        raise ValueError(f"Invalid feature layout: total_dim={total_dim}, base_dim={base_dim}")
+    _, dyn_vars_count, inferred = _validate_feature_layout(
+        path_x,
+        "train",
+        win_size,
+        int(CONFIG.get("DYN_VARS_COUNT", 27)),
+        int(CONFIG.get("FE_EXTRA_DIMS", 36)),
+    )
+    CONFIG["DYN_VARS_COUNT"] = int(dyn_vars_count)
+    CONFIG["FE_EXTRA_DIMS"] = int(inferred)
     return inferred
 
 def _build_y_cls_raw(y_raw: np.ndarray):
     y_raw = np.asarray(y_raw, dtype=np.float32).copy()
     y_cls = np.zeros(len(y_raw), dtype=np.int64)
-    if np.max(y_raw) < 100:
+    if len(y_raw) > 0 and np.nanmax(y_raw) < 100:
         y_raw = y_raw * 1000.0
     y_cls[y_raw >= 500] = 1
     y_cls[y_raw >= 1000] = 2
     return y_raw, y_cls
-
-def _resolve_overlap_layout(path_X_tr: str, win_size: int, rank: int) -> int:
-    X_m_shape = np.load(path_X_tr, mmap_mode="r").shape
-    total_dim = int(X_m_shape[1])
-    dyn_vars_count = int(CONFIG.get("DYN_VARS_COUNT", 25))
-    base_dim = int(win_size * dyn_vars_count + 5 + 1)
-    inferred_extra_dim = total_dim - base_dim
-    CONFIG["FE_EXTRA_DIMS"] = int(inferred_extra_dim)
-    return dyn_vars_count
 
 def load_data(data_dir, scaler=None, rank=0, local_rank=0, device=None,
               reuse_scaler=False, win_size=12, world_size=1, exp_id=None):
@@ -861,11 +884,35 @@ def load_data(data_dir, scaler=None, rank=0, local_rank=0, device=None,
     path_y_tr_o = os.path.join(data_dir, "y_train.npy")
     path_X_va_o = os.path.join(data_dir, "X_val.npy")
     path_y_va_o = os.path.join(data_dir, "y_val.npy")
-    use_disk_val = os.path.isfile(path_X_va_o) and os.path.isfile(path_y_va_o)
+    missing = [p for p in (path_X_tr_o, path_y_tr_o, path_X_va_o, path_y_va_o) if not os.path.isfile(p)]
+    if missing:
+        raise FileNotFoundError(
+            "Overlap S2 requires explicit month-tail train/val files; missing: "
+            + ", ".join(missing)
+        )
 
     path_X_tr = copy_to_local(path_X_tr_o, rank, local_rank, world_size, exp_id)
     path_y_tr = copy_to_local(path_y_tr_o, rank, local_rank, world_size, exp_id)
-    dyn_vars_count = _resolve_overlap_layout(path_X_tr, win_size, rank)
+    path_X_va = copy_to_local(path_X_va_o, rank, local_rank, world_size, exp_id)
+    path_y_va = copy_to_local(path_y_va_o, rank, local_rank, world_size, exp_id)
+    X_tr_shape, dyn_vars_count, inferred_extra_dim = _validate_feature_layout(
+        path_X_tr,
+        "train",
+        win_size,
+        int(CONFIG.get("DYN_VARS_COUNT", 27)),
+        int(CONFIG.get("FE_EXTRA_DIMS", 36)),
+    )
+    X_va_shape, _, _ = _validate_feature_layout(
+        path_X_va, "val", win_size, dyn_vars_count, inferred_extra_dim
+    )
+    CONFIG["DYN_VARS_COUNT"] = int(dyn_vars_count)
+    CONFIG["FE_EXTRA_DIMS"] = int(inferred_extra_dim)
+    if rank == 0:
+        print(
+            f"[Data] overlap layout: dyn={dyn_vars_count}, FE={inferred_extra_dim}, "
+            f"train_shape={X_tr_shape}, val_shape={X_va_shape}",
+            flush=True,
+        )
 
     scaler_path = os.path.join(
         CONFIG["SAVE_CKPT_DIR"],
@@ -911,37 +958,37 @@ def load_data(data_dir, scaler=None, rank=0, local_rank=0, device=None,
         while not os.path.exists(scaler_path) and wait_time < 60:
             time.sleep(1)
             wait_time += 1
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(
+                f"Rank {rank} waited 60s but still cannot see {scaler_path}."
+            )
         scaler = joblib.load(scaler_path)
 
     y_raw_tr, y_cls_tr = _build_y_cls_raw(np.load(path_y_tr))
-
-    if use_disk_val:
-        path_X_va = copy_to_local(path_X_va_o, rank, local_rank, world_size, exp_id)
-        path_y_va = copy_to_local(path_y_va_o, rank, local_rank, world_size, exp_id)
-        y_raw_va, y_cls_va = _build_y_cls_raw(np.load(path_y_va))
-        tr_ds = PMSTDataset(
-            path_X_tr, y_cls_tr, y_raw_tr, scaler,
-            win_size, True, None,
-            dyn_vars_count=dyn_vars_count,
+    y_raw_va, y_cls_va = _build_y_cls_raw(np.load(path_y_va))
+    if len(y_raw_tr) != X_tr_shape[0] or len(y_raw_va) != X_va_shape[0]:
+        raise ValueError(
+            f"y length mismatch: train {len(y_raw_tr)} vs X_train {X_tr_shape[0]}, "
+            f"val {len(y_raw_va)} vs X_val {X_va_shape[0]}"
         )
-        val_ds = PMSTDataset(
-            path_X_va, y_cls_va, y_raw_va, scaler,
-            win_size, True, None,
-            dyn_vars_count=dyn_vars_count,
-        )
-        return tr_ds, val_ds, scaler
-
-    n_total = len(y_cls_tr)
-    n_val = int(n_total * CONFIG["VAL_SPLIT_RATIO"])
-    rng = np.random.default_rng(seed=42)
-    indices = rng.permutation(n_total)
+    if rank == 0:
+        for split, y_cls in (("train", y_cls_tr), ("val", y_cls_va)):
+            counts = np.bincount(y_cls, minlength=3)
+            total = max(int(counts.sum()), 1)
+            print(
+                f"[Data] {split}: N={total} | "
+                f"Fog={counts[0]} ({counts[0] / total:.4%}) "
+                f"Mist={counts[1]} ({counts[1] / total:.4%}) "
+                f"Clear={counts[2]} ({counts[2] / total:.4%})",
+                flush=True,
+            )
 
     tr_ds = PMSTDataset(
-        path_X_tr, y_cls_tr, y_raw_tr, scaler, win_size, True, indices[n_val:],
+        path_X_tr, y_cls_tr, y_raw_tr, scaler, win_size, True, None,
         dyn_vars_count=dyn_vars_count,
     )
     val_ds = PMSTDataset(
-        path_X_tr, y_cls_tr, y_raw_tr, scaler, win_size, True, indices[:n_val],
+        path_X_va, y_cls_va, y_raw_va, scaler, win_size, True, None,
         dyn_vars_count=dyn_vars_count,
     )
     return tr_ds, val_ds, scaler
@@ -1601,14 +1648,17 @@ def main():
     # [核心修复]: 避免所有 rank 并发向 NFS 去读取特征文件，仅 rank 0 读取然后广播给所有节点
     if g_rank == 0:
         inferred_fe = infer_fe_extra_dims_from_x_train(CONFIG["S2_DATA_DIR"], CONFIG["WINDOW_SIZE"])
+        inferred_dyn = int(CONFIG["DYN_VARS_COUNT"])
     else:
         inferred_fe = 0
+        inferred_dyn = 0
 
     if w_size > 1:
-        fe_tensor = torch.tensor([inferred_fe], dtype=torch.long, device=device)
-        dist.broadcast(fe_tensor, src=0)
-        inferred_fe = fe_tensor.item()
+        layout_tensor = torch.tensor([inferred_dyn, inferred_fe], dtype=torch.long, device=device)
+        dist.broadcast(layout_tensor, src=0)
+        inferred_dyn, inferred_fe = layout_tensor.tolist()
         
+    CONFIG["DYN_VARS_COUNT"] = int(inferred_dyn)
     CONFIG["FE_EXTRA_DIMS"] = int(inferred_fe)
 
     raw_model = build_model_raw()

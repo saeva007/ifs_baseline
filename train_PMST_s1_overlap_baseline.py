@@ -121,7 +121,7 @@ CONFIG = {
     'GRAD_CLIP_NORM':         0.5,
     'REG_LOSS_ALPHA':         0.1,
     # 已弃用：验证集为数据目录中的 X_val.npy / y_val.npy
-    'VAL_SPLIT_RATIO':        0.1,
+    'VAL_SPLIT_RATIO':        0.0,  # Unused: overlap S1 requires explicit X_val/y_val.
 
     # ========== target_achievement 权重 ==========
     'TARGET_RECALL_500_GOAL':    0.65,
@@ -848,6 +848,14 @@ def load_data(data_dir, scaler=None, rank=0, local_rank=0, device=None,
         )
     total_dim = int(X_m_shape[1])
     dyn_vars_count, inferred_extra_dim = _resolve_dyn_and_fe_dims(total_dim, win_size)
+    expected_dyn = int(CONFIG.get('DYN_VARS_COUNT', 27))
+    expected_fe = int(CONFIG.get('FE_EXTRA_DIMS', 36))
+    if dyn_vars_count != expected_dyn or inferred_extra_dim != expected_fe:
+        raise ValueError(
+            f"Overlap S1 requires {expected_dyn} dyn vars and {expected_fe} FE dims; "
+            f"got dyn={dyn_vars_count}, FE={inferred_extra_dim} from X_train.npy. "
+            "Rebuild the overlap S1 dataset from a PM10+PM2.5 27-dyn source."
+        )
     if rank == 0 and int(CONFIG.get('DYN_VARS_COUNT', dyn_vars_count)) != dyn_vars_count:
         print(
             f"[Data] DYN_VARS_COUNT: CONFIG={CONFIG.get('DYN_VARS_COUNT')} "

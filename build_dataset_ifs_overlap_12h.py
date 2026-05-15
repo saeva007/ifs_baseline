@@ -291,7 +291,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     ds_tj = xr.open_dataset(args.tianji_file, engine="h5netcdf")
-    ds_tj = ds_tj.assign_coords(time=ds_tj.time - pd.Timedelta(hours=8))
+    print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
 
     if "lat" in ds_tj:
         lats, lons = ds_tj["lat"].values, ds_tj["lon"].values
@@ -387,6 +387,10 @@ def main():
         "window": args.window,
         "step": args.step,
         "split": "month_tail",
+        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "time_coordinate": "UTC",
+        "ifs_time_match": "nearest_90min_utc",
+        "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,
         "gap_hours": args.gap_hours,

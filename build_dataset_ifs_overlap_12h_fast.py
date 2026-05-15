@@ -563,7 +563,7 @@ def main():
     print(f"[INFO] Booting streaming builder with window_chunk={args.window_chunk}.", flush=True)
 
     with xr.open_dataset(args.tianji_file, engine="h5netcdf") as ds_tj:
-        ds_tj = ds_tj.assign_coords(time=ds_tj.time - pd.Timedelta(hours=8))
+        print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
         lats = ds_tj["lat"].values if "lat" in ds_tj else ds_tj["latitude"].values
         lons = ds_tj["lon"].values if "lon" in ds_tj else ds_tj["longitude"].values
         times = pd.to_datetime(ds_tj.time.values)
@@ -690,10 +690,17 @@ def main():
         "fog_fe_dim": int(fog_fe_dim),
         "window": args.window,
         "step": args.step,
+        "split": "month_tail",
         "n_windows": int(n_wins),
         "window_chunk": args.window_chunk,
+        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "time_coordinate": "UTC",
+        "ifs_time_match": "nearest_90min_utc",
+        "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,
+        "gap_hours": args.gap_hours,
+        "max_vis_threshold": MAX_VIS_THRESHOLD,
         "architect_note": "Time-major aligned, PMST-27 layout, streamed window writer"
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:
