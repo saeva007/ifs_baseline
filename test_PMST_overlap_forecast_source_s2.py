@@ -187,6 +187,17 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--bootstrap_seed", type=int, default=20250424)
     ap.add_argument("--skip_bootstrap", action="store_true")
     ap.add_argument("--strict_meta", action="store_true", help="Fail unless test metadata are identical and in order.")
+    ap.add_argument(
+        "--local_time_offset_hours",
+        type=int,
+        default=8,
+        help="Offset from UTC for day/night and seasonal scenario grouping.",
+    )
+    ap.add_argument(
+        "--allow_legacy_time_alignment",
+        action="store_true",
+        help="Allow datasets without the raw_utc_no_shift build marker; intended only for legacy audits.",
+    )
     ap.add_argument("--allow_partial_load", action="store_true")
     ap.add_argument("--limit_samples", type=int, default=0, help="Smoke-test limit for val/test rows; 0 means all.")
     ap.add_argument("--no_per_sample_csv", action="store_true")
@@ -245,6 +256,23 @@ def read_build_config(data_dir: str) -> Dict:
         return json.load(f)
 
 
+def validate_build_time_alignment(build_configs: Dict[str, Dict], allow_legacy: bool) -> None:
+    expected = "raw_utc_no_shift"
+    for source, cfg in build_configs.items():
+        marker = cfg.get("tianji_raw_time_alignment") if cfg else None
+        if marker == expected:
+            continue
+        msg = (
+            f"{source} dataset was not built with the required Tianji UTC marker "
+            f"({expected!r}); got {marker!r}. Rebuild the overlap dataset with the "
+            "current builders before using this comparison in the paper."
+        )
+        if allow_legacy:
+            print(f"[WARN] {msg}", flush=True)
+        else:
+            raise RuntimeError(msg)
+
+
 def require_file(path: str, label: str) -> None:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Missing {label}: {path}")
@@ -271,17 +299,16 @@ def infer_feature_layout(
             f"base_dim={base_dim}, extra_dim={extra_dim}"
         )
     if expected_extra_dim > 0 and extra_dim != expected_extra_dim:
-        print(
-            f"[WARN] {data_dir} extra feature dim is {extra_dim}, "
-            f"expected {expected_extra_dim}. Using inferred value.",
-            flush=True,
+        raise ValueError(
+            f"{data_dir} extra feature dim is {extra_dim}, expected {expected_extra_dim}. "
+            "This usually means a stale PM10-only or wrong-layout overlap dataset."
         )
     return feature_dim, int(extra_dim)
 
 
 def build_y_cls_raw(y_raw: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     y_raw = np.asarray(y_raw, dtype=np.float32).copy()
-    if np.nanmax(y_raw) < 100:
+    if len(y_raw) > 0 and np.nanmax(y_raw) < 100:
         y_raw *= 1000.0
     y_cls = np.zeros(len(y_raw), dtype=np.int64)
     y_cls[y_raw >= 500.0] = 1
@@ -1019,11 +1046,11 @@ def bootstrap_delta_ci(
     return pd.DataFrame(rows)
 
 
-def scenario_masks(meta: pd.DataFrame) -> Dict[str, np.ndarray]:
+def scenario_masks(meta: pd.DataFrame, local_time_offset_hours: int = 8) -> Dict[str, np.ndarray]:
     masks: Dict[str, np.ndarray] = {"All": np.ones(len(meta), dtype=bool)}
     if "time" not in meta.columns:
         return masks
-    time = pd.to_datetime(meta["time"], errors="coerce")
+    time = pd.to_datetime(meta["time"], errors="coerce") + pd.Timedelta(hours=local_time_offset_hours)
     valid = ~time.isna()
     if valid.any():
         hour = time.dt.hour.to_numpy()
@@ -1084,6 +1111,7 @@ def write_report(
         f.write(f"Paired test rows: {n_pair}\n")
         f.write(f"Threshold mode: {args.threshold_mode}\n")
         f.write(f"Temperature scaling: {not args.no_temp_scaling}\n")
+        f.write(f"Scenario local time offset: UTC+{args.local_time_offset_hours}\n")
         f.write(f"Window: {args.window}; dyn_vars_count: {args.dyn_vars_count}\n\n")
         for source in ("tianji", "ifs"):
             f.write(f"[{source}]\n")
@@ -1104,6 +1132,10 @@ def write_report(
                                 "fe_dim",
                                 "window",
                                 "split",
+                                "tianji_raw_time_alignment",
+                                "time_coordinate",
+                                "ifs_time_match",
+                                "pm_time_match",
                                 "val_last_days",
                                 "test_last_days",
                                 "gap_hours",
@@ -1276,12 +1308,38 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     )
 
     n_sources = len(source_order)
-    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=True, constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=False, constrained_layout=True)
     panel_letters = ["a", "b", "c"]
+
+    def _adaptive_score_ylim(values: Sequence[float]) -> float:
+        arr = np.asarray(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return 0.20
+        vmax = float(np.nanmax(arr))
+        if vmax <= 0:
+            return 0.10
+        padded = min(1.0, vmax + max(0.025, 0.10 * vmax))
+        step = 0.02 if padded <= 0.20 else 0.05
+        upper = max(step * 3, math.ceil(padded / step) * step)
+        if vmax < 0.80:
+            upper = min(upper, 0.85)
+        elif vmax < 0.90:
+            upper = min(upper, 0.95)
+        return min(1.0, upper)
 
     for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
         x = np.arange(len(metrics), dtype=np.float64)
         width = min(0.34, 0.78 / max(n_sources, 1))
+        panel_values: List[float] = []
+        for source in source_order:
+            row = row_by_source[source]
+            for metric, _ in metrics:
+                try:
+                    panel_values.append(float(row.get(metric, np.nan)))
+                except Exception:
+                    panel_values.append(math.nan)
+        y_max = _adaptive_score_ylim(panel_values)
         for src_idx, source in enumerate(source_order):
             row = row_by_source[source]
             vals: List[float] = []
@@ -1310,7 +1368,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 if ok:
                     ax.text(
                         bar.get_x() + bar.get_width() / 2.0,
-                        min(val + 0.025, 1.03),
+                        min(val + y_max * 0.025, y_max * 0.98),
                         f"{val:.2f}",
                         ha="center",
                         va="bottom",
@@ -1321,7 +1379,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         ax.set_title(title)
         ax.set_xticks(x)
         ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
-        ax.set_ylim(0, 1.05)
+        ax.set_ylim(0, y_max)
         ax.grid(axis="y", alpha=0.28)
         ax.grid(axis="x", visible=False)
         for spine in ("top", "right"):
@@ -1398,6 +1456,7 @@ def main() -> None:
     print(f"[device] {device}", flush=True)
 
     build_configs = {source: read_build_config(spec.data_dir) for source, spec in specs.items()}
+    validate_build_time_alignment(build_configs, args.allow_legacy_time_alignment)
     evals = {
         source: evaluate_one_source(source, spec, train_mod, args, device)
         for source, spec in specs.items()
@@ -1564,7 +1623,7 @@ def main() -> None:
             print("[WARN] IFS diagnostic baseline matched 0 finite test samples.", flush=True)
 
     scenario_rows = []
-    for scenario, mask in scenario_masks(meta_common).items():
+    for scenario, mask in scenario_masks(meta_common, args.local_time_offset_hours).items():
         mt = compute_metrics(y[mask], t_preds[mask], probs=t_probs[mask])
         mi = compute_metrics(y[mask], i_preds[mask], probs=i_probs[mask])
         scenario_rows.append(rows_from_metrics("tianji", mt, {"scenario": scenario}))
@@ -1573,7 +1632,7 @@ def main() -> None:
     scenario_df.to_csv(out_dir / "scenario_metrics.csv", index=False)
 
     scenario_delta_rows = []
-    for scenario, mask in scenario_masks(meta_common).items():
+    for scenario, mask in scenario_masks(meta_common, args.local_time_offset_hours).items():
         mt = compute_metrics(y[mask], t_preds[mask], probs=t_probs[mask])
         mi = compute_metrics(y[mask], i_preds[mask], probs=i_probs[mask])
         d = compare_overall(mt, mi)
@@ -1586,7 +1645,7 @@ def main() -> None:
 
     if ifs_diag_valid is not None and ifs_diag_preds is not None and int(ifs_diag_valid.sum()) > 0:
         diag_scenario_rows = []
-        for scenario, mask in scenario_masks(meta_common).items():
+        for scenario, mask in scenario_masks(meta_common, args.local_time_offset_hours).items():
             diag_mask = mask & ifs_diag_valid
             if int(diag_mask.sum()) == 0:
                 continue

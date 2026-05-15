@@ -1,0 +1,118 @@
+# Overlap Forecast-Source Experiment Runbook
+
+This runbook covers the controlled Tianji-input versus IFS-input PMST overlap
+experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
+
+## Scope
+
+- S1 data-build submit script: `sub_s1_overlap_data.slurm`
+- Tianji S2 data-build submit script: `sub_tianji_overlap_data.slurm`
+- IFS S2 data-build submit script: `sub_ifs_data.slurm`
+- Training submit script: `sub_ifs_overlap_baseline.slurm`
+- S1 data builder: `build_s1_pm10_overlap_from_full.py`
+- Tianji S2 data builder: `build_dataset_tianji_overlap_12h.py`
+- IFS S2 data builder: `build_dataset_ifs_overlap_12h_fast.py`
+- S1 trainer: `train_PMST_s1_overlap_baseline.py`
+- S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
+- S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
+- Paired evaluator: `test_PMST_overlap_forecast_source_s2.py`
+
+Each data-build path has its own Slurm entry point. Keep
+`sub_ifs_data.slurm` for IFS-input data only.
+
+## Required Order
+
+Run from the remote overlap repository:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+mkdir -p logs
+```
+
+### 1. Build Or Refresh The Overlap S1 Dataset
+
+Run this when the full S1 PM10+PM2.5 source dataset changed, when the overlap S1
+dataset is missing, or when you need to verify the 27-dyn layout from scratch.
+
+```bash
+sbatch sub_s1_overlap_data.slurm
+```
+
+Optional explicit paths:
+
+```bash
+sbatch --export=ALL,SOURCE_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25,OUT_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap sub_s1_overlap_data.slurm
+```
+
+Do not use `--merge_train_val` for the paper experiment.
+
+### 2. Train The Overlap S1 Checkpoint
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s1_overlap sub_ifs_overlap_baseline.slurm
+```
+
+The S1 trainer requires explicit `X_train/y_train` and `X_val/y_val`, and it
+fails if the row layout is not `27 dyn + 36 FE`.
+
+### 3. Rebuild Tianji-Input S2 Overlap Data
+
+```bash
+sbatch sub_tianji_overlap_data.slurm
+```
+
+This uses `merged_final_all_vars.nc` raw times as UTC and writes
+`tianji_raw_time_alignment=raw_utc_no_shift` into `dataset_build_config.json`.
+
+### 4. Rebuild IFS-Input S2 Overlap Data
+
+```bash
+sbatch sub_ifs_data.slurm
+```
+
+By default this uses `build_dataset_ifs_overlap_12h_fast.py`, auto-discovers
+station-interpolated IFS inputs, uses raw Tianji UTC times, and writes the same
+`raw_utc_no_shift` marker. Use `IFS_INTERP_GLOB` for explicit IFS inputs:
+
+```bash
+sbatch "--export=ALL,IFS_INTERP_GLOB=/public/home/putianshu/vis_mlp/ifs_baseline/ifs_interp_out/**/ifs_interp_*_2025.nc" sub_ifs_data.slurm
+```
+
+### 5. Train Tianji-Input S2
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s2_tianji sub_ifs_overlap_baseline.slurm
+```
+
+### 6. Train IFS-Input S2
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s2_ifs sub_ifs_overlap_baseline.slurm
+```
+
+Both S2 trainers now require explicit month-tail validation files and fail on
+legacy PM10-only or wrong FE layouts.
+
+### 7. Run Paired Forecast-Source Evaluation
+
+After both S2 checkpoints exist:
+
+```bash
+python test_PMST_overlap_forecast_source_s2.py \
+  --out_dir /public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/overlap_forecast_source
+```
+
+The evaluator refuses datasets without `tianji_raw_time_alignment=raw_utc_no_shift`
+unless `--allow_legacy_time_alignment` is passed. Scenario day/night grouping
+uses UTC+8 by default through `--local_time_offset_hours 8`.
+
+## Completion Checklist
+
+1. `dataset_build_config.json` for Tianji and IFS both contain
+   `tianji_raw_time_alignment=raw_utc_no_shift`.
+2. Train/val/test files exist for both overlap S2 datasets.
+3. S1, Tianji S2, and IFS S2 checkpoints exist under
+   `/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints`.
+4. The paired evaluator writes `overall_metrics.csv`, `validation_metrics.csv`,
+   `scenario_metrics.csv`, and `run_config.json`.
+5. Old results generated before the UTC fix are not used in the paper.
