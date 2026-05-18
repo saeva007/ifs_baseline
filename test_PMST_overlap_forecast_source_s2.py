@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Paired test for the S2 Tianji-vs-IFS overlap PMST experiments.
+Paired test for the S2 Tianji-vs-IFS overlap low-visibility experiments.
 
-This script evaluates the two models trained by train_PMST_overlap_baseline_s2.py:
+By default this script evaluates the current Static-MLP + RNN model trained by
+train_static_rnn_overlap_baseline_s2.py:
   1) data_source=tianji, using ml_dataset_overlap_tianji_12h_pm10_pm25_baseline
   2) data_source=ifs,    using ml_dataset_overlap_ifs_12h_pm10_pm25_baseline
 
 It is intended as a controlled data-source experiment for the paper:
-same PMST architecture, same overlap variable layout, same observed
+same model architecture, same overlap variable layout, same observed
 500/1000 m labels, paired test samples by (time, station_id), and
 validation-only calibration/threshold selection.
+
+The legacy PMST architecture remains available with --model_arch pmst for
+backward-compatible audits.
 
 Optionally, it also matches the raw IFS diagnostic visibility product
 (VIS_IDW_KDTree_*.nc by default) to the same test rows, following the
@@ -35,7 +39,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 try:
     from sklearn.metrics import average_precision_score
@@ -58,11 +62,14 @@ DEFAULT_IFS_FORECAST_NC = os.path.join(VIS_MLP_ROOT, "VIS_IDW_KDTree_20250101_20
 DEFAULT_OUT_DIR = os.path.join(
     IFS_BASELINE_ROOT, "paper_eval_overlap_forecast_source_s2"
 )
+DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
+    "STATIC_RNN_TRAIN_DIR", os.path.join(VIS_MLP_ROOT, "train")
+)
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
 SOURCE_LABELS = {
-    "tianji": "Tianji-trained/Tianji-input PMST",
-    "ifs": "IFS-trained/IFS-input PMST",
+    "tianji": "Tianji-trained/Tianji-input model",
+    "ifs": "IFS-trained/IFS-input model",
     "ifs_diagnostic": "IFS diagnostic visibility",
 }
 HIGHER_IS_BETTER = {
@@ -150,7 +157,7 @@ class SourceEval:
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=(
-            "Evaluate paired Tianji-vs-IFS overlap S2 PMST models on the held-out "
+            "Evaluate paired Tianji-vs-IFS overlap S2 low-vis models on the held-out "
             "month-tail test split."
         )
     )
@@ -161,6 +168,25 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--ifs_ckpt", default="")
     ap.add_argument("--tianji_scaler", default="")
     ap.add_argument("--ifs_scaler", default="")
+    ap.add_argument(
+        "--model_arch",
+        choices=["static_rnn", "pmst"],
+        default=os.environ.get("OVERLAP_MODEL_ARCH", "static_rnn"),
+        help="Model family to evaluate. static_rnn is the current paper candidate; pmst keeps the legacy overlap audit path.",
+    )
+    ap.add_argument("--static_rnn_train_dir", default=DEFAULT_STATIC_RNN_TRAIN_DIR)
+    ap.add_argument("--static_rnn_encoder", choices=["gru", "lstm"], default="gru")
+    ap.add_argument("--static_rnn_hidden_dim", type=int, default=256)
+    ap.add_argument("--static_rnn_static_hidden_dim", type=int, default=96)
+    ap.add_argument("--static_rnn_fe_hidden_dim", type=int, default=128)
+    ap.add_argument("--static_rnn_fusion_hidden_dim", type=int, default=256)
+    ap.add_argument("--static_rnn_veg_emb_dim", type=int, default=16)
+    ap.add_argument("--static_rnn_rnn_layers", type=int, default=1)
+    ap.add_argument("--static_rnn_dropout", type=float, default=0.2)
+    ap.add_argument("--static_rnn_bidirectional", action="store_true")
+    ap.add_argument("--static_rnn_pooling", choices=["mean", "last", "attention"], default="mean")
+    ap.add_argument("--static_rnn_no_fe", action="store_true")
+    ap.add_argument("--static_rnn_no_pm", action="store_true")
     ap.add_argument("--ifs_forecast_nc", default=os.environ.get("IFS_FORECAST_NC", DEFAULT_IFS_FORECAST_NC))
     ap.add_argument("--ifs_forecast_var", default=os.environ.get("IFS_FORECAST_VAR", "VIS"))
     ap.add_argument("--checkpoint_tag", default="S2_PhaseB_best_score")
@@ -210,20 +236,52 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-def default_ckpt_path(source: str, ckpt_dir: str, checkpoint_tag: str) -> str:
-    run_exp_id = f"exp_overlap_pmst_baseline_s2_{source}_pm10_pm25"
+def default_run_id(source: str, model_arch: str) -> str:
+    if model_arch == "static_rnn":
+        return f"exp_overlap_static_rnn_s2_{source}_pm10_pm25"
+    return f"exp_overlap_pmst_baseline_s2_{source}_pm10_pm25"
+
+
+def default_ckpt_path(source: str, ckpt_dir: str, checkpoint_tag: str, model_arch: str) -> str:
+    run_exp_id = default_run_id(source, model_arch)
     return os.path.join(ckpt_dir, f"{run_exp_id}_{checkpoint_tag}.pt")
 
 
-def default_scaler_path(source: str, ckpt_dir: str, window: int, dyn_vars_count: int) -> str:
-    return os.path.join(
-        ckpt_dir,
-        f"robust_scaler_w{window}_dyn{dyn_vars_count}_overlap_baseline_{source}.pkl",
-    )
+def default_scaler_path(
+    source: str,
+    ckpt_dir: str,
+    window: int,
+    dyn_vars_count: int,
+    model_arch: str,
+    static_no_pm: bool = False,
+) -> str:
+    if model_arch == "static_rnn":
+        pm_tag = "nopm" if static_no_pm else "pm"
+        run_id = default_run_id(source, model_arch)
+        return os.path.join(ckpt_dir, f"robust_scaler_{run_id}_s2_w{window}_dyn{dyn_vars_count}_{pm_tag}.pkl")
+    return os.path.join(ckpt_dir, f"robust_scaler_w{window}_dyn{dyn_vars_count}_overlap_baseline_{source}.pkl")
 
 
-def import_training_module():
-    module_path = Path(__file__).resolve().parent / "train_PMST_overlap_baseline_s2.py"
+def resolve_static_rnn_train_dir(train_dir: str) -> Path:
+    candidates = [
+        Path(train_dir).expanduser(),
+        Path(__file__).resolve().parent.parent / "train",
+        Path(__file__).resolve().parent.parent / "vis_mlp",
+    ]
+    for path in candidates:
+        if (path / "train_static_rnn_lowvis.py").is_file():
+            return path.resolve()
+    checked = "\n  ".join(str(p / "train_static_rnn_lowvis.py") for p in candidates)
+    raise FileNotFoundError(f"Cannot find train_static_rnn_lowvis.py. Checked:\n  {checked}")
+
+
+def import_training_module(args: argparse.Namespace):
+    if args.model_arch == "static_rnn":
+        module_path = resolve_static_rnn_train_dir(args.static_rnn_train_dir) / "train_static_rnn_lowvis.py"
+        module_name = "static_rnn_lowvis_train"
+    else:
+        module_path = Path(__file__).resolve().parent / "train_PMST_overlap_baseline_s2.py"
+        module_name = "pmst_overlap_train_s2"
     if not module_path.is_file():
         raise FileNotFoundError(f"Cannot find training module: {module_path}")
 
@@ -232,10 +290,13 @@ def import_training_module():
         # The training script parses known args at import time. Keep it isolated
         # from this evaluator's CLI.
         sys.argv = [str(module_path)]
-        spec = importlib.util.spec_from_file_location("pmst_overlap_train_s2", module_path)
+        if str(module_path.parent) not in sys.path:
+            sys.path.insert(0, str(module_path.parent))
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Cannot import {module_path}")
         mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
         return mod
     finally:
@@ -333,7 +394,11 @@ def make_dataset(
     scaler,
     window: int,
     dyn_vars_count: int,
+    extra_feat_dim: int,
     limit_samples: int,
+    model_arch: str,
+    static_use_fe: bool,
+    static_use_pm: bool,
 ):
     x_path = os.path.join(data_dir, f"X_{split}.npy")
     y_path = os.path.join(data_dir, f"y_{split}.npy")
@@ -345,24 +410,44 @@ def make_dataset(
     if limit_samples and limit_samples > 0:
         indices = np.arange(min(limit_samples, len(y_cls)), dtype=np.int64)
 
-    ds = train_mod.PMSTDataset(
-        x_path,
-        y_cls,
-        y_raw,
-        scaler,
-        window_size=window,
-        use_fe=True,
-        indices=indices,
-        dyn_vars_count=dyn_vars_count,
-    )
+    if model_arch == "static_rnn":
+        layout = train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
+        base_ds = train_mod.LowVisDataset(
+            x_path,
+            y_raw,
+            y_cls,
+            layout,
+            scaler,
+            use_fe=static_use_fe,
+            use_pm=static_use_pm,
+        )
+        ds = Subset(base_ds, indices.tolist()) if indices is not None else base_ds
+    else:
+        ds = train_mod.PMSTDataset(
+            x_path,
+            y_cls,
+            y_raw,
+            scaler,
+            window_size=window,
+            use_fe=True,
+            indices=indices,
+            dyn_vars_count=dyn_vars_count,
+        )
     meta = load_meta(data_dir, split, indices)
     return ds, meta
+
+
+def reset_dataset_cache(dataset) -> None:
+    if hasattr(dataset, "X"):
+        dataset.X = None
+    elif hasattr(dataset, "dataset") and hasattr(dataset.dataset, "X"):
+        dataset.dataset.X = None
 
 
 def worker_init_fn(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None:
-        worker_info.dataset.X = None
+        reset_dataset_cache(worker_info.dataset)
 
 
 def make_loader(dataset, batch_size: int, num_workers: int) -> DataLoader:
@@ -382,15 +467,33 @@ def load_model(
     dyn_vars_count: int,
     extra_feat_dim: int,
     allow_partial_load: bool,
+    args: argparse.Namespace,
 ) -> nn.Module:
     require_file(ckpt_path, "checkpoint")
-    model = train_mod.ImprovedDualStreamPMSTNet(
-        window_size=window,
-        hidden_dim=train_mod.CONFIG.get("MODEL_HIDDEN_DIM", 512),
-        num_classes=3,
-        extra_feat_dim=extra_feat_dim,
-        dyn_vars_count=dyn_vars_count,
-    ).to(device)
+    if args.model_arch == "static_rnn":
+        layout = train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
+        model = train_mod.StaticRNNLowVisNet(
+            layout=layout,
+            encoder=args.static_rnn_encoder,
+            hidden_dim=args.static_rnn_hidden_dim,
+            static_hidden_dim=args.static_rnn_static_hidden_dim,
+            fe_hidden_dim=args.static_rnn_fe_hidden_dim,
+            fusion_hidden_dim=args.static_rnn_fusion_hidden_dim,
+            veg_emb_dim=args.static_rnn_veg_emb_dim,
+            rnn_layers=args.static_rnn_rnn_layers,
+            dropout=args.static_rnn_dropout,
+            bidirectional=args.static_rnn_bidirectional,
+            pooling=args.static_rnn_pooling,
+            use_fe=not args.static_rnn_no_fe,
+        ).to(device)
+    else:
+        model = train_mod.ImprovedDualStreamPMSTNet(
+            window_size=window,
+            hidden_dim=train_mod.CONFIG.get("MODEL_HIDDEN_DIM", 512),
+            num_classes=3,
+            extra_feat_dim=extra_feat_dim,
+            dyn_vars_count=dyn_vars_count,
+        ).to(device)
 
     try:
         state = torch.load(ckpt_path, map_location=device, weights_only=True)
@@ -426,7 +529,8 @@ def collect_logits(model: nn.Module, loader: DataLoader, device: torch.device) -
     model.eval()
     for bx, by, _, braw in loader:
         bx = bx.to(device, non_blocking=True)
-        logits, _, _ = model(bx)
+        out = model(bx)
+        logits = out[0] if isinstance(out, (tuple, list)) else out
         logits_l.append(logits.detach().cpu().numpy().astype(np.float32))
         targets_l.append(by.numpy().astype(np.int64))
         raw_l.append(braw.numpy().astype(np.float32))
@@ -888,13 +992,34 @@ def evaluate_one_source(
         args.dyn_vars_count,
         extra_dim,
         args.allow_partial_load,
+        args,
     )
 
     val_ds, _ = make_dataset(
-        train_mod, spec.data_dir, "val", scaler, args.window, args.dyn_vars_count, args.limit_samples
+        train_mod,
+        spec.data_dir,
+        "val",
+        scaler,
+        args.window,
+        args.dyn_vars_count,
+        extra_dim,
+        args.limit_samples,
+        args.model_arch,
+        not args.static_rnn_no_fe,
+        not args.static_rnn_no_pm,
     )
     test_ds, test_meta = make_dataset(
-        train_mod, spec.data_dir, "test", scaler, args.window, args.dyn_vars_count, args.limit_samples
+        train_mod,
+        spec.data_dir,
+        "test",
+        scaler,
+        args.window,
+        args.dyn_vars_count,
+        extra_dim,
+        args.limit_samples,
+        args.model_arch,
+        not args.static_rnn_no_fe,
+        not args.static_rnn_no_pm,
     )
     val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
     test_loader = make_loader(test_ds, args.batch_size, args.num_workers)
@@ -1101,10 +1226,11 @@ def write_report(
         return "NA" if pd.isna(val) else f"{float(val):.4f}"
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write("PMST overlap S2 forecast-source paired evaluation\n")
+        f.write("Overlap S2 forecast-source paired evaluation\n")
         f.write("=" * 58 + "\n\n")
-        f.write("Purpose: controlled comparison of two train_PMST_overlap_baseline_s2.py models.\n")
-        f.write("Interpretation: this tests forecast-field source quality under the same PMST\n")
+        f.write(f"Model architecture: {args.model_arch}\n")
+        f.write("Purpose: controlled comparison of Tianji-trained and IFS-trained overlap models.\n")
+        f.write("Interpretation: this tests forecast-field source quality under the same model\n")
         f.write("architecture, same observed 0-500 m / 500-1000 m / >=1000 m labels, and\n")
         f.write("paired test samples. A separate matched section compares against the raw\n")
         f.write("IFS diagnostic-visibility product when --ifs_forecast_nc is available.\n\n")
@@ -1432,16 +1558,30 @@ def main() -> None:
             name="tianji",
             data_dir=args.tianji_data_dir,
             ckpt_path=args.tianji_ckpt
-            or default_ckpt_path("tianji", args.ckpt_dir, args.checkpoint_tag),
+            or default_ckpt_path("tianji", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
             scaler_path=args.tianji_scaler
-            or default_scaler_path("tianji", args.ckpt_dir, args.window, args.dyn_vars_count),
+            or default_scaler_path(
+                "tianji",
+                args.ckpt_dir,
+                args.window,
+                args.dyn_vars_count,
+                args.model_arch,
+                args.static_rnn_no_pm,
+            ),
         ),
         "ifs": SourceSpec(
             name="ifs",
             data_dir=args.ifs_data_dir,
-            ckpt_path=args.ifs_ckpt or default_ckpt_path("ifs", args.ckpt_dir, args.checkpoint_tag),
+            ckpt_path=args.ifs_ckpt or default_ckpt_path("ifs", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
             scaler_path=args.ifs_scaler
-            or default_scaler_path("ifs", args.ckpt_dir, args.window, args.dyn_vars_count),
+            or default_scaler_path(
+                "ifs",
+                args.ckpt_dir,
+                args.window,
+                args.dyn_vars_count,
+                args.model_arch,
+                args.static_rnn_no_pm,
+            ),
         ),
     }
 
@@ -1451,7 +1591,7 @@ def main() -> None:
         require_file(spec.ckpt_path, f"{source} checkpoint")
         require_file(spec.scaler_path, f"{source} scaler")
 
-    train_mod = import_training_module()
+    train_mod = import_training_module(args)
     device = resolve_device(args.device)
     print(f"[device] {device}", flush=True)
 
@@ -1485,6 +1625,7 @@ def main() -> None:
                     "mist_threshold": evals["tianji"].thresholds.get("mist"),
                     "feature_dim": evals["tianji"].feature_dim,
                     "extra_feat_dim": evals["tianji"].extra_feat_dim,
+                    "model_arch": args.model_arch,
                     "checkpoint": evals["tianji"].spec.ckpt_path,
                     "data_dir": evals["tianji"].spec.data_dir,
                 },
@@ -1498,6 +1639,7 @@ def main() -> None:
                     "mist_threshold": evals["ifs"].thresholds.get("mist"),
                     "feature_dim": evals["ifs"].feature_dim,
                     "extra_feat_dim": evals["ifs"].extra_feat_dim,
+                    "model_arch": args.model_arch,
                     "checkpoint": evals["ifs"].spec.ckpt_path,
                     "data_dir": evals["ifs"].spec.data_dir,
                 },
@@ -1515,6 +1657,7 @@ def main() -> None:
                     "temperature": evals["tianji"].temperature,
                     "fog_threshold": evals["tianji"].thresholds.get("fog"),
                     "mist_threshold": evals["tianji"].thresholds.get("mist"),
+                    "model_arch": args.model_arch,
                 },
             ),
             rows_from_metrics(
@@ -1524,6 +1667,7 @@ def main() -> None:
                     "temperature": evals["ifs"].temperature,
                     "fog_threshold": evals["ifs"].thresholds.get("fog"),
                     "mist_threshold": evals["ifs"].thresholds.get("mist"),
+                    "model_arch": args.model_arch,
                 },
             ),
         ]
@@ -1710,6 +1854,7 @@ def main() -> None:
     run_config = {
         "args": vars(args),
         "specs": {k: vars(v) for k, v in specs.items()},
+        "model_arch": args.model_arch,
         "build_configs": build_configs,
         "paired_rows": int(len(y)),
         "evaluation_scope": "test split; validation split is used only for calibration/threshold selection",
@@ -1752,7 +1897,7 @@ def main() -> None:
     print(delta_df[delta_df["metric"].isin(BOOTSTRAP_DEFAULT_METRICS)].to_string(index=False), flush=True)
     if ifs_diag_delta_df is not None and not ifs_diag_delta_df.empty:
         print(
-            "\n[IFS diagnostic matched deltas: Tianji PMST minus IFS diagnostic VIS]",
+            "\n[IFS diagnostic matched deltas: Tianji model minus IFS diagnostic VIS]",
             flush=True,
         )
         print(

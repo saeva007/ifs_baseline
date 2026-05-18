@@ -17,6 +17,7 @@ set -euo pipefail
 
 echo "Job started at: $(date)"
 echo "EXPERIMENT=${EXPERIMENT:-s1_overlap}"
+echo "MODEL_ARCH=${MODEL_ARCH:-static_rnn}"
 
 MAX_STABLE_NNODES=10
 if [ "${SLURM_NNODES}" -gt "${MAX_STABLE_NNODES}" ]; then
@@ -28,6 +29,7 @@ SCRIPT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline"
 BASELINE_DIR="/public/home/putianshu/vis_mlp/ifs_baseline"
 
 EXPERIMENT="${EXPERIMENT:-s1_overlap}"
+MODEL_ARCH="${MODEL_ARCH:-static_rnn}"
 TORCHRUN_EXTRA_ARGS="${TORCHRUN_EXTRA_ARGS:-}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 
@@ -37,11 +39,19 @@ case "${EXPERIMENT}" in
         PY_ARGS=()
         ;;
     s2_tianji)
-        TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2.py"
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
+        else
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2.py"
+        fi
         PY_ARGS=(--data_source tianji)
         ;;
     s2_ifs)
-        TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2_fast.py"
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
+        else
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2_fast.py"
+        fi
         PY_ARGS=(--data_source ifs)
         ;;
     *)
@@ -49,6 +59,10 @@ case "${EXPERIMENT}" in
         exit 1
         ;;
 esac
+
+if [ "${EXPERIMENT}" = "s1_overlap" ] && [ "${MODEL_ARCH}" = "static_rnn" ]; then
+    echo "NOTE: s1_overlap keeps the legacy PMST S1 pretraining script; MODEL_ARCH applies to S2 experiments."
+fi
 
 # 【已修复：添加空格 if [ 】
 if [ -n "${OVERLAP_S2_DATA_DIR:-}" ]; then
