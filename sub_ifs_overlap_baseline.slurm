@@ -35,24 +35,31 @@ TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 
 case "${EXPERIMENT}" in
     s1_overlap)
-        TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_s1_overlap_baseline.py"
-        PY_ARGS=()
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
+            PY_ARGS=(--mode s1)
+        else
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_s1_overlap_baseline.py"
+            PY_ARGS=()
+        fi
         ;;
     s2_tianji)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
             TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
+            PY_ARGS=(--mode s2 --data_source tianji)
         else
             TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2.py"
+            PY_ARGS=(--data_source tianji)
         fi
-        PY_ARGS=(--data_source tianji)
         ;;
     s2_ifs)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
             TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
+            PY_ARGS=(--mode s2 --data_source ifs)
         else
             TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2_fast.py"
+            PY_ARGS=(--data_source ifs)
         fi
-        PY_ARGS=(--data_source ifs)
         ;;
     *)
         echo "Unknown EXPERIMENT=${EXPERIMENT} (use s1_overlap | s2_tianji | s2_ifs)"
@@ -60,11 +67,10 @@ case "${EXPERIMENT}" in
         ;;
 esac
 
-if [ "${EXPERIMENT}" = "s1_overlap" ] && [ "${MODEL_ARCH}" = "static_rnn" ]; then
-    echo "NOTE: s1_overlap keeps the legacy PMST S1 pretraining script; MODEL_ARCH applies to S2 experiments."
+if [ "${MODEL_ARCH}" = "static_rnn" ] && [ -n "${OVERLAP_S1_DATA_DIR:-}" ]; then
+    PY_ARGS+=(--s1_data_dir "${OVERLAP_S1_DATA_DIR}")
 fi
 
-# 【已修复：添加空格 if [ 】
 if [ -n "${OVERLAP_S2_DATA_DIR:-}" ]; then
     PY_ARGS+=(--s2_data_dir "${OVERLAP_S2_DATA_DIR}")
 fi
