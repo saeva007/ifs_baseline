@@ -1,6 +1,6 @@
 # Overlap Forecast-Source Experiment Runbook
 
-This runbook covers the controlled Tianji-input versus IFS-input PMST overlap
+This runbook covers the controlled Tianji-input versus IFS-input Static-RNN overlap
 experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 
 ## Scope
@@ -12,9 +12,13 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 - S1 data builder: `build_s1_pm10_overlap_from_full.py`
 - Tianji S2 data builder: `build_dataset_tianji_overlap_12h.py`
 - IFS S2 data builder: `build_dataset_ifs_overlap_12h_fast.py`
-- S1 trainer: `train_PMST_s1_overlap_baseline.py`
-- S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
-- S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
+- Static-RNN S1/S2 trainer wrapper: `train_static_rnn_overlap_baseline_s2.py`
+- Static-RNN Slurm path: `sub_ifs_overlap_baseline.slurm` launches the main
+  trainer at `/public/home/putianshu/vis_mlp/train/train_static_rnn_lowvis.py`
+  directly for `MODEL_ARCH=static_rnn`.
+- Legacy PMST S1 trainer: `train_PMST_s1_overlap_baseline.py`
+- Legacy PMST S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
+- Legacy PMST S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
 - Paired evaluator: `test_PMST_overlap_forecast_source_s2.py`
 
 Each data-build path has its own Slurm entry point. Keep
@@ -52,8 +56,15 @@ Do not use `--merge_train_val` for the paper experiment.
 sbatch --export=ALL,EXPERIMENT=s1_overlap sub_ifs_overlap_baseline.slurm
 ```
 
-The S1 trainer requires explicit `X_train/y_train` and `X_val/y_val`, and it
-fails if the row layout is not `27 dyn + 36 FE`.
+The default `MODEL_ARCH=static_rnn` trains
+`exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The Slurm launcher uses
+the same direct main-trainer path and stable knobs as
+`sub_static_rnn_lowvis_main.slurm`: GRU, mean pooling, one RNN layer,
+`LOWVIS_RNN_BATCH_SIZE=512`, `LOWVIS_RNN_GRAD_ACCUM=2`,
+`LOWVIS_RNN_NUM_WORKERS=0`, and recall/CSI validation selection unless
+overridden. The trainer requires explicit `X_train/y_train` and `X_val/y_val`,
+and it fails if the row layout is not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst`
+only for legacy PMST audits.
 
 ### 3. Rebuild Tianji-Input S2 Overlap Data
 
@@ -90,8 +101,13 @@ sbatch --export=ALL,EXPERIMENT=s2_tianji sub_ifs_overlap_baseline.slurm
 sbatch --export=ALL,EXPERIMENT=s2_ifs sub_ifs_overlap_baseline.slurm
 ```
 
-Both S2 trainers now require explicit month-tail validation files and fail on
-legacy PM10-only or wrong FE layouts.
+Both S2 runs default to Static-RNN and automatically reuse
+`exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt` as the pretrained
+checkpoint when that file exists. Override with
+`OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/S1_best_score.pt`, or pass
+`TRAIN_EXTRA_ARGS="--no_default_s1_pretrained"` to run S2 from scratch. Both S2
+trainers require explicit month-tail validation files and fail on legacy
+PM10-only or wrong FE layouts.
 
 ### 7. Run Paired Forecast-Source Evaluation
 
