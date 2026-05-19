@@ -6,6 +6,8 @@ This is a thin experiment wrapper around the paper-facing
 ``train_static_rnn_lowvis.py`` script in the main vis_mlp training checkout.
 Keeping the model implementation in one place prevents the IFS data-source
 experiment from silently drifting away from the current main architecture.
+By default the wrapper ``exec``'s the main trainer, so distributed runs behave
+like launching the paper-facing script directly.
 """
 
 from __future__ import annotations
@@ -65,6 +67,11 @@ def parse_args() -> tuple[argparse.Namespace, List[str]]:
         "--no-default-s1-pretrained",
         action="store_true",
         help="For S2 mode, do not automatically use the default Static-RNN overlap S1 checkpoint when it exists.",
+    )
+    parser.add_argument(
+        "--runpy",
+        action="store_true",
+        help="Debug fallback: run the main trainer in-process instead of exec'ing it.",
     )
     args, passthrough = parser.parse_known_args()
     return args, passthrough
@@ -148,6 +155,9 @@ def main() -> None:
     print("[overlap-static-rnn] s2_data_dir:", s2_data_dir, flush=True)
     print("[overlap-static-rnn] ckpt_dir:", args.ckpt_dir, flush=True)
     print("[overlap-static-rnn] pretrained_ckpt:", pretrained_ckpt or "none", flush=True)
+
+    if not args.runpy:
+        os.execv(sys.executable, [sys.executable, *static_argv])
 
     old_argv = sys.argv[:]
     sys.path.insert(0, str(static_script.parent))

@@ -25,19 +25,40 @@ if [ "${SLURM_NNODES}" -gt "${MAX_STABLE_NNODES}" ]; then
     exit 1
 fi
 
-SCRIPT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline"
 BASELINE_DIR="/public/home/putianshu/vis_mlp/ifs_baseline"
+SCRIPT_DIR="${BASELINE_DIR}"
+STATIC_RNN_TRAIN_DIR="${STATIC_RNN_TRAIN_DIR:-/public/home/putianshu/vis_mlp/train}"
+STATIC_RNN_TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT:-${STATIC_RNN_TRAIN_DIR}/train_static_rnn_lowvis.py}"
+LAUNCH_DIR="${SCRIPT_DIR}"
 
 EXPERIMENT="${EXPERIMENT:-s1_overlap}"
 MODEL_ARCH="${MODEL_ARCH:-static_rnn}"
 TORCHRUN_EXTRA_ARGS="${TORCHRUN_EXTRA_ARGS:-}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
+LOWVIS_RNN_EXTRA_ARGS="${LOWVIS_RNN_EXTRA_ARGS:-}"
+
+export LOWVIS_RNN_S1_STEPS="${LOWVIS_RNN_S1_STEPS:-15000}"
+export LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-8000}"
+export LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-22000}"
+export LOWVIS_RNN_VAL_INTERVAL="${LOWVIS_RNN_VAL_INTERVAL:-500}"
+export LOWVIS_RNN_BATCH_SIZE="${LOWVIS_RNN_BATCH_SIZE:-512}"
+export LOWVIS_RNN_GRAD_ACCUM="${LOWVIS_RNN_GRAD_ACCUM:-2}"
+export LOWVIS_RNN_NUM_WORKERS="${LOWVIS_RNN_NUM_WORKERS:-0}"
+export LOWVIS_RNN_PATIENCE="${LOWVIS_RNN_PATIENCE:-10}"
+
+OVERLAP_CKPT_DIR="${OVERLAP_CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
+OVERLAP_S1_DATA_DIR="${OVERLAP_S1_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap}"
+OVERLAP_TIANJI_S2_DATA_DIR="${OVERLAP_TIANJI_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_baseline}"
+OVERLAP_IFS_S2_DATA_DIR="${OVERLAP_IFS_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_baseline}"
 
 case "${EXPERIMENT}" in
     s1_overlap)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
-            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
-            PY_ARGS=(--mode s1)
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s1"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_pm10_pm25}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_S2_DATA_DIR}}"
         else
             TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_s1_overlap_baseline.py"
             PY_ARGS=()
@@ -45,8 +66,11 @@ case "${EXPERIMENT}" in
         ;;
     s2_tianji)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
-            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
-            PY_ARGS=(--mode s2 --data_source tianji)
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s2"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_tianji_pm10_pm25}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_S2_DATA_DIR}}"
         else
             TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2.py"
             PY_ARGS=(--data_source tianji)
@@ -54,8 +78,11 @@ case "${EXPERIMENT}" in
         ;;
     s2_ifs)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
-            TRAIN_SCRIPT="${BASELINE_DIR}/train_static_rnn_overlap_baseline_s2.py"
-            PY_ARGS=(--mode s2 --data_source ifs)
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s2"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_ifs_pm10_pm25}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_IFS_S2_DATA_DIR}}"
         else
             TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2_fast.py"
             PY_ARGS=(--data_source ifs)
@@ -67,16 +94,46 @@ case "${EXPERIMENT}" in
         ;;
 esac
 
-if [ "${MODEL_ARCH}" = "static_rnn" ] && [ -n "${OVERLAP_S1_DATA_DIR:-}" ]; then
-    PY_ARGS+=(--s1_data_dir "${OVERLAP_S1_DATA_DIR}")
-fi
+if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+    STATIC_RNN_PRETRAINED_CKPT="${OVERLAP_STATIC_RNN_PRETRAINED_CKPT:-}"
+    if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
+        DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt"
+        if [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
+            STATIC_RNN_PRETRAINED_CKPT="${DEFAULT_STATIC_RNN_S1_CKPT}"
+        fi
+    fi
 
-if [ -n "${OVERLAP_S2_DATA_DIR:-}" ]; then
-    PY_ARGS+=(--s2_data_dir "${OVERLAP_S2_DATA_DIR}")
+    PY_ARGS=(
+        --mode "${LOWVIS_RNN_MODE_EFFECTIVE}"
+        --encoder gru
+        --run-id "${LOWVIS_RNN_RUN_ID}"
+        --base-path /public/home/putianshu/vis_mlp
+        --s1-data-dir "${OVERLAP_S1_DATA_DIR}"
+        --s2-data-dir "${STATIC_RNN_S2_DATA_DIR}"
+        --ckpt-dir "${OVERLAP_CKPT_DIR}"
+        --pooling mean
+        --rnn-layers 1
+        --hidden-dim 256
+        --static-hidden-dim 96
+        --fusion-hidden-dim 256
+        --dropout 0.2
+        --selection-metric recall_csi
+        --s1-steps "${LOWVIS_RNN_S1_STEPS}"
+        --s2-phase-a-steps "${LOWVIS_RNN_S2_A_STEPS}"
+        --s2-phase-b-steps "${LOWVIS_RNN_S2_B_STEPS}"
+        --val-interval "${LOWVIS_RNN_VAL_INTERVAL}"
+        --batch-size "${LOWVIS_RNN_BATCH_SIZE}"
+        --grad-accum "${LOWVIS_RNN_GRAD_ACCUM}"
+        --num-workers "${LOWVIS_RNN_NUM_WORKERS}"
+        --patience "${LOWVIS_RNN_PATIENCE}"
+    )
+    if [ -n "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
+        PY_ARGS+=(--pretrained-ckpt "${STATIC_RNN_PRETRAINED_CKPT}")
+    fi
 fi
 
 # shellcheck disable=SC2206
-EXTRA_TOKENS=( ${TRAIN_EXTRA_ARGS} )
+EXTRA_TOKENS=( ${LOWVIS_RNN_EXTRA_ARGS} ${TRAIN_EXTRA_ARGS} )
 
 # ==========================================
 # 1. Environment（与 sub_s1.slurm 一致）
@@ -158,14 +215,23 @@ echo "RDZV_PORT       : ${RDZV_PORT}"
 echo "DIST_STORE_PORT : ${DIST_STORE_PORT}"
 echo "SLURM_NNODES    : ${SLURM_NNODES}"
 echo "TORCHRUN_BIN    : ${TORCHRUN_BIN}"
+echo "LAUNCH_DIR      : ${LAUNCH_DIR}"
 echo "TRAIN_SCRIPT    : ${TRAIN_SCRIPT}"
 echo "PY_ARGS         : ${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
+if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+    echo "RUN_ID          : ${LOWVIS_RNN_RUN_ID}"
+    echo "S1_STEPS        : ${LOWVIS_RNN_S1_STEPS}"
+    echo "S2_A_STEPS      : ${LOWVIS_RNN_S2_A_STEPS}"
+    echo "S2_B_STEPS      : ${LOWVIS_RNN_S2_B_STEPS}"
+    echo "BATCH/ACCUM     : ${LOWVIS_RNN_BATCH_SIZE}/${LOWVIS_RNN_GRAD_ACCUM}"
+    echo "NUM_WORKERS     : ${LOWVIS_RNN_NUM_WORKERS}"
+fi
 
 # ==========================================
 # 4. Clean /dev/shm
 # ==========================================
 srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
-     /bin/bash -c "rm -rf /dev/shm/torch_* /dev/shm/*X_train* /dev/shm/*y_train* 2>/dev/null; echo \"\$(hostname) SHM Cleaned\""
+     /bin/bash -c "rm -rf /dev/shm/torch_* /dev/shm/*X_train* /dev/shm/*y_train* /dev/shm/*static_rnn_lowvis* /dev/shm/*lowvis_rnn* 2>/dev/null; echo \"\$(hostname) SHM Cleaned\""
 
 # ==========================================
 # 5. Launch Training
@@ -181,7 +247,7 @@ srun --export=ALL \
      --gres=dcu:4 \
      --kill-on-bad-exit=1 \
      /bin/bash -c "
-         cd \"${SCRIPT_DIR}\" || exit 1
+         cd \"${LAUNCH_DIR}\" || exit 1
          export MIOPEN_USER_DB_PATH=/tmp/miopen_db_${SLURM_JOBID}_\${SLURM_NODEID}
          export MIOPEN_CUSTOM_CACHE_DIR=\${MIOPEN_USER_DB_PATH}
          mkdir -p \${MIOPEN_USER_DB_PATH}

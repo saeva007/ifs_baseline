@@ -13,6 +13,9 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 - Tianji S2 data builder: `build_dataset_tianji_overlap_12h.py`
 - IFS S2 data builder: `build_dataset_ifs_overlap_12h_fast.py`
 - Static-RNN S1/S2 trainer wrapper: `train_static_rnn_overlap_baseline_s2.py`
+- Static-RNN Slurm path: `sub_ifs_overlap_baseline.slurm` launches the main
+  trainer at `/public/home/putianshu/vis_mlp/train/train_static_rnn_lowvis.py`
+  directly for `MODEL_ARCH=static_rnn`.
 - Legacy PMST S1 trainer: `train_PMST_s1_overlap_baseline.py`
 - Legacy PMST S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
 - Legacy PMST S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
@@ -54,9 +57,14 @@ sbatch --export=ALL,EXPERIMENT=s1_overlap sub_ifs_overlap_baseline.slurm
 ```
 
 The default `MODEL_ARCH=static_rnn` trains
-`exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The trainer requires
-explicit `X_train/y_train` and `X_val/y_val`, and it fails if the row layout is
-not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst` only for legacy PMST audits.
+`exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The Slurm launcher uses
+the same direct main-trainer path and stable knobs as
+`sub_static_rnn_lowvis_main.slurm`: GRU, mean pooling, one RNN layer,
+`LOWVIS_RNN_BATCH_SIZE=512`, `LOWVIS_RNN_GRAD_ACCUM=2`,
+`LOWVIS_RNN_NUM_WORKERS=0`, and recall/CSI validation selection unless
+overridden. The trainer requires explicit `X_train/y_train` and `X_val/y_val`,
+and it fails if the row layout is not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst`
+only for legacy PMST audits.
 
 ### 3. Rebuild Tianji-Input S2 Overlap Data
 
