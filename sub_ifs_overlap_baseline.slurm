@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J pmst_ifs_overlap
 #SBATCH -p kshdexclu01
-#SBATCH -N 5
+#SBATCH -N 4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --gres=dcu:4
