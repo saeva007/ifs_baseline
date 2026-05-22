@@ -31,7 +31,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import joblib
 import numpy as np
@@ -152,6 +152,8 @@ class SourceEval:
     test_targets: np.ndarray
     test_raw_vis: np.ndarray
     test_meta: Optional[pd.DataFrame]
+    model: Optional[nn.Module] = None
+    scaler: Optional[object] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -222,12 +224,20 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--allow_legacy_time_alignment",
         action="store_true",
-        help="Allow datasets without the raw_utc_no_shift build marker; intended only for legacy audits.",
+        help="Allow datasets without an accepted UTC build marker; intended only for legacy audits.",
     )
     ap.add_argument("--allow_partial_load", action="store_true")
     ap.add_argument("--limit_samples", type=int, default=0, help="Smoke-test limit for val/test rows; 0 means all.")
     ap.add_argument("--no_per_sample_csv", action="store_true")
     ap.add_argument("--no_figures", action="store_true", help="Skip publication-style summary figures.")
+    ap.add_argument("--feature_importance_csv", default="", help="Optional feature-importance table used to choose replacement variables.")
+    ap.add_argument("--feature_swap_top_k", type=int, default=0, help="Replace top-K dynamic variables from --feature_importance_csv; 0 disables unless --feature_swap_features is set.")
+    ap.add_argument(
+        "--feature_swap_features",
+        default="RH2M,Q_1000,DP_1000,RH_925,PRECIP",
+        help="Comma/semicolon-separated dynamic variables to replace, e.g. RH2M,Q_1000,DP_1000,RH_925.",
+    )
+    ap.add_argument("--feature_swap_metric", default="low_vis_recall", help="Metric highlighted in the feature-replacement figure.")
     ap.add_argument(
         "--skip_ifs_forecast_baseline",
         action="store_true",
@@ -317,15 +327,26 @@ def read_build_config(data_dir: str) -> Dict:
         return json.load(f)
 
 
+def populated_overlap_features(data_dir: str) -> Set[str]:
+    cfg = read_build_config(data_dir)
+    explicit = cfg.get("overlap_vars") or cfg.get("dynamic_features") or cfg.get("feature_order")
+    if not explicit:
+        return set()
+    available = {str(v) for v in explicit}
+    if {"U10", "V10"}.issubset(available):
+        available.add("WSPD10")
+    return available
+
+
 def validate_build_time_alignment(build_configs: Dict[str, Dict], allow_legacy: bool) -> None:
-    expected = "raw_utc_no_shift"
+    expected = {"bjt_minus_8_to_utc", "raw_utc_no_shift"}
     for source, cfg in build_configs.items():
         marker = cfg.get("tianji_raw_time_alignment") if cfg else None
-        if marker == expected:
+        if marker in expected:
             continue
         msg = (
             f"{source} dataset was not built with the required Tianji UTC marker "
-            f"({expected!r}); got {marker!r}. Rebuild the overlap dataset with the "
+            f"({sorted(expected)!r}); got {marker!r}. Rebuild the overlap dataset with the "
             "current builders before using this comparison in the paper."
         )
         if allow_legacy:
@@ -1078,6 +1099,8 @@ def evaluate_one_source(
         test_targets=test_targets,
         test_raw_vis=test_raw,
         test_meta=test_meta,
+        model=model,
+        scaler=scaler,
     )
 
 
@@ -1540,12 +1563,282 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     out_paths = [
         out_dir / "fig_forecast_source_key_metrics.png",
         out_dir / "fig_forecast_source_key_metrics.pdf",
+        out_dir / "fig_forecast_source_key_metrics.svg",
     ]
     for path in out_paths:
         fig.savefig(path, dpi=300, bbox_inches="tight")
         print(f"  [Fig] Saved -> {path}", flush=True)
     plt.close(fig)
     return [str(p) for p in out_paths]
+
+
+def split_feature_names(value: str) -> List[str]:
+    return [x.strip() for chunk in str(value or "").split(";") for x in chunk.split(",") if x.strip()]
+
+
+def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
+    vis_eval_dir = Path(__file__).resolve().parent.parent / "vis_eval"
+    if str(vis_eval_dir) not in sys.path:
+        sys.path.insert(0, str(vis_eval_dir))
+    try:
+        from feature_catalog_pm10_pm25 import dynamic_features_for_count
+
+        return {item["feature"]: i for i, item in enumerate(dynamic_features_for_count(dyn_vars_count))}
+    except Exception:
+        fallback = [
+            "RH2M",
+            "T2M",
+            "PRECIP",
+            "MSLP",
+            "SW_RAD",
+            "U10",
+            "WSPD10",
+            "V10",
+            "WDIR10",
+            "CAPE",
+            "LCC",
+            "T_925",
+            "RH_925",
+            "U_925",
+            "WSPD925",
+            "V_925",
+            "DP_1000",
+            "DP_925",
+            "Q_1000",
+            "Q_925",
+            "W_925",
+            "W_1000",
+            "DPD",
+            "INVERSION",
+            "zenith",
+            "PM10_ugm3",
+            "PM25_ugm3",
+        ]
+        return {name: i for i, name in enumerate(fallback[:dyn_vars_count])}
+
+
+def choose_replacement_features(args: argparse.Namespace, lookup: Dict[str, int]) -> List[str]:
+    explicit = split_feature_names(args.feature_swap_features)
+    selected: List[str] = [f for f in explicit if f in lookup]
+    top_k = int(args.feature_swap_top_k or 0)
+    if top_k > 0 and args.feature_importance_csv:
+        path = Path(args.feature_importance_csv)
+        if path.exists():
+            try:
+                df = pd.read_csv(path)
+                if "feature" in df:
+                    importance_cols = [c for c in df.columns if c.startswith("importance_")]
+                    sort_col = ""
+                    preferred = [f"importance_{args.feature_swap_metric}", "importance_low_vis_recall", "importance_low_vis_csi"]
+                    for col in preferred + importance_cols:
+                        if col in df:
+                            sort_col = col
+                            break
+                    if sort_col:
+                        df = df.sort_values(sort_col, ascending=False)
+                    for feat in df["feature"].astype(str):
+                        if feat in lookup and feat not in selected:
+                            selected.append(feat)
+                        if len(selected) >= top_k:
+                            break
+            except Exception as exc:
+                print(f"[feature-swap] Could not read importance table {path}: {exc}", flush=True)
+    if top_k > 0:
+        selected = selected[:top_k]
+    if not selected and top_k > 0:
+        for feat in ("T2M", "PRECIP", "MSLP", "SW_RAD", "WSPD10"):
+            if feat in lookup:
+                selected.append(feat)
+            if len(selected) >= top_k:
+                break
+    return selected
+
+
+def predict_static_rows_for_swap(
+    rows: np.ndarray,
+    source_eval: SourceEval,
+    train_mod,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> np.ndarray:
+    if args.model_arch != "static_rnn":
+        raise NotImplementedError("Feature replacement currently supports --model_arch static_rnn.")
+    if source_eval.model is None or source_eval.scaler is None:
+        raise RuntimeError("SourceEval must retain model and scaler for feature replacement.")
+    layout = train_mod.Layout(window_size=args.window, dyn_vars=args.dyn_vars_count, fe_dim=source_eval.extra_feat_dim)
+    log_mask = train_mod.build_dyn_log_mask(layout)
+    out: List[np.ndarray] = []
+    model = source_eval.model
+    scaler = source_eval.scaler
+    model.eval()
+    for start in range(0, len(rows), int(args.batch_size)):
+        end = min(start + int(args.batch_size), len(rows))
+        batch = rows[start:end].astype(np.float32, copy=True)
+        core = batch[:, : layout.core_dim].astype(np.float32, copy=True)
+        core = train_mod.apply_core_transform(core, layout, not args.static_rnn_no_pm, log_mask)
+        if scaler is not None:
+            core = (core - scaler.center_) / (scaler.scale_ + 1e-6)
+        core = np.clip(core, -10.0, 10.0)
+        veg = batch[:, layout.split_dyn + 5 : layout.split_dyn + 6].astype(np.float32, copy=False)
+        parts = [core, veg]
+        if not args.static_rnn_no_fe:
+            fe = batch[:, layout.split_dyn + 6 : layout.split_dyn + 6 + source_eval.extra_feat_dim].astype(
+                np.float32,
+                copy=True,
+            )
+            parts.append(np.clip(fe, -10.0, 10.0))
+        final = np.nan_to_num(np.concatenate(parts, axis=1), nan=0.0, posinf=10.0, neginf=-10.0).astype(np.float32)
+        bx = torch.from_numpy(final).float().to(device, non_blocking=(device.type == "cuda"))
+        with torch.inference_mode():
+            logits = model(bx)[0]
+            probs = F.softmax(logits / max(source_eval.temperature, 1e-6), dim=1)
+        out.append(probs.detach().cpu().numpy())
+    return np.concatenate(out, axis=0) if out else np.zeros((0, 3), dtype=np.float32)
+
+
+def plot_feature_replacement(repl_df: pd.DataFrame, out_dir: Path, metric: str) -> None:
+    if repl_df.empty:
+        return
+    delta_col = f"delta_{metric}"
+    if delta_col not in repl_df:
+        return
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+    plot_df = repl_df[repl_df["variant"] != "baseline"].copy()
+    if plot_df.empty:
+        return
+    plot_df = plot_df.sort_values(delta_col, ascending=True)
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+            "svg.fonttype": "none",
+            "pdf.fonttype": 42,
+            "font.size": 8.5,
+            "axes.grid": True,
+            "grid.alpha": 0.22,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
+    y = np.arange(len(plot_df))
+    vals = plot_df[delta_col].to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=(8.2, max(3.4, 0.38 * len(plot_df) + 1.2)))
+    ax.barh(y, vals, color=["#18864B" if v > 0 else "#B45B43" for v in vals])
+    ax.axvline(0, color="#222222", lw=0.8)
+    ax.set_yticks(y)
+    ax.set_yticklabels(plot_df["variant"].astype(str).str.replace("swap_", "", regex=False))
+    ax.set_xlabel(f"Metric gain after replacing IFS variable with Tianji ({metric})")
+    ax.set_title("Single-variable replacement reveals data-source bottlenecks")
+    fig.tight_layout()
+    for ext in ("png", "pdf", "svg"):
+        path = out_dir / f"fig_feature_replacement_{metric}.{ext}"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        print(f"  [Fig] Saved -> {path}", flush=True)
+    plt.close(fig)
+
+
+def run_feature_replacement_experiment(
+    args: argparse.Namespace,
+    evals: Dict[str, SourceEval],
+    idx_t: np.ndarray,
+    idx_i: np.ndarray,
+    y: np.ndarray,
+    train_mod,
+    device: torch.device,
+    out_dir: Path,
+) -> pd.DataFrame:
+    lookup = dynamic_feature_lookup(args.dyn_vars_count)
+    features = choose_replacement_features(args, lookup)
+    if not features:
+        return pd.DataFrame()
+    if args.model_arch != "static_rnn":
+        print("[feature-swap] skipped: currently implemented only for static_rnn.", flush=True)
+        return pd.DataFrame()
+
+    base_source = "ifs"
+    donor_source = "tianji"
+    base_eval = evals[base_source]
+    donor_eval = evals[donor_source]
+    base_available = populated_overlap_features(base_eval.spec.data_dir)
+    donor_available = populated_overlap_features(donor_eval.spec.data_dir)
+    if base_available and donor_available:
+        available = base_available & donor_available
+        skipped = [f for f in features if f not in available]
+        features = [f for f in features if f in available]
+        if skipped:
+            print(
+                "[feature-swap] skipped unpopulated overlap feature(s): " + ",".join(skipped),
+                flush=True,
+            )
+        if not features:
+            return pd.DataFrame()
+    x_base = np.load(base_eval.spec.data_dir + "/X_test.npy", mmap_mode="r")
+    x_donor = np.load(donor_eval.spec.data_dir + "/X_test.npy", mmap_mode="r")
+    base_idx = idx_i
+    donor_idx = idx_t
+    base_rows = np.asarray(x_base[base_idx], dtype=np.float32)
+    donor_rows = np.asarray(x_donor[donor_idx], dtype=np.float32)
+
+    base_probs = base_eval.test_probs[idx_i]
+    base_preds = base_eval.test_preds[idx_i]
+    baseline_metrics = compute_metrics(y, base_preds, probs=base_probs)
+    records: List[Dict[str, object]] = [rows_from_metrics("ifs_feature_swap", baseline_metrics, {"variant": "baseline"})]
+
+    for feature in features:
+        col_idx = int(lookup[feature])
+        cols = [t * int(args.dyn_vars_count) + col_idx for t in range(int(args.window))]
+        swapped = base_rows.copy()
+        swapped[:, cols] = donor_rows[:, cols]
+        probs = predict_static_rows_for_swap(swapped, base_eval, train_mod, args, device)
+        fog_th = float(base_eval.thresholds.get("fog", 0.5))
+        mist_th = float(base_eval.thresholds.get("mist", 0.5))
+        pred_mode = "fixed" if np.isfinite(fog_th) and np.isfinite(mist_th) else "argmax"
+        preds = predict_from_probs(probs, pred_mode, fog_th, mist_th)
+        metrics = compute_metrics(y, preds, probs=probs)
+        extra = {"variant": f"swap_{feature}", "replaced_features": feature, "n_replaced_columns": len(cols)}
+        row = rows_from_metrics("ifs_feature_swap", metrics, extra)
+        for metric_name, base_val in baseline_metrics.items():
+            if isinstance(base_val, (int, float, np.floating)) and metric_name in metrics:
+                row[f"delta_{metric_name}"] = float(metrics[metric_name]) - float(base_val)
+        records.append(row)
+
+    if len(features) > 1:
+        all_cols: List[int] = []
+        for feature in features:
+            col_idx = int(lookup[feature])
+            all_cols.extend([t * int(args.dyn_vars_count) + col_idx for t in range(int(args.window))])
+        swapped = base_rows.copy()
+        swapped[:, all_cols] = donor_rows[:, all_cols]
+        probs = predict_static_rows_for_swap(swapped, base_eval, train_mod, args, device)
+        fog_th = float(base_eval.thresholds.get("fog", 0.5))
+        mist_th = float(base_eval.thresholds.get("mist", 0.5))
+        pred_mode = "fixed" if np.isfinite(fog_th) and np.isfinite(mist_th) else "argmax"
+        preds = predict_from_probs(probs, pred_mode, fog_th, mist_th)
+        metrics = compute_metrics(y, preds, probs=probs)
+        extra = {
+            "variant": "swap_all_selected",
+            "replaced_features": ",".join(features),
+            "n_replaced_columns": len(all_cols),
+        }
+        row = rows_from_metrics("ifs_feature_swap", metrics, extra)
+        for metric_name, base_val in baseline_metrics.items():
+            if isinstance(base_val, (int, float, np.floating)) and metric_name in metrics:
+                row[f"delta_{metric_name}"] = float(metrics[metric_name]) - float(base_val)
+        records.append(row)
+
+    repl_df = pd.DataFrame(records)
+    path = out_dir / "feature_replacement_metrics.csv"
+    repl_df.to_csv(path, index=False)
+    print(f"[feature-swap] wrote {path}", flush=True)
+    if not args.no_figures:
+        plot_feature_replacement(repl_df, out_dir, args.feature_swap_metric)
+    return repl_df
 
 
 def main() -> None:
@@ -1821,6 +2114,17 @@ def main() -> None:
         )
         boot_df.to_csv(out_dir / "paired_bootstrap_delta_ci.csv", index=False)
 
+    feature_replacement_df = run_feature_replacement_experiment(
+        args,
+        evals,
+        idx_t,
+        idx_i,
+        y,
+        train_mod,
+        device,
+        out_dir,
+    )
+
     if not args.no_per_sample_csv:
         sample_df = meta_common.reset_index(drop=True).copy()
         sample_df["y_true"] = y
@@ -1863,6 +2167,12 @@ def main() -> None:
             "path": args.ifs_forecast_nc,
             "variable": args.ifs_forecast_var,
             "matched_rows": int(ifs_diag_valid.sum()) if ifs_diag_valid is not None else 0,
+        },
+        "feature_replacement": {
+            "enabled": bool(feature_replacement_df is not None and not feature_replacement_df.empty),
+            "features": split_feature_names(args.feature_swap_features),
+            "feature_importance_csv": args.feature_importance_csv,
+            "top_k": int(args.feature_swap_top_k or 0),
         },
         "class_definition": {
             "0": "0 <= visibility < 500 m",

@@ -5,7 +5,8 @@
 或含 pm2p5 的变体 → ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25）派生「仅重合气象槽位」版本，
 供与 IFS/Tianji overlap 槽位对齐；若 S1 已用 s2_data_monthtail_v2 全变量数据训练，可跳过本脚本。
 
-做法：对每条样本的动态张量 (12,27)，只保留 T2M/PRECIP/MSLP/SW_RAD/U10/V10（及由 U/V 计算的 WSPD10），
+做法：对每条样本的动态张量 (12,27)，只保留 Tianji/IFS 共同可填充的气象槽位（含 RH2M、
+Q_1000、DP_1000、RH_925 等，并由 U/V 或温湿度派生风速、风向、露点差等），
 其余 24 维气象槽置 0；天顶角与 PM10、PM2.5 保持原值；按新 dyn 重算 32 维雾 FE，
 后 4 维时间周期特征从源行原样保留（与样本标签时刻一致）。静态+植被列不变。
 
@@ -30,8 +31,8 @@ from pmst_overlap_common import (
     OVERLAP_CANONICAL,
     OVERLAP_PMST_INDICES,
     TOTAL_DYN,
-    apply_wspd10_from_uv,
     compute_fog_features_pmst,
+    scatter_overlap_fields,
 )
 
 WINDOW = 12
@@ -50,11 +51,8 @@ def _transform_chunk(dyn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     met = dyn[:, :, :24].copy()
     zen_pm = dyn[:, :, 24:].copy()
-    met_new = np.zeros_like(met)
-    for name in OVERLAP_CANONICAL:
-        j = OVERLAP_PMST_INDICES[name]
-        met_new[:, :, j] = met[:, :, j]
-    apply_wspd10_from_uv(met_new)
+    fields = {name: met[:, :, OVERLAP_PMST_INDICES[name]] for name in OVERLAP_CANONICAL}
+    met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields)
     dyn_new = np.concatenate([met_new, zen_pm], axis=-1).astype(np.float32)
     fe32 = compute_fog_features_pmst(dyn_new, WINDOW, TOTAL_DYN)
     return dyn_new, fe32

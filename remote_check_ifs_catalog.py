@@ -36,13 +36,14 @@ DEFAULT_ROOT = "/sharedata/dataset/GroupData/GD001-EC_Forcasting"
 
 # Tianji canonical names we care about for baseline overlap.
 TIANJI_CANONICAL = [
-    "RH2M", "T2M", "PRECIP", "MSLP", "SW_RAD", "U10", "V10",
+    "RH2M", "T2M", "D2M", "PRECIP", "MSLP", "SW_RAD", "U10", "V10",
     "LCC", "RH_925", "Q_925", "Q_1000", "U_925", "V_925", "W_925", "W_1000",
 ]
 
 # Heuristic aliases for automatic candidate mapping.
 CANONICAL_ALIASES = {
-    "RH2M": ["2r", "rh2m", "r2m", "2rh"],
+    "RH2M": ["2d", "d2m", "2t", "t2m"],
+    "D2M": ["2d", "d2m"],
     "T2M": ["2t", "t2m"],
     "PRECIP": ["tp", "tprate", "prate", "precip"],
     "MSLP": ["msl", "slp"],

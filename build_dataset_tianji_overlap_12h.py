@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from pmst_overlap_common import (
     OVERLAP_CANONICAL,
+    OVERLAP_SOURCE_FIELDS,
     TOTAL_DYN,
     append_pm10_channel,
     append_pm25_channel,
@@ -29,6 +30,11 @@ from pmst_overlap_common import (
     cyclical_time_features,
     load_pm10_dataarray,
     load_pm25_dataarray,
+    normalize_tianji_times,
+    TIANJI_INPUT_TIME_SHIFT_HOURS,
+    TIANJI_TIME_ALIGNMENT,
+    describe_available_overlap_features,
+    precip_accum_to_hourly,
     scatter_overlap_fields,
     save_chunked_monthtail,
     calculate_zenith_angle,
@@ -47,6 +53,7 @@ PM25_DIR_DEFAULT = os.path.join(BASE_PATH, "pm2.5_station")
 
 VAR_MAPPING = {
     "rh2m": "RH2M",
+    "d2m": "D2M",
     "TMP2m": "T2M",
     "PRATEsfc": "PRECIP",
     "slp": "MSLP",
@@ -70,6 +77,24 @@ VAR_MAPPING = {
     "omg1000": "W_1000",
     "t1000": "T_1000",
 }
+
+
+def extract_tianji_overlap_fields(ds_in: xr.Dataset, t0: int, t1: int) -> dict[str, np.ndarray]:
+    """Extract canonical source fields; Tianji precipitation is accumulated and differenced hourly."""
+    fields: dict[str, np.ndarray] = {}
+    for name in OVERLAP_SOURCE_FIELDS:
+        if name not in ds_in.data_vars:
+            continue
+        if name == "PRECIP":
+            p0 = max(0, t0 - 1)
+            arr = ds_in[name].isel(time=slice(p0, t1)).values.astype(np.float32)
+            arr = precip_accum_to_hourly(arr)
+            if t0 > 0:
+                arr = arr[1:]
+            fields[name] = arr
+            continue
+        fields[name] = ds_in[name].isel(time=slice(t0, t1)).values.astype(np.float32)
+    return fields
 
 WINDOW_SIZE_DEFAULT = 12
 STEP_SIZE_DEFAULT = 1
@@ -123,7 +148,11 @@ def main():
     data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
     data_oro = xr.open_dataset(args.oro_file, engine="h5netcdf")
     ds_in = xr.open_dataset(args.input_file, engine="h5netcdf")
-    print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
+    print(
+        "[Time Alignment] merged_final_all_vars.nc time alignment: "
+        f"{TIANJI_TIME_ALIGNMENT} (shift={TIANJI_INPUT_TIME_SHIFT_HOURS:+g} h before split).",
+        flush=True,
+    )
 
     if "vis" in ds_in.data_vars:
         ds_in = ds_in.rename({"vis": "visibility"})
@@ -131,9 +160,13 @@ def main():
     if rename_map:
         ds_in = ds_in.rename(rename_map)
 
-    missing = [v for v in OVERLAP_CANONICAL if v not in ds_in.data_vars]
+    available = describe_available_overlap_features(ds_in.data_vars)
+    missing = [v for v in OVERLAP_CANONICAL if v not in available]
     if missing:
-        raise KeyError("Tianji file missing overlap variables: {!r}".format(missing))
+        raise KeyError(
+            "Tianji file cannot populate overlap variables: {!r}. "
+            "Available source variables include: {!r}".format(missing, sorted(ds_in.data_vars))
+        )
 
     if "lat" in ds_in:
         lats, lons = ds_in["lat"].values, ds_in["lon"].values
@@ -142,7 +175,7 @@ def main():
     else:
         raise AttributeError("Latitude/Longitude coordinates not found.")
 
-    times = pd.to_datetime(ds_in.time.values)
+    times = normalize_tianji_times(ds_in.time.values)
     stations = ds_in.station_id.values
     nt, ns = len(times), len(stations)
 
@@ -216,10 +249,7 @@ def main():
             t1 = (w1 - 1) * step + win
             tlen = t1 - t0
 
-            fields = {
-                name: ds_in[name].isel(time=slice(t0, t1)).values.astype(np.float32)
-                for name in OVERLAP_CANONICAL
-            }
+            fields = extract_tianji_overlap_fields(ds_in, t0, t1)
             X_met = scatter_overlap_fields(tlen, ns, fields)
             del fields
             gc.collect()
@@ -299,11 +329,13 @@ def main():
         "dataset": "tianji_overlap_pmst27_monthtail",
         "overlap_vars": OVERLAP_CANONICAL,
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",
         "fe_dim": fe_dim,
         "window": args.window,
         "step": args.step,
         "split": "month_tail",
-        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "tianji_raw_time_alignment": TIANJI_TIME_ALIGNMENT,
+        "tianji_input_time_shift_hours": TIANJI_INPUT_TIME_SHIFT_HOURS,
         "time_coordinate": "UTC",
         "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,

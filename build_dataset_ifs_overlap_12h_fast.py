@@ -36,21 +36,22 @@ from scipy.spatial import cKDTree
 
 from pmst_overlap_common import (
     OVERLAP_CANONICAL,
-    OVERLAP_PMST_INDICES,
+    OVERLAP_SOURCE_FIELDS,
     PM10_IDX,
     PM25_IDX,
     PMST_MET_DIM,
     TOTAL_DYN,
-    U10_IDX,
-    V10_IDX,
-    WSPD10_IDX,
     build_static_features,
     build_station_reindex_map,
     compute_fog_features_pmst,
     cyclical_time_features,
+    describe_available_overlap_features,
     get_monthly_split_mask_last_days,
     load_pm10_dataarray,
     load_pm25_dataarray,
+    normalize_tianji_times,
+    TIANJI_INPUT_TIME_SHIFT_HOURS,
+    TIANJI_TIME_ALIGNMENT,
     normalize_var_coord,
     scatter_overlap_fields,
     calculate_zenith_angle,
@@ -81,18 +82,28 @@ WINDOW_CHUNK_DEFAULT = 64
 
 
 class IfsVarSpec:
-    __slots__ = ("folder", "var_name")
-    def __init__(self, folder: str, var_name: str):
+    __slots__ = ("folder", "var_name", "level_hpa")
+    def __init__(self, folder: str, var_name: str, level_hpa: Optional[float] = None):
         self.folder = folder
         self.var_name = var_name
+        self.level_hpa = level_hpa
 
 IFS_MAP: Dict[str, IfsVarSpec] = {
-    "SW_RAD": IfsVarSpec("DSWRF", "ssrd"),
-    "MSLP": IfsVarSpec("SLP", "msl"),
-    "T2M": IfsVarSpec("T2M", "t2m"),
-    "U10": IfsVarSpec("U10M", "u10"),
-    "V10": IfsVarSpec("V10M", "v10"),
-    "PRECIP": IfsVarSpec("TP", "tp"),
+    "T2M": IfsVarSpec("2t", "t2m"),
+    "D2M": IfsVarSpec("2d", "d2m"),
+    "PRECIP": IfsVarSpec("tp", "tp"),
+    "MSLP": IfsVarSpec("msl", "msl"),
+    "SW_RAD": IfsVarSpec("ssrd", "ssrd"),
+    "U10": IfsVarSpec("10u", "u10"),
+    "V10": IfsVarSpec("10v", "v10"),
+    "LCC": IfsVarSpec("lcc", "lcc"),
+    "RH_925": IfsVarSpec("r", "r", 925.0),
+    "U_925": IfsVarSpec("u", "u", 925.0),
+    "V_925": IfsVarSpec("v", "v", 925.0),
+    "Q_1000": IfsVarSpec("q", "q", 1000.0),
+    "Q_925": IfsVarSpec("q", "q", 925.0),
+    "W_925": IfsVarSpec("w", "w", 925.0),
+    "W_1000": IfsVarSpec("w", "w", 1000.0),
 }
 
 def _timer(func):
@@ -237,6 +248,16 @@ def _open_ifs_concat(folder: str, var_name: str, ifs_root: str, year: int) -> xr
         raise KeyError(f"IFS dataset {folder} missing var {var_name}. got={list(ds.data_vars)}")
     return ds
 
+def _select_level(da: xr.DataArray, level_hpa: Optional[float]) -> xr.DataArray:
+    if level_hpa is None:
+        return da
+    level_dim = next((n for n in ["level", "isobaricInhPa", "pressure_level", "lev", "plev"] if n in da.dims), None)
+    if level_dim is None:
+        raise ValueError(f"{da.name}: no pressure-level dimension for level_hpa={level_hpa}")
+    levels = np.asarray(da[level_dim].values, dtype=float)
+    idx = int(np.argmin(np.abs(levels - float(level_hpa))))
+    return da.isel({level_dim: idx})
+
 def _nearest_index(grid: np.ndarray, pts: np.ndarray) -> np.ndarray:
     grid, pts = np.asarray(grid).astype(np.float64), np.asarray(pts).astype(np.float64)
     tree = cKDTree(grid.reshape(-1, 1))
@@ -302,9 +323,13 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
 
     nt, ns = len(tj_times), len(station_ids_tj)
     fields = {}
-    for name in OVERLAP_CANONICAL:
+    available = describe_available_overlap_features(merged_var_names)
+    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    if missing:
+        raise KeyError(f"Interpolated IFS files cannot populate {missing!r}; have {merged_var_names}")
+    for name in OVERLAP_SOURCE_FIELDS:
         if name not in merged_var_names:
-            raise KeyError(f"Interpolated IFS files missing {name!r}; have {merged_var_names}")
+            continue
         vi = merged_var_names.index(name)
         slot = np.full((nt, ns), np.nan, dtype=np.float32)
         if np.any(valid_t_mask): slot[valid_t_mask, :] = big[valid_time_idx[:, None], st_cols[None, :], vi]
@@ -344,13 +369,6 @@ def _extract_pm_channel(pm_da: Optional[xr.DataArray], times: pd.DatetimeIndex, 
         med = 0.0
     return np.where(np.isfinite(pm_ug), pm_ug, med).astype(np.float32)
 
-def _fill_wspd10_in_place(buffer_array: np.ndarray, station_chunk: int = 512) -> None:
-    for st0 in range(0, buffer_array.shape[0], station_chunk):
-        st1 = min(st0 + station_chunk, buffer_array.shape[0])
-        u = buffer_array[st0:st1, :, U10_IDX]
-        v = buffer_array[st0:st1, :, V10_IDX]
-        buffer_array[st0:st1, :, WSPD10_IDX] = np.sqrt(u * u + v * v).astype(np.float32)
-
 @_timer
 def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex, 
                             lats: np.ndarray, lons: np.ndarray, 
@@ -358,9 +376,9 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
     """Xarray -> station-first memmap injection in PMST 27-channel layout."""
     _ = start_idx
     lat_idx = lon_idx = None
+    fields: Dict[str, np.ndarray] = {}
 
-    for canon in OVERLAP_CANONICAL:
-        spec = IFS_MAP[canon]
+    for canon, spec in IFS_MAP.items():
         print(f"[INFO] Loading IFS variable {canon} from {spec.folder}/{spec.var_name}...", flush=True)
         ds = _open_ifs_concat(spec.folder, spec.var_name, ifs_root, year)
         try:
@@ -378,7 +396,7 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
             if not valid_t_mask.any():
                 raise RuntimeError(f"No overlapping times between Tianji and IFS for {canon}")
 
-            da = ds[spec.var_name]
+            da = _select_level(ds[spec.var_name], spec.level_hpa)
             lat_dim = "latitude" if "latitude" in da.dims else "lat"
             lon_dim = "longitude" if "longitude" in da.dims else "lon"
             isel_dict = {
@@ -392,14 +410,19 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
 
             print(f"[INFO] {canon}: sampling {valid_t_mask.sum()} times x {len(lats)} stations.", flush=True)
             extracted = da.isel(**isel_dict).load().values.astype(np.float32, copy=False)
-            pmst_idx = OVERLAP_PMST_INDICES[canon]
-            buffer_array[:, :, pmst_idx] = np.nan
-            buffer_array[:, valid_t_mask, pmst_idx] = extracted.T
-            print(f"  -> {canon} mapped into PMST channel {pmst_idx}.", flush=True)
+            slot = np.full((len(tj_times), len(lats)), np.nan, dtype=np.float32)
+            slot[valid_t_mask, :] = extracted
+            fields[canon] = slot
+            print(f"  -> {canon} staged for PMST scatter.", flush=True)
         finally:
             ds.close()
 
-    _fill_wspd10_in_place(buffer_array)
+    available = describe_available_overlap_features(fields.keys())
+    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    if missing:
+        raise KeyError(f"Gridded IFS inputs cannot populate overlap variable(s): {missing!r}")
+    X_met = scatter_overlap_fields(len(tj_times), len(lats), fields)
+    buffer_array[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
     return PMST_MET_DIM
 
 def _write_split_metadata(
@@ -563,10 +586,14 @@ def main():
     print(f"[INFO] Booting streaming builder with window_chunk={args.window_chunk}.", flush=True)
 
     with xr.open_dataset(args.tianji_file, engine="h5netcdf") as ds_tj:
-        print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
+        print(
+            "[Time Alignment] merged_final_all_vars.nc time alignment: "
+            f"{TIANJI_TIME_ALIGNMENT} (shift={TIANJI_INPUT_TIME_SHIFT_HOURS:+g} h before split).",
+            flush=True,
+        )
         lats = ds_tj["lat"].values if "lat" in ds_tj else ds_tj["latitude"].values
         lons = ds_tj["lon"].values if "lon" in ds_tj else ds_tj["longitude"].values
-        times = pd.to_datetime(ds_tj.time.values)
+        times = normalize_tianji_times(ds_tj.time.values)
         stations = ds_tj.station_id.values
         vis_key = "vis" if "vis" in ds_tj.data_vars else "visibility"
         y = ds_tj[vis_key].values.astype(np.float32)
@@ -684,8 +711,19 @@ def main():
         "ifs_root": args.ifs_root,
         "year": args.year,
         "overlap_vars": OVERLAP_CANONICAL,
-        "ifs_map_gridded": {k: {"folder": v.folder, "var_name": v.var_name} for k, v in IFS_MAP.items()},
+        "ifs_map_gridded": {
+            k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
+            for k, v in IFS_MAP.items()
+        },
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "derived_overlap_vars": {
+            "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
+            "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",
+            "DP_925": "computed from IFS Q_925 and 925 hPa pressure",
+            "WSPD10/WDIR10/WSPD925": "computed from U/V wind components",
+            "DPD": "computed from T2M and D2M",
+        },
+        "precipitation_transform": "IFS PRECIP is treated as hourly amount/rate and is not differenced.",
         "fe_dim": int(fe_dim),
         "fog_fe_dim": int(fog_fe_dim),
         "window": args.window,
@@ -693,7 +731,8 @@ def main():
         "split": "month_tail",
         "n_windows": int(n_wins),
         "window_chunk": args.window_chunk,
-        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "tianji_raw_time_alignment": TIANJI_TIME_ALIGNMENT,
+        "tianji_input_time_shift_hours": TIANJI_INPUT_TIME_SHIFT_HOURS,
         "time_coordinate": "UTC",
         "ifs_time_match": "nearest_90min_utc",
         "pm_time_match": "nearest_90min_utc",

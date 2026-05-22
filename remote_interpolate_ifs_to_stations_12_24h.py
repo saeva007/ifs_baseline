@@ -40,14 +40,20 @@ LEAD_RE = re.compile(r"^[A-Z0-9]{3}(\d{8})(\d{8})1_([A-Za-z0-9]+)\.nc$")
 DEFAULT_MAPPING = {
     # canonical_name: {"group":"Single_level|Pressure_levels", "folder":"...", "nc_var":"...", "level_hpa": null|925|1000}
     "T2M": {"group": "Single_level", "folder": "2t", "nc_var": "t2m", "level_hpa": None},
+    "D2M": {"group": "Single_level", "folder": "2d", "nc_var": "d2m", "level_hpa": None},
     "PRECIP": {"group": "Single_level", "folder": "tp", "nc_var": "tp", "level_hpa": None},
     "MSLP": {"group": "Single_level", "folder": "msl", "nc_var": "msl", "level_hpa": None},
     "SW_RAD": {"group": "Single_level", "folder": "ssrd", "nc_var": "ssrd", "level_hpa": None},
     "U10": {"group": "Single_level", "folder": "10u", "nc_var": "u10", "level_hpa": None},
     "V10": {"group": "Single_level", "folder": "10v", "nc_var": "v10", "level_hpa": None},
-    # examples for RH importance:
-    "RH2M": {"group": "Single_level", "folder": "2r", "nc_var": "r2", "level_hpa": None},
+    "LCC": {"group": "Single_level", "folder": "lcc", "nc_var": "lcc", "level_hpa": None},
     "RH_925": {"group": "Pressure_levels", "folder": "r", "nc_var": "r", "level_hpa": 925},
+    "U_925": {"group": "Pressure_levels", "folder": "u", "nc_var": "u", "level_hpa": 925},
+    "V_925": {"group": "Pressure_levels", "folder": "v", "nc_var": "v", "level_hpa": 925},
+    "Q_1000": {"group": "Pressure_levels", "folder": "q", "nc_var": "q", "level_hpa": 1000},
+    "Q_925": {"group": "Pressure_levels", "folder": "q", "nc_var": "q", "level_hpa": 925},
+    "W_925": {"group": "Pressure_levels", "folder": "w", "nc_var": "w", "level_hpa": 925},
+    "W_1000": {"group": "Pressure_levels", "folder": "w", "nc_var": "w", "level_hpa": 1000},
 }
 
 
@@ -111,7 +117,11 @@ def parse_args():
     ap.add_argument("--station_csv", required=True, help="CSV with station_id,lat,lon")
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--mapping_json", default="", help="Optional mapping json. If empty, use built-in DEFAULT_MAPPING")
-    ap.add_argument("--vars", default="T2M,PRECIP,MSLP,SW_RAD,U10,V10", help="comma-separated canonical vars to export")
+    ap.add_argument(
+        "--vars",
+        default="T2M,D2M,PRECIP,MSLP,SW_RAD,U10,V10,LCC,RH_925,U_925,V_925,Q_1000,Q_925,W_925,W_1000",
+        help="comma-separated canonical/source vars to export; RH2M/DP_1000/DPD are derived in the dataset builder",
+    )
     ap.add_argument("--out_nc", default="./interpolated_ifs_2025.nc")
     ap.add_argument("--out_report", default="./interp_build_report.json")
     ap.add_argument("--max_distance", type=float, default=5.0)
