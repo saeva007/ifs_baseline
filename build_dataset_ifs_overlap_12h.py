@@ -18,7 +18,7 @@ import gc
 import glob
 import json
 import os
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from pmst_overlap_common import (
     OVERLAP_CANONICAL,
+    OVERLAP_SOURCE_FIELDS,
     TOTAL_DYN,
     append_pm10_channel,
     append_pm25_channel,
@@ -36,6 +37,10 @@ from pmst_overlap_common import (
     cyclical_time_features,
     load_pm10_dataarray,
     load_pm25_dataarray,
+    normalize_tianji_times,
+    TIANJI_INPUT_TIME_SHIFT_HOURS,
+    TIANJI_TIME_ALIGNMENT,
+    describe_available_overlap_features,
     normalize_var_coord,
     scatter_overlap_fields,
     save_chunked_monthtail,
@@ -65,20 +70,30 @@ GAP_HOURS_DEFAULT = 24
 
 
 class IfsVarSpec:
-    __slots__ = ("folder", "var_name")
+    __slots__ = ("folder", "var_name", "level_hpa")
 
-    def __init__(self, folder: str, var_name: str):
+    def __init__(self, folder: str, var_name: str, level_hpa: Optional[float] = None):
         self.folder = folder
         self.var_name = var_name
+        self.level_hpa = level_hpa
 
 
 IFS_MAP: Dict[str, IfsVarSpec] = {
-    "SW_RAD": IfsVarSpec("DSWRF", "ssrd"),
-    "MSLP": IfsVarSpec("SLP", "msl"),
-    "T2M": IfsVarSpec("T2M", "t2m"),
-    "U10": IfsVarSpec("U10M", "u10"),
-    "V10": IfsVarSpec("V10M", "v10"),
-    "PRECIP": IfsVarSpec("TP", "tp"),
+    "T2M": IfsVarSpec("2t", "t2m"),
+    "D2M": IfsVarSpec("2d", "d2m"),
+    "PRECIP": IfsVarSpec("tp", "tp"),
+    "MSLP": IfsVarSpec("msl", "msl"),
+    "SW_RAD": IfsVarSpec("ssrd", "ssrd"),
+    "U10": IfsVarSpec("10u", "u10"),
+    "V10": IfsVarSpec("10v", "v10"),
+    "LCC": IfsVarSpec("lcc", "lcc"),
+    "RH_925": IfsVarSpec("r", "r", 925.0),
+    "U_925": IfsVarSpec("u", "u", 925.0),
+    "V_925": IfsVarSpec("v", "v", 925.0),
+    "Q_1000": IfsVarSpec("q", "q", 1000.0),
+    "Q_925": IfsVarSpec("q", "q", 925.0),
+    "W_925": IfsVarSpec("w", "w", 925.0),
+    "W_1000": IfsVarSpec("w", "w", 1000.0),
 }
 
 def _real_exists(path: str) -> bool:
@@ -102,6 +117,20 @@ def _open_ifs_concat(folder: str, var_name: str, ifs_root: str, year: int) -> xr
     if var_name not in ds.data_vars:
         raise KeyError(f"IFS dataset {folder} missing var {var_name}. got={list(ds.data_vars)}")
     return ds
+
+
+def _select_level(da: xr.DataArray, level_hpa: Optional[float]) -> xr.DataArray:
+    if level_hpa is None:
+        return da
+    level_dim = next(
+        (n for n in ["level", "isobaricInhPa", "pressure_level", "lev", "plev"] if n in da.dims),
+        None,
+    )
+    if level_dim is None:
+        raise ValueError(f"{da.name}: no pressure-level dimension for level_hpa={level_hpa}")
+    levels = np.asarray(da[level_dim].values, dtype=float)
+    idx = int(np.argmin(np.abs(levels - float(level_hpa))))
+    return da.isel({level_dim: idx})
 
 
 def _nearest_index(grid: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -191,14 +220,19 @@ def _fill_from_interp_nc_multi(
     st_cols = build_station_reindex_map(station_ids_tj, ref_stations)
     time_pos = ref_times.get_indexer(tj_times, method="nearest", tolerance=pd.Timedelta(minutes=90))
 
+    available = describe_available_overlap_features(merged_var_names)
+    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    if missing:
+        raise KeyError(
+            f"Merged IFS interp cannot populate overlap variable(s) {missing!r}. "
+            f"Have source variables {merged_var_names!r} from {len(paths_nc)} file(s)."
+        )
+
     nt, ns = len(tj_times), len(station_ids_tj)
     fields: Dict[str, np.ndarray] = {}
-    for name in OVERLAP_CANONICAL:
+    for name in OVERLAP_SOURCE_FIELDS:
         if name not in merged_var_names:
-            raise KeyError(
-                f"Merged IFS interp missing variable {name!r}. Have {merged_var_names} "
-                f"from {len(paths_nc)} file(s)."
-            )
+            continue
         vi = merged_var_names.index(name)
         slot = np.full((nt, ns), np.nan, dtype=np.float32)
         for t in range(nt):
@@ -217,13 +251,14 @@ def _fill_from_gridded(
     lons: np.ndarray,
 ) -> np.ndarray:
     ifs_datasets = {}
-    for canon in OVERLAP_CANONICAL:
-        spec = IFS_MAP[canon]
+    for canon, spec in IFS_MAP.items():
         ifs_datasets[canon] = _open_ifs_concat(spec.folder, spec.var_name, ifs_root, year)
 
     first = next(iter(ifs_datasets.values()))
-    lat_grid = first["latitude"].values
-    lon_grid = first["longitude"].values
+    lat_name = "latitude" if "latitude" in first.coords or "latitude" in first.dims else "lat"
+    lon_name = "longitude" if "longitude" in first.coords or "longitude" in first.dims else "lon"
+    lat_grid = first[lat_name].values
+    lon_grid = first[lon_name].values
     lons_360 = (lons % 360).astype(np.float64)
     lat_idx = _nearest_index(lat_grid, lats.astype(np.float64))
     lon_idx = _nearest_index(lon_grid, lons_360)
@@ -233,24 +268,35 @@ def _fill_from_gridded(
 
     nt, ns = len(tj_times), len(lats)
     fields: Dict[str, np.ndarray] = {}
-    for canon in OVERLAP_CANONICAL:
-        spec = IFS_MAP[canon]
-        ds = ifs_datasets[canon]
-        da = ds[spec.var_name]
-        ok_t = time_pos >= 0
-        if not ok_t.any():
-            raise RuntimeError("No overlapping times between Tianji and IFS (after tolerance).")
-        da_t = da.isel(time=xr.DataArray(time_pos[ok_t], dims="time_sel"))
-        da_s = da_t.isel(
-            latitude=xr.DataArray(lat_idx, dims="station"),
-            longitude=xr.DataArray(lon_idx, dims="station"),
-        )
-        slot = np.full((nt, ns), np.nan, dtype=np.float32)
-        arr = np.asarray(da_s.values, dtype=np.float32)
-        if arr.ndim != 2:
-            raise RuntimeError(f"Unexpected sampled array shape for {canon}: {arr.shape}")
-        slot[ok_t, :] = arr
-        fields[canon] = slot
+    try:
+        for canon, spec in IFS_MAP.items():
+            ds = ifs_datasets[canon]
+            da = _select_level(ds[spec.var_name], spec.level_hpa)
+            ok_t = time_pos >= 0
+            if not ok_t.any():
+                raise RuntimeError("No overlapping times between Tianji and IFS (after tolerance).")
+            da_t = da.isel(time=xr.DataArray(time_pos[ok_t], dims="time_sel"))
+            lat_dim = "latitude" if "latitude" in da_t.dims else "lat"
+            lon_dim = "longitude" if "longitude" in da_t.dims else "lon"
+            da_s = da_t.isel(
+                {
+                    lat_dim: xr.DataArray(lat_idx, dims="station"),
+                    lon_dim: xr.DataArray(lon_idx, dims="station"),
+                }
+            )
+            slot = np.full((nt, ns), np.nan, dtype=np.float32)
+            arr = np.asarray(da_s.values, dtype=np.float32)
+            if arr.ndim != 2:
+                raise RuntimeError(f"Unexpected sampled array shape for {canon}: {arr.shape}")
+            slot[ok_t, :] = arr
+            fields[canon] = slot
+    finally:
+        for ds in ifs_datasets.values():
+            ds.close()
+    available = describe_available_overlap_features(fields.keys())
+    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    if missing:
+        raise KeyError(f"Gridded IFS inputs cannot populate overlap variable(s): {missing!r}")
     return scatter_overlap_fields(nt, ns, fields)
 
 
@@ -291,13 +337,17 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     ds_tj = xr.open_dataset(args.tianji_file, engine="h5netcdf")
-    print("[Time Alignment] merged_final_all_vars.nc raw time is UTC; no shift applied.", flush=True)
+    print(
+        "[Time Alignment] merged_final_all_vars.nc time alignment: "
+        f"{TIANJI_TIME_ALIGNMENT} (shift={TIANJI_INPUT_TIME_SHIFT_HOURS:+g} h before split).",
+        flush=True,
+    )
 
     if "lat" in ds_tj:
         lats, lons = ds_tj["lat"].values, ds_tj["lon"].values
     else:
         lats, lons = ds_tj["latitude"].values, ds_tj["longitude"].values
-    times = pd.to_datetime(ds_tj.time.values)
+    times = normalize_tianji_times(ds_tj.time.values)
     stations = ds_tj.station_id.values
 
     data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
@@ -381,13 +431,25 @@ def main():
         "ifs_root": args.ifs_root,
         "year": args.year,
         "overlap_vars": OVERLAP_CANONICAL,
-        "ifs_map_gridded": {k: {"folder": v.folder, "var_name": v.var_name} for k, v in IFS_MAP.items()},
+        "ifs_map_gridded": {
+            k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
+            for k, v in IFS_MAP.items()
+        },
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "derived_overlap_vars": {
+            "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
+            "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",
+            "DP_925": "computed from IFS Q_925 and 925 hPa pressure",
+            "WSPD10/WDIR10/WSPD925": "computed from U/V wind components",
+            "DPD": "computed from T2M and D2M",
+        },
+        "precipitation_transform": "IFS PRECIP is treated as hourly amount/rate and is not differenced.",
         "fe_dim": int(fe_flat.shape[1]),
         "window": args.window,
         "step": args.step,
         "split": "month_tail",
-        "tianji_raw_time_alignment": "raw_utc_no_shift",
+        "tianji_raw_time_alignment": TIANJI_TIME_ALIGNMENT,
+        "tianji_input_time_shift_hours": TIANJI_INPUT_TIME_SHIFT_HOURS,
         "time_coordinate": "UTC",
         "ifs_time_match": "nearest_90min_utc",
         "pm_time_match": "nearest_90min_utc",

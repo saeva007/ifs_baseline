@@ -71,25 +71,36 @@ class IfsVarSpec:
     var_name: str
 
 
-# A minimal, *verified* mapping based on IFS nc_0p1 folder inspection.
-# Notes:
-# - DSWRF/*.nc stores variable 'ssrd' (surface solar radiation downwards)
-# - SLP/*.nc stores variable 'msl'
-# - PS/*.nc stores variable 'sp'
-# - T2M/*.nc stores variable 't2m'
-# - U10M/*.nc stores variable 'u10'
-# - V10M/*.nc stores variable 'v10'
-# - TP/*.nc stores variable 'tp' (total precipitation)
-# - VIS/*.nc stores variable 'p3020' (IFS internal code for visibility-like product)
+# A minimal mapping based on the station-interpolation reports for 2025.
+# RH2M, DP_1000, DP_925, DPD and wind-speed/direction slots are populated by
+# downstream dataset builders from these source fields rather than read as
+# independent IFS variables.
 IFS_CANONICAL_MAP: Dict[str, IfsVarSpec] = {
-    "SW_RAD": IfsVarSpec(folder="DSWRF", var_name="ssrd"),
-    "MSLP": IfsVarSpec(folder="SLP", var_name="msl"),
-    "PS": IfsVarSpec(folder="PS", var_name="sp"),
-    "T2M": IfsVarSpec(folder="T2M", var_name="t2m"),
-    "U10": IfsVarSpec(folder="U10M", var_name="u10"),
-    "V10": IfsVarSpec(folder="V10M", var_name="v10"),
-    "PRECIP": IfsVarSpec(folder="TP", var_name="tp"),
-    "VIS": IfsVarSpec(folder="VIS", var_name="p3020"),
+    "T2M": IfsVarSpec(folder="2t", var_name="t2m"),
+    "D2M": IfsVarSpec(folder="2d", var_name="d2m"),
+    "PRECIP": IfsVarSpec(folder="tp", var_name="tp"),
+    "MSLP": IfsVarSpec(folder="msl", var_name="msl"),
+    "SW_RAD": IfsVarSpec(folder="ssrd", var_name="ssrd"),
+    "U10": IfsVarSpec(folder="10u", var_name="u10"),
+    "V10": IfsVarSpec(folder="10v", var_name="v10"),
+    "LCC": IfsVarSpec(folder="lcc", var_name="lcc"),
+    "RH_925": IfsVarSpec(folder="r", var_name="r"),
+    "U_925": IfsVarSpec(folder="u", var_name="u"),
+    "V_925": IfsVarSpec(folder="v", var_name="v"),
+    "Q_1000": IfsVarSpec(folder="q", var_name="q"),
+    "Q_925": IfsVarSpec(folder="q", var_name="q"),
+    "W_925": IfsVarSpec(folder="w", var_name="w"),
+    "W_1000": IfsVarSpec(folder="w", var_name="w"),
+}
+
+DERIVED_IFS_REQUIREMENTS: Dict[str, Tuple[str, ...]] = {
+    "RH2M": ("T2M", "D2M"),
+    "WSPD10": ("U10", "V10"),
+    "WDIR10": ("U10", "V10"),
+    "WSPD925": ("U_925", "V_925"),
+    "DP_1000": ("Q_1000",),
+    "DP_925": ("Q_925",),
+    "DPD": ("T2M", "D2M"),
 }
 
 

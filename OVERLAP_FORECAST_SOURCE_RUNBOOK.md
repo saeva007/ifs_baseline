@@ -74,6 +74,10 @@ sbatch sub_tianji_overlap_data.slurm
 
 This uses `merged_final_all_vars.nc` raw times as UTC and writes
 `tianji_raw_time_alignment=raw_utc_no_shift` into `dataset_build_config.json`.
+The overlap builder now fills the shared PMST slots
+`RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,LCC,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD`.
+Tianji `PRECIP` is treated as an accumulated amount and converted to hourly
+increments before window construction.
 
 ### 4. Rebuild IFS-Input S2 Overlap Data
 
@@ -88,6 +92,13 @@ station-interpolated IFS inputs, uses raw Tianji UTC times, and writes the same
 ```bash
 sbatch "--export=ALL,IFS_INTERP_GLOB=/public/home/putianshu/vis_mlp/ifs_baseline/ifs_interp_out/**/ifs_interp_*_2025.nc" sub_ifs_data.slurm
 ```
+
+IFS station-interpolated inputs should include the source variables
+`T2M,D2M,PRECIP,MSLP,SW_RAD,U10,V10,LCC,RH_925,U_925,V_925,Q_1000,Q_925,W_925,W_1000`.
+The dataset builder derives `RH2M` from `T2M+D2M`, `DP_1000/DP_925` from
+specific humidity and pressure level, `DPD` from `T2M-D2M`, and wind speed or
+direction from U/V. IFS `PRECIP` is kept as an hourly amount/rate and is not
+differenced.
 
 ### 5. Train Tianji-Input S2
 
@@ -121,6 +132,9 @@ python test_PMST_overlap_forecast_source_s2.py \
 The evaluator refuses datasets without `tianji_raw_time_alignment=raw_utc_no_shift`
 unless `--allow_legacy_time_alignment` is passed. Scenario day/night grouping
 uses UTC+8 by default through `--local_time_offset_hours 8`.
+Feature replacement runs by default for
+`RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
+overlap datasets.
 
 ## Completion Checklist
 

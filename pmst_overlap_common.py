@@ -14,7 +14,7 @@ from __future__ import annotations
 import gc
 import glob
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -56,22 +56,89 @@ PM10_IDX = 25
 PM25_IDX = 26
 TOTAL_DYN = 27
 
-OVERLAP_CANONICAL: List[str] = ["T2M", "PRECIP", "MSLP", "SW_RAD", "U10", "V10"]
-
 PMST_INDEX: Dict[str, int] = {name: i for i, name in enumerate(FINAL_FEATURE_ORDER)}
+
+OVERLAP_CANONICAL: List[str] = [
+    "RH2M",
+    "T2M",
+    "PRECIP",
+    "MSLP",
+    "SW_RAD",
+    "U10",
+    "WSPD10",
+    "V10",
+    "WDIR10",
+    "LCC",
+    "RH_925",
+    "U_925",
+    "WSPD925",
+    "V_925",
+    "DP_1000",
+    "DP_925",
+    "Q_1000",
+    "Q_925",
+    "W_925",
+    "W_1000",
+    "DPD",
+]
+
+OVERLAP_AUXILIARY_FIELDS: List[str] = ["D2M"]
+OVERLAP_SOURCE_FIELDS: List[str] = list(
+    dict.fromkeys([*OVERLAP_CANONICAL, *OVERLAP_AUXILIARY_FIELDS])
+)
+
+CANONICAL_VAR_ALIASES: Dict[str, str] = {
+    "D2M": "D2M",
+    "2D": "D2M",
+    "DEWPOINT2M": "D2M",
+    "DEW_POINT_2M": "D2M",
+    "RH925": "RH_925",
+    "R925": "RH_925",
+    "U925": "U_925",
+    "V925": "V_925",
+    "Q1000": "Q_1000",
+    "Q925": "Q_925",
+    "W925": "W_925",
+    "W1000": "W_1000",
+    "DP1000": "DP_1000",
+    "DP925": "DP_925",
+    "WSPD925": "WSPD925",
+}
+
+TIANJI_INPUT_TIME_SHIFT_HOURS = float(os.environ.get("TIANJI_INPUT_TIME_SHIFT_HOURS", "0"))
+TIANJI_TIME_ALIGNMENT = (
+    "bjt_minus_8_to_utc"
+    if TIANJI_INPUT_TIME_SHIFT_HOURS == -8
+    else ("raw_utc_no_shift" if TIANJI_INPUT_TIME_SHIFT_HOURS == 0 else "custom_shift_to_utc")
+)
+
+
+def normalize_tianji_times(raw_times) -> pd.DatetimeIndex:
+    """Return UTC-naive Tianji valid times before feature building and splitting."""
+    times = pd.DatetimeIndex(pd.to_datetime(raw_times))
+    if TIANJI_INPUT_TIME_SHIFT_HOURS:
+        times = times + pd.to_timedelta(TIANJI_INPUT_TIME_SHIFT_HOURS, unit="h")
+    return times
 
 # Where overlap variables sit in the 24-dim PMST met block
 OVERLAP_PMST_INDICES: Dict[str, int] = {
-    "T2M": PMST_INDEX["T2M"],
-    "PRECIP": PMST_INDEX["PRECIP"],
-    "MSLP": PMST_INDEX["MSLP"],
-    "SW_RAD": PMST_INDEX["SW_RAD"],
-    "U10": PMST_INDEX["U10"],
-    "V10": PMST_INDEX["V10"],
+    name: PMST_INDEX[name] for name in OVERLAP_CANONICAL if name in PMST_INDEX
 }
+RH2M_IDX = PMST_INDEX["RH2M"]
+T2M_IDX = PMST_INDEX["T2M"]
+D2M_AUX = "D2M"
 WSPD10_IDX = PMST_INDEX["WSPD10"]
 U10_IDX = PMST_INDEX["U10"]
 V10_IDX = PMST_INDEX["V10"]
+WDIR10_IDX = PMST_INDEX["WDIR10"]
+U925_IDX = PMST_INDEX["U_925"]
+V925_IDX = PMST_INDEX["V_925"]
+WSPD925_IDX = PMST_INDEX["WSPD925"]
+DP1000_IDX = PMST_INDEX["DP_1000"]
+DP925_IDX = PMST_INDEX["DP_925"]
+Q1000_IDX = PMST_INDEX["Q_1000"]
+Q925_IDX = PMST_INDEX["Q_925"]
+DPD_IDX = PMST_INDEX["DPD"]
 
 
 def calculate_zenith_angle(latitudes, longitudes, times):
@@ -137,11 +204,98 @@ def build_static_features(
     ).astype(np.float32)
 
 
+def calculate_rh_from_dewpoint(t2m: np.ndarray, d2m: np.ndarray) -> np.ndarray:
+    """Return relative humidity (%) from 2 m temperature and dew point in kelvin."""
+    t_c = np.asarray(t2m, dtype=np.float32) - 273.15
+    td_c = np.asarray(d2m, dtype=np.float32) - 273.15
+    es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
+    e = 6.112 * np.exp((17.67 * td_c) / (td_c + 243.5))
+    return np.clip((e / np.maximum(es, 1e-6)) * 100.0, 0.0, 100.0).astype(np.float32)
+
+
+def calculate_dewpoint_from_rh(t: np.ndarray, rh: np.ndarray) -> np.ndarray:
+    """Return dew-point temperature (K) from temperature (K) and RH (%)."""
+    t_c = np.asarray(t, dtype=np.float32) - 273.15
+    rh_frac = np.clip(np.asarray(rh, dtype=np.float32) / 100.0, 1e-4, 1.0)
+    b, c = 17.67, 243.5
+    gamma = np.log(rh_frac) + (b * t_c) / (c + t_c)
+    return ((c * gamma) / np.maximum(b - gamma, 1e-6) + 273.15).astype(np.float32)
+
+
+def calculate_dewpoint_from_specific_humidity(q: np.ndarray, pressure_hpa: float) -> np.ndarray:
+    """Return dew-point temperature (K) from specific humidity (kg kg-1) and pressure."""
+    q_arr = np.clip(np.asarray(q, dtype=np.float32), 1e-8, 0.08)
+    eps = 0.622
+    e_hpa = (q_arr * float(pressure_hpa)) / np.maximum(eps + (1.0 - eps) * q_arr, 1e-8)
+    ln_ratio = np.log(np.maximum(e_hpa, 1e-6) / 6.112)
+    td_c = (243.5 * ln_ratio) / np.maximum(17.67 - ln_ratio, 1e-6)
+    return (td_c + 273.15).astype(np.float32)
+
+
+def calculate_wind_speed_dir(u: np.ndarray, v: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    u_arr = np.asarray(u, dtype=np.float32)
+    v_arr = np.asarray(v, dtype=np.float32)
+    speed = np.sqrt(u_arr * u_arr + v_arr * v_arr).astype(np.float32)
+    direction = ((270.0 - np.degrees(np.arctan2(v_arr, u_arr))) % 360.0).astype(np.float32)
+    return speed, direction
+
+
+def precip_accum_to_hourly(precip: np.ndarray) -> np.ndarray:
+    """Convert accumulated precipitation to non-negative hourly increments."""
+    arr = np.asarray(precip, dtype=np.float32)
+    if arr.ndim < 1:
+        return np.maximum(arr, 0.0).astype(np.float32)
+    first = arr[:1]
+    diff = np.diff(arr, axis=0, prepend=np.zeros_like(first))
+    hourly = np.where(diff >= 0.0, diff, arr)
+    return np.maximum(hourly, 0.0).astype(np.float32)
+
+
 def apply_wspd10_from_uv(x_met: np.ndarray) -> None:
     """In-place: WSPD10 = hypot(U10, V10). x_met shape (..., 24)."""
-    u = x_met[..., U10_IDX]
-    v = x_met[..., V10_IDX]
-    x_met[..., WSPD10_IDX] = np.sqrt(u * u + v * v).astype(np.float32)
+    speed, _ = calculate_wind_speed_dir(x_met[..., U10_IDX], x_met[..., V10_IDX])
+    x_met[..., WSPD10_IDX] = speed
+
+
+def apply_wind_derivations(x_met: np.ndarray) -> None:
+    """In-place: derive wind speed/direction channels from U/V components."""
+    speed10, dir10 = calculate_wind_speed_dir(x_met[..., U10_IDX], x_met[..., V10_IDX])
+    x_met[..., WSPD10_IDX] = speed10
+    x_met[..., WDIR10_IDX] = dir10
+    speed925, _ = calculate_wind_speed_dir(x_met[..., U925_IDX], x_met[..., V925_IDX])
+    x_met[..., WSPD925_IDX] = speed925
+
+
+def _field_array(
+    fields: Dict[str, np.ndarray],
+    name: str,
+    nt: int,
+    ns: int,
+) -> Optional[np.ndarray]:
+    if name not in fields:
+        return None
+    arr = np.asarray(fields[name], dtype=np.float32)
+    if arr.shape != (nt, ns):
+        raise ValueError(f"Field {name} shape {arr.shape}, expected {(nt, ns)}")
+    return arr
+
+
+def describe_available_overlap_features(field_names: Iterable[str]) -> Set[str]:
+    names = {normalize_var_coord(v) for v in field_names}
+    available = {name for name in names if name in OVERLAP_CANONICAL and name in PMST_INDEX}
+    if {"U10", "V10"}.issubset(names):
+        available.update({"WSPD10", "WDIR10"})
+    if {"U_925", "V_925"}.issubset(names):
+        available.add("WSPD925")
+    if {"T2M", "D2M"}.issubset(names):
+        available.update({"RH2M", "DPD"})
+    if {"T2M", "RH2M"}.issubset(names):
+        available.add("DPD")
+    if "Q_1000" in names:
+        available.add("DP_1000")
+    if "Q_925" in names:
+        available.add("DP_925")
+    return available & set(OVERLAP_CANONICAL)
 
 
 def scatter_overlap_fields(
@@ -150,19 +304,67 @@ def scatter_overlap_fields(
     fields: Dict[str, np.ndarray],
 ) -> np.ndarray:
     """
-    fields: canonical name -> (nt, ns) float32 array for each OVERLAP_CANONICAL key present.
-    Returns X_met (nt, ns, 24) with overlap slots filled, WSPD10 derived, rest 0.
+    fields: canonical/source name -> (nt, ns) float32 array.
+    Returns X_met (nt, ns, 24) with shared PMST slots filled and derived fields added.
     """
+    fields = {normalize_var_coord(k): v for k, v in fields.items()}
     x = np.zeros((nt, ns, PMST_MET_DIM), dtype=np.float32)
     for name in OVERLAP_CANONICAL:
+        if name in {"WSPD10", "WDIR10", "WSPD925", "RH2M", "DP_1000", "DP_925", "DPD"}:
+            continue
         if name not in fields:
             continue
-        arr = np.asarray(fields[name], dtype=np.float32)
-        if arr.shape != (nt, ns):
-            raise ValueError(f"Field {name} shape {arr.shape}, expected {(nt, ns)}")
-        j = OVERLAP_PMST_INDICES[name]
-        x[:, :, j] = arr
-    apply_wspd10_from_uv(x)
+        arr = _field_array(fields, name, nt, ns)
+        if arr is not None:
+            x[:, :, OVERLAP_PMST_INDICES[name]] = arr
+
+    t2m = _field_array(fields, "T2M", nt, ns)
+    rh2m = _field_array(fields, "RH2M", nt, ns)
+    d2m = _field_array(fields, "D2M", nt, ns)
+    if rh2m is not None:
+        x[:, :, RH2M_IDX] = rh2m
+    elif t2m is not None and d2m is not None:
+        x[:, :, RH2M_IDX] = calculate_rh_from_dewpoint(t2m, d2m)
+    if d2m is None and t2m is not None and rh2m is not None:
+        d2m = calculate_dewpoint_from_rh(t2m, rh2m)
+    if t2m is not None and d2m is not None:
+        x[:, :, DPD_IDX] = (t2m - d2m).astype(np.float32)
+
+    q1000 = _field_array(fields, "Q_1000", nt, ns)
+    if "DP_1000" in fields:
+        x[:, :, DP1000_IDX] = _field_array(fields, "DP_1000", nt, ns)
+    elif q1000 is not None:
+        x[:, :, DP1000_IDX] = calculate_dewpoint_from_specific_humidity(q1000, 1000.0)
+
+    q925 = _field_array(fields, "Q_925", nt, ns)
+    if "DP_925" in fields:
+        x[:, :, DP925_IDX] = _field_array(fields, "DP_925", nt, ns)
+    elif q925 is not None:
+        x[:, :, DP925_IDX] = calculate_dewpoint_from_specific_humidity(q925, 925.0)
+
+    u10 = _field_array(fields, "U10", nt, ns)
+    v10 = _field_array(fields, "V10", nt, ns)
+    if u10 is not None and v10 is not None:
+        speed10, dir10 = calculate_wind_speed_dir(u10, v10)
+        x[:, :, WSPD10_IDX] = speed10
+        x[:, :, WDIR10_IDX] = dir10
+    else:
+        wspd10 = _field_array(fields, "WSPD10", nt, ns)
+        wdir10 = _field_array(fields, "WDIR10", nt, ns)
+        if wspd10 is not None:
+            x[:, :, WSPD10_IDX] = wspd10
+        if wdir10 is not None:
+            x[:, :, WDIR10_IDX] = wdir10
+
+    u925 = _field_array(fields, "U_925", nt, ns)
+    v925 = _field_array(fields, "V_925", nt, ns)
+    if u925 is not None and v925 is not None:
+        speed925, _ = calculate_wind_speed_dir(u925, v925)
+        x[:, :, WSPD925_IDX] = speed925
+    else:
+        wspd925 = _field_array(fields, "WSPD925", nt, ns)
+        if wspd925 is not None:
+            x[:, :, WSPD925_IDX] = wspd925
     return x
 
 
@@ -482,7 +684,10 @@ def compute_fog_features_pmst(X_dyn_window: np.ndarray, window_size: int = 12, d
 def normalize_var_coord(v) -> str:
     if isinstance(v, bytes):
         v = v.decode("utf-8", errors="ignore")
-    return str(v)
+    raw = str(v)
+    compact = raw.strip().upper().replace("-", "_").replace(" ", "_")
+    compact_no_underscore = compact.replace("_", "")
+    return CANONICAL_VAR_ALIASES.get(compact, CANONICAL_VAR_ALIASES.get(compact_no_underscore, raw.strip()))
 
 
 def build_station_reindex_map(
