@@ -120,7 +120,10 @@ launcher stops instead of silently training S2 from scratch. The expected best
 outputs are `exp_overlap_static_rnn_s2_tianji_pm10_pm25_S2_PhaseB_best_score.pt`
 and `exp_overlap_static_rnn_s2_ifs_pm10_pm25_S2_PhaseB_best_score.pt`. Both S2
 trainers require explicit month-tail validation files and fail on legacy PM10-only
-or wrong FE layouts.
+or wrong FE layouts. The overlap S2 launcher defaults to a longer fine-tuning
+budget than the main quick path: `LOWVIS_RNN_S2_A_STEPS=12000`,
+`LOWVIS_RNN_S2_B_STEPS=40000`, and `LOWVIS_RNN_PATIENCE=18`, so Tianji-input
+training is less likely to stop before the validation score has saturated.
 
 ### 7. Run Paired Forecast-Source Evaluation
 
@@ -128,12 +131,17 @@ After both S2 checkpoints exist:
 
 ```bash
 python test_PMST_overlap_forecast_source_s2.py \
+  --tianji_ckpt /public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/exp_overlap_static_rnn_s2_tianji_pm10_pm25_S2_PhaseB_best_score.pt \
+  --ifs_ckpt /public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/exp_overlap_static_rnn_s2_ifs_pm10_pm25_S2_PhaseB_best_score.pt \
   --out_dir /public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/overlap_forecast_source
 ```
 
 The evaluator refuses datasets without `tianji_raw_time_alignment=raw_utc_no_shift`
 unless `--allow_legacy_time_alignment` is passed. Scenario day/night grouping
-uses UTC+8 by default through `--local_time_offset_hours 8`.
+uses UTC+8 by default through `--local_time_offset_hours 8`. By default it reads
+the decision thresholds stored in each selected `*_best_score.pt` checkpoint;
+`--threshold_mode val_search` is available only when you intentionally want to
+rerun validation threshold selection inside the evaluator.
 Feature replacement runs by default for
 `RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
 overlap datasets.

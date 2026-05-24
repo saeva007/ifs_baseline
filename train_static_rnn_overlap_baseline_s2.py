@@ -38,6 +38,9 @@ DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
+DEFAULT_OVERLAP_S2_A_STEPS = "12000"
+DEFAULT_OVERLAP_S2_B_STEPS = "40000"
+DEFAULT_OVERLAP_S2_PATIENCE = "18"
 
 
 def default_s2_run_id(source: str) -> str:
@@ -121,12 +124,41 @@ def resolve_static_script(args: argparse.Namespace) -> Path:
     raise FileNotFoundError(f"Cannot find Static-RNN training script. Checked:\n  {checked}")
 
 
+def passthrough_has_option(passthrough: List[str], option: str) -> bool:
+    return any(token == option or token.startswith(f"{option}=") for token in passthrough)
+
+
+def add_overlap_s2_training_defaults(args: argparse.Namespace, passthrough: List[str]) -> List[str]:
+    if args.mode not in {"s2", "both"}:
+        return passthrough
+    out = list(passthrough)
+    defaults = [
+        (
+            "--s2-phase-a-steps",
+            os.environ.get("LOWVIS_RNN_S2_A_STEPS", DEFAULT_OVERLAP_S2_A_STEPS),
+        ),
+        (
+            "--s2-phase-b-steps",
+            os.environ.get("LOWVIS_RNN_S2_B_STEPS", DEFAULT_OVERLAP_S2_B_STEPS),
+        ),
+        (
+            "--patience",
+            os.environ.get("LOWVIS_RNN_PATIENCE", DEFAULT_OVERLAP_S2_PATIENCE),
+        ),
+    ]
+    for option, value in defaults:
+        if not passthrough_has_option(out, option):
+            out.extend([option, str(value)])
+    return out
+
+
 def main() -> None:
     args, passthrough = parse_args()
     static_script = resolve_static_script(args)
     s2_data_dir = resolve_s2_data_dir(args)
     run_id = resolve_run_id(args)
     pretrained_ckpt = resolve_pretrained_ckpt(args)
+    passthrough = add_overlap_s2_training_defaults(args, passthrough)
 
     static_argv = [
         str(static_script),

@@ -179,6 +179,7 @@ class SourceEval:
     dyn_vars_count: int
     temperature: float
     thresholds: Dict[str, float]
+    threshold_source: str
     val_metrics: Dict[str, float]
     test_probs: np.ndarray
     test_preds: np.ndarray
@@ -234,9 +235,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:N")
     ap.add_argument(
         "--threshold_mode",
-        choices=["val_search", "argmax", "fixed"],
-        default="val_search",
-        help="Use validation threshold search, argmax, or fixed fog/mist thresholds.",
+        choices=["checkpoint", "val_search", "argmax", "fixed"],
+        default="checkpoint",
+        help=(
+            "Use thresholds stored in the selected checkpoint, rerun validation "
+            "threshold search, argmax, or fixed fog/mist thresholds."
+        ),
     )
     ap.add_argument("--fog_threshold", type=float, default=0.5)
     ap.add_argument("--mist_threshold", type=float, default=0.5)
@@ -303,6 +307,37 @@ def default_scaler_path(
         run_id = default_run_id(source, model_arch)
         return os.path.join(ckpt_dir, f"robust_scaler_{run_id}_s2_w{window}_dyn{dyn_vars_count}_{pm_tag}.pkl")
     return os.path.join(ckpt_dir, f"robust_scaler_w{window}_dyn{dyn_vars_count}_overlap_baseline_{source}.pkl")
+
+
+def load_checkpoint_payload(ckpt_path: str, device: torch.device):
+    try:
+        return torch.load(ckpt_path, map_location=device, weights_only=True)
+    except TypeError:
+        return torch.load(ckpt_path, map_location=device)
+
+
+def checkpoint_metadata(ckpt_path: str, device: torch.device) -> Dict[str, object]:
+    payload = load_checkpoint_payload(ckpt_path, torch.device("cpu"))
+    if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
+        return dict(payload["metadata"])
+    return {}
+
+
+def checkpoint_thresholds(ckpt_meta: Dict[str, object]) -> Optional[Dict[str, float]]:
+    raw = ckpt_meta.get("thresholds")
+    if not isinstance(raw, dict):
+        raw = {
+            "fog": ckpt_meta.get("fog_threshold", ckpt_meta.get("fog_th")),
+            "mist": ckpt_meta.get("mist_threshold", ckpt_meta.get("mist_th")),
+        }
+    try:
+        fog = float(raw["fog"])
+        mist = float(raw["mist"])
+    except Exception:
+        return None
+    if not math.isfinite(fog) or not math.isfinite(mist):
+        return None
+    return {"fog": fog, "mist": mist}
 
 
 def resolve_static_rnn_train_dir(train_dir: str) -> Path:
@@ -553,10 +588,7 @@ def load_model(
             dyn_vars_count=dyn_vars_count,
         ).to(device)
 
-    try:
-        state = torch.load(ckpt_path, map_location=device, weights_only=True)
-    except TypeError:
-        state = torch.load(ckpt_path, map_location=device)
+    state = load_checkpoint_payload(ckpt_path, device)
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if isinstance(state, dict) and "model_state_dict" in state:
@@ -1043,6 +1075,7 @@ def evaluate_one_source(
 
     require_file(spec.scaler_path, "RobustScaler")
     scaler = joblib.load(spec.scaler_path)
+    ckpt_meta = checkpoint_metadata(spec.ckpt_path, device)
     model = load_model(
         train_mod,
         spec.ckpt_path,
@@ -1087,7 +1120,11 @@ def evaluate_one_source(
 
     print(f"[{source}] running validation inference: N={len(val_ds)}", flush=True)
     val_logits, val_targets, _ = collect_logits(model, val_loader, device)
-    if args.no_temp_scaling:
+    if args.threshold_mode == "checkpoint":
+        # Checkpoint thresholds were selected from uncalibrated validation
+        # probabilities by the trainer, so keep the probability scale unchanged.
+        temperature = 1.0
+    elif args.no_temp_scaling:
         temperature = 1.0
     else:
         temperature = calibrate_temperature_from_logits(
@@ -1095,7 +1132,19 @@ def evaluate_one_source(
         )
     val_probs = softmax_np(val_logits, temperature)
 
-    if args.threshold_mode == "val_search":
+    threshold_source = args.threshold_mode
+    if args.threshold_mode == "checkpoint":
+        thresholds = checkpoint_thresholds(ckpt_meta)
+        if thresholds is None:
+            print(f"[{source}] checkpoint has no saved thresholds; falling back to validation search.", flush=True)
+            thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
+            threshold_source = "val_search_fallback_no_checkpoint_thresholds"
+        else:
+            val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
+            val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
+            threshold_source = "checkpoint_metadata"
+        threshold_mode_for_pred = "fixed"
+    elif args.threshold_mode == "val_search":
         thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
         threshold_mode_for_pred = "fixed"
     elif args.threshold_mode == "fixed":
@@ -1111,6 +1160,7 @@ def evaluate_one_source(
 
     print(
         f"[{source}] temperature={temperature:.4f}, thresholds={thresholds}, "
+        f"threshold_source={threshold_source}, "
         f"val target_achievement={val_metrics.get('target_achievement', math.nan):.4f}",
         flush=True,
     )
@@ -1133,6 +1183,7 @@ def evaluate_one_source(
         dyn_vars_count=args.dyn_vars_count,
         temperature=float(temperature),
         thresholds=thresholds,
+        threshold_source=threshold_source,
         val_metrics=val_metrics,
         test_probs=test_probs,
         test_preds=test_preds,
@@ -1299,7 +1350,7 @@ def write_report(
         f.write("IFS diagnostic-visibility product when --ifs_forecast_nc is available.\n\n")
         f.write(f"Paired test rows: {n_pair}\n")
         f.write(f"Threshold mode: {args.threshold_mode}\n")
-        f.write(f"Temperature scaling: {not args.no_temp_scaling}\n")
+        f.write(f"Temperature scaling: {args.threshold_mode != 'checkpoint' and not args.no_temp_scaling}\n")
         f.write(f"Scenario local time offset: UTC+{args.local_time_offset_hours}\n")
         f.write(f"Window: {args.window}; dyn_vars_count: {args.dyn_vars_count}\n\n")
         for source in ("tianji", "ifs"):
@@ -1966,6 +2017,7 @@ def main() -> None:
                     "temperature": evals["tianji"].temperature,
                     "fog_threshold": evals["tianji"].thresholds.get("fog"),
                     "mist_threshold": evals["tianji"].thresholds.get("mist"),
+                    "threshold_source": evals["tianji"].threshold_source,
                     "feature_dim": evals["tianji"].feature_dim,
                     "extra_feat_dim": evals["tianji"].extra_feat_dim,
                     "model_arch": args.model_arch,
@@ -1980,6 +2032,7 @@ def main() -> None:
                     "temperature": evals["ifs"].temperature,
                     "fog_threshold": evals["ifs"].thresholds.get("fog"),
                     "mist_threshold": evals["ifs"].thresholds.get("mist"),
+                    "threshold_source": evals["ifs"].threshold_source,
                     "feature_dim": evals["ifs"].feature_dim,
                     "extra_feat_dim": evals["ifs"].extra_feat_dim,
                     "model_arch": args.model_arch,
@@ -2000,6 +2053,7 @@ def main() -> None:
                     "temperature": evals["tianji"].temperature,
                     "fog_threshold": evals["tianji"].thresholds.get("fog"),
                     "mist_threshold": evals["tianji"].thresholds.get("mist"),
+                    "threshold_source": evals["tianji"].threshold_source,
                     "model_arch": args.model_arch,
                 },
             ),
@@ -2010,6 +2064,7 @@ def main() -> None:
                     "temperature": evals["ifs"].temperature,
                     "fog_threshold": evals["ifs"].thresholds.get("fog"),
                     "mist_threshold": evals["ifs"].thresholds.get("mist"),
+                    "threshold_source": evals["ifs"].threshold_source,
                     "model_arch": args.model_arch,
                 },
             ),
@@ -2063,6 +2118,7 @@ def main() -> None:
                             "temperature": evals["tianji"].temperature,
                             "fog_threshold": evals["tianji"].thresholds.get("fog"),
                             "mist_threshold": evals["tianji"].thresholds.get("mist"),
+                            "threshold_source": evals["tianji"].threshold_source,
                         },
                     ),
                     rows_from_metrics(
@@ -2074,6 +2130,7 @@ def main() -> None:
                             "temperature": evals["ifs"].temperature,
                             "fog_threshold": evals["ifs"].thresholds.get("fog"),
                             "mist_threshold": evals["ifs"].thresholds.get("mist"),
+                            "threshold_source": evals["ifs"].threshold_source,
                         },
                     ),
                     rows_from_metrics(
@@ -2212,6 +2269,16 @@ def main() -> None:
         "build_configs": build_configs,
         "paired_rows": int(len(y)),
         "evaluation_scope": "test split; validation split is used only for calibration/threshold selection",
+        "source_thresholds": {
+            source: {
+                "threshold_source": eval_obj.threshold_source,
+                "temperature": eval_obj.temperature,
+                "fog_threshold": eval_obj.thresholds.get("fog"),
+                "mist_threshold": eval_obj.thresholds.get("mist"),
+                "checkpoint": eval_obj.spec.ckpt_path,
+            }
+            for source, eval_obj in evals.items()
+        },
         "ifs_diagnostic": {
             "enabled": bool(not args.skip_ifs_forecast_baseline),
             "path": args.ifs_forecast_nc,
