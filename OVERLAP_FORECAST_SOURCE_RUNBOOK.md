@@ -60,7 +60,7 @@ The default `MODEL_ARCH=static_rnn` trains
 `exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The Slurm launcher uses
 the same direct main-trainer path and stable knobs as
 `sub_static_rnn_lowvis_main.slurm`: GRU, mean pooling, one RNN layer,
-`LOWVIS_RNN_BATCH_SIZE=512`, `LOWVIS_RNN_GRAD_ACCUM=2`,
+5 nodes x 4 DCU, `LOWVIS_RNN_BATCH_SIZE=512`, `LOWVIS_RNN_GRAD_ACCUM=2`,
 `LOWVIS_RNN_NUM_WORKERS=0`, and recall/CSI validation selection unless
 overridden. The trainer requires explicit `X_train/y_train` and `X_val/y_val`,
 and it fails if the row layout is not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst`
@@ -112,13 +112,15 @@ sbatch --export=ALL,EXPERIMENT=s2_tianji sub_ifs_overlap_baseline.slurm
 sbatch --export=ALL,EXPERIMENT=s2_ifs sub_ifs_overlap_baseline.slurm
 ```
 
-Both S2 runs default to Static-RNN and automatically reuse
+Both S2 runs default to Static-RNN and require
 `exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt` as the pretrained
-checkpoint when that file exists. Override with
-`OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/S1_best_score.pt`, or pass
-`TRAIN_EXTRA_ARGS="--no_default_s1_pretrained"` to run S2 from scratch. Both S2
-trainers require explicit month-tail validation files and fail on legacy
-PM10-only or wrong FE layouts.
+checkpoint. Override only with an explicit
+`OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/S1_best_score.pt`; otherwise the
+launcher stops instead of silently training S2 from scratch. The expected best
+outputs are `exp_overlap_static_rnn_s2_tianji_pm10_pm25_S2_PhaseB_best_score.pt`
+and `exp_overlap_static_rnn_s2_ifs_pm10_pm25_S2_PhaseB_best_score.pt`. Both S2
+trainers require explicit month-tail validation files and fail on legacy PM10-only
+or wrong FE layouts.
 
 ### 7. Run Paired Forecast-Source Evaluation
 

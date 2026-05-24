@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J pmst_ifs_overlap
 #SBATCH -p kshdexclu01
-#SBATCH -N 4
+#SBATCH -N 5
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --gres=dcu:4
@@ -101,6 +101,13 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
         if [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
             STATIC_RNN_PRETRAINED_CKPT="${DEFAULT_STATIC_RNN_S1_CKPT}"
         fi
+    fi
+    if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
+        echo "ERROR: static_rnn S2 overlap training must start from the overlap S1 best checkpoint." >&2
+        echo "Expected: ${DEFAULT_STATIC_RNN_S1_CKPT}" >&2
+        echo "Run S1 first with: sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+        echo "Or set OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/*_S1_best_score.pt explicitly." >&2
+        exit 1
     fi
 
     PY_ARGS=(
@@ -217,6 +224,9 @@ echo "SLURM_NNODES    : ${SLURM_NNODES}"
 echo "TORCHRUN_BIN    : ${TORCHRUN_BIN}"
 echo "LAUNCH_DIR      : ${LAUNCH_DIR}"
 echo "TRAIN_SCRIPT    : ${TRAIN_SCRIPT}"
+if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+    echo "PRETRAINED_CKPT : ${STATIC_RNN_PRETRAINED_CKPT:-none}"
+fi
 echo "PY_ARGS         : ${PY_ARGS[*]:-} ${EXTRA_TOKENS[*]:-}"
 if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     echo "RUN_ID          : ${LOWVIS_RNN_RUN_ID}"

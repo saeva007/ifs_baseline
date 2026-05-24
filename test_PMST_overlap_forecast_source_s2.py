@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
 import json
 import math
 import os
@@ -72,6 +73,38 @@ SOURCE_LABELS = {
     "ifs": "IFS-trained/IFS-input model",
     "ifs_diagnostic": "IFS diagnostic visibility",
 }
+
+STATIC_RNN_DATASET_ARG_DEFAULTS = {
+    "boundary_weight": 0.0,
+    "boundary_fog_sigma": 100.0,
+    "boundary_mist_sigma": 150.0,
+    "physical_hard_weight": 0.0,
+    "humid_rh_th": 90.0,
+    "humid_dpd_th": 2.0,
+    "humid_clear_vis_max": 3000.0,
+    "aerosol_hard_weight": 0.0,
+    "aerosol_rh_th": 85.0,
+    "pm25_hard_th": 75.0,
+    "pm10_hard_th": 150.0,
+    "ordinal_cost_weight": 0.0,
+    "sample_weight_cap": 4.0,
+}
+
+FEATURE_NAME_ALIASES = {
+    "RH2M": "RH2M",
+    "RH_2M": "RH2M",
+    "Q1000": "Q_1000",
+    "Q_1000": "Q_1000",
+    "DP1000": "DP_1000",
+    "DPT1000": "DP_1000",
+    "DP_1000": "DP_1000",
+    "RH925": "RH_925",
+    "R925": "RH_925",
+    "RH_925": "RH_925",
+    "PRECIP": "PRECIP",
+}
+
+DEFAULT_FEATURE_SWAP_ORDER = ("RH2M", "Q_1000", "DP_1000", "RH_925", "PRECIP")
 HIGHER_IS_BETTER = {
     "accuracy",
     "macro_f1",
@@ -408,6 +441,13 @@ def load_meta(data_dir: str, split: str, indices: Optional[np.ndarray] = None) -
     return meta
 
 
+def ensure_static_rnn_dataset_args(args: argparse.Namespace) -> argparse.Namespace:
+    for name, default in STATIC_RNN_DATASET_ARG_DEFAULTS.items():
+        if not hasattr(args, name):
+            setattr(args, name, default)
+    return args
+
+
 def make_dataset(
     train_mod,
     data_dir: str,
@@ -420,6 +460,7 @@ def make_dataset(
     model_arch: str,
     static_use_fe: bool,
     static_use_pm: bool,
+    dataset_args: Optional[argparse.Namespace] = None,
 ):
     x_path = os.path.join(data_dir, f"X_{split}.npy")
     y_path = os.path.join(data_dir, f"y_{split}.npy")
@@ -433,15 +474,11 @@ def make_dataset(
 
     if model_arch == "static_rnn":
         layout = train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
-        base_ds = train_mod.LowVisDataset(
-            x_path,
-            y_raw,
-            y_cls,
-            layout,
-            scaler,
-            use_fe=static_use_fe,
-            use_pm=static_use_pm,
-        )
+        ctor = inspect.signature(train_mod.LowVisDataset)
+        kwargs = {"use_fe": static_use_fe, "use_pm": static_use_pm}
+        if "args" in ctor.parameters:
+            kwargs["args"] = ensure_static_rnn_dataset_args(dataset_args or argparse.Namespace())
+        base_ds = train_mod.LowVisDataset(x_path, y_raw, y_cls, layout, scaler, **kwargs)
         ds = Subset(base_ds, indices.tolist()) if indices is not None else base_ds
     else:
         ds = train_mod.PMSTDataset(
@@ -548,7 +585,8 @@ def collect_logits(model: nn.Module, loader: DataLoader, device: torch.device) -
     targets_l: List[np.ndarray] = []
     raw_l: List[np.ndarray] = []
     model.eval()
-    for bx, by, _, braw in loader:
+    for batch in loader:
+        bx, by, braw = batch[0], batch[1], batch[3]
         bx = bx.to(device, non_blocking=True)
         out = model(bx)
         logits = out[0] if isinstance(out, (tuple, list)) else out
@@ -1028,6 +1066,7 @@ def evaluate_one_source(
         args.model_arch,
         not args.static_rnn_no_fe,
         not args.static_rnn_no_pm,
+        args,
     )
     test_ds, test_meta = make_dataset(
         train_mod,
@@ -1041,6 +1080,7 @@ def evaluate_one_source(
         args.model_arch,
         not args.static_rnn_no_fe,
         not args.static_rnn_no_pm,
+        args,
     )
     val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
     test_loader = make_loader(test_ds, args.batch_size, args.num_workers)
@@ -1573,7 +1613,17 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
 
 def split_feature_names(value: str) -> List[str]:
-    return [x.strip() for chunk in str(value or "").split(";") for x in chunk.split(",") if x.strip()]
+    out: List[str] = []
+    for chunk in str(value or "").split(";"):
+        for raw in chunk.split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            key = name.upper().replace("-", "_").replace(" ", "_")
+            canon = FEATURE_NAME_ALIASES.get(key, name)
+            if canon not in out:
+                out.append(canon)
+    return out
 
 
 def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
@@ -1646,7 +1696,7 @@ def choose_replacement_features(args: argparse.Namespace, lookup: Dict[str, int]
     if top_k > 0:
         selected = selected[:top_k]
     if not selected and top_k > 0:
-        for feat in ("T2M", "PRECIP", "MSLP", "SW_RAD", "WSPD10"):
+        for feat in DEFAULT_FEATURE_SWAP_ORDER:
             if feat in lookup:
                 selected.append(feat)
             if len(selected) >= top_k:
