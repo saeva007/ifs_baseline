@@ -146,6 +146,40 @@ Feature replacement runs by default for
 `RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
 overlap datasets.
 
+### 8. Run The Mean-Softmax Ensemble Check
+
+This experiment keeps the trained Tianji-input and IFS-input Static-RNN models
+fixed. It runs each model on its matching paired source dataset, averages the
+post-softmax class probabilities for the same `(time, station_id)` rows, selects
+the ensemble fog/mist decision thresholds from the paired validation split, and
+then evaluates the ensemble on the held-out paired test split.
+
+```bash
+sbatch sub_static_rnn_overlap_softmax_ensemble.slurm
+```
+
+The default checkpoints are:
+
+```text
+/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/exp_overlap_static_rnn_s2_tianji_pm10_pm25_S2_PhaseB_best_score.pt
+/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/exp_overlap_static_rnn_s2_ifs_pm10_pm25_S2_PhaseB_best_score.pt
+```
+
+For a quick smoke test:
+
+```bash
+sbatch --export=ALL,LIMIT_SAMPLES=2000,SKIP_BOOTSTRAP=1,NO_FIGURES=1,OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/overlap_softmax_ensemble_smoke sub_static_rnn_overlap_softmax_ensemble.slurm
+```
+
+Important outputs:
+
+- `overall_metrics.csv`: Tianji single model, IFS single model, and mean-softmax ensemble test metrics.
+- `metric_deltas_ensemble_minus_tianji.csv` and `metric_deltas_ensemble_minus_ifs.csv`: direct gain/loss tables with metric direction.
+- `scenario_metrics.csv`: All/day/night/season split metrics for the two single models and the ensemble.
+- `per_sample_softmax_ensemble_eval.csv`: paired probabilities, predictions, correctness, and ensemble win/loss flags.
+- `softmax_ensemble_report.txt`: compact human-readable summary.
+- `fig_overlap_softmax_ensemble_key_metrics.*`: Tianji, IFS, and ensemble key-metric bars when matplotlib is available.
+
 ## Completion Checklist
 
 1. `dataset_build_config.json` for Tianji and IFS both contain
@@ -155,4 +189,7 @@ overlap datasets.
    `/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints`.
 4. The paired evaluator writes `overall_metrics.csv`, `validation_metrics.csv`,
    `scenario_metrics.csv`, and `run_config.json`.
-5. Old results generated before the UTC fix are not used in the paper.
+5. The softmax ensemble evaluator writes `overall_metrics.csv`,
+   `metric_deltas_ensemble_minus_tianji.csv`,
+   `metric_deltas_ensemble_minus_ifs.csv`, and `softmax_ensemble_report.txt`.
+6. Old results generated before the UTC fix are not used in the paper.

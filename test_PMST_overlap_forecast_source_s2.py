@@ -1832,10 +1832,30 @@ def plot_feature_replacement(repl_df: pd.DataFrame, out_dir: Path, metric: str) 
     fig, ax = plt.subplots(figsize=(8.2, max(3.4, 0.38 * len(plot_df) + 1.2)))
     ax.barh(y, vals, color=["#18864B" if v > 0 else "#B45B43" for v in vals])
     ax.axvline(0, color="#222222", lw=0.8)
+    max_abs = max(float(np.nanmax(np.abs(vals))) if np.isfinite(vals).any() else 0.0, 1.0e-4)
+    pad = max_abs * 0.10
+    ax.set_xlim(-max_abs - pad, max_abs + pad)
+    for yi, v in zip(y, vals):
+        if not np.isfinite(v):
+            continue
+        label = f"{v:+.2e}" if 0 < abs(v) < 1.0e-3 else f"{v:+.4f}"
+        if abs(v) >= max_abs * 0.12:
+            x = v * 0.5
+            ha = "center"
+            color = "white"
+        elif abs(v) < max_abs * 0.02:
+            x = pad * 0.35
+            ha = "left"
+            color = "#2F3437"
+        else:
+            x = v + (pad * 0.25 if v >= 0 else -pad * 0.25)
+            ha = "left" if v >= 0 else "right"
+            color = "#2F3437"
+        ax.text(x, yi, label, va="center", ha=ha, fontsize=7.0, color=color)
     ax.set_yticks(y)
     ax.set_yticklabels(plot_df["variant"].astype(str).str.replace("swap_", "", regex=False))
-    ax.set_xlabel(f"Metric gain after replacing IFS variable with Tianji ({metric})")
-    ax.set_title("Single-variable replacement reveals data-source bottlenecks")
+    ax.set_xlabel(f"Change after replacing IFS variable with Tianji ({metric})")
+    ax.set_title("Counterfactual single-variable replacement")
     fig.tight_layout()
     for ext in ("png", "pdf", "svg"):
         path = out_dir / f"fig_feature_replacement_{metric}.{ext}"
