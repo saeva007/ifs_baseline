@@ -105,6 +105,10 @@ diagnostic run where the 24h endpoint is intentionally retained.
 
 When `RH2M_OVERRIDE_FILE` is supplied and `OUT_DIR` is not, the output dataset
 defaults to `ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m`.
+The RH2M-override Slurm path also defaults `CHUNK_WINS=64` to reduce peak RAM.
+If the job fails with disk quota or no-space errors, set `STAGING_DIR` to a
+large temporary filesystem; the staging memmaps alone are about 26 GiB for the
+2025 S2 overlap build.
 
 ### 4. Rebuild IFS-Input S2 Overlap Data
 

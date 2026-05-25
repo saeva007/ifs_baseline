@@ -18,6 +18,8 @@ echo "Node: $(hostname)"
 
 module purge
 module load compiler/devtoolset/7.3.1
+export CONDA_NO_PLUGINS=true
+export CONDA_SOLVER=classic
 source /public/home/putianshu/miniconda3/bin/activate
 conda activate torch
 
@@ -50,11 +52,15 @@ VAL_LAST_DAYS="${VAL_LAST_DAYS:-}"
 TEST_LAST_DAYS="${TEST_LAST_DAYS:-}"
 GAP_HOURS="${GAP_HOURS:-}"
 CHUNK_WINS="${CHUNK_WINS:-}"
+STAGING_DIR="${STAGING_DIR:-}"
 KEEP_STAGING="${KEEP_STAGING:-0}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 
 if [[ -z "${OUT_DIR}" && -n "${RH2M_OVERRIDE_FILE}" ]]; then
     OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${RH2M_SOURCE_TAG:-T2ND_rh2m}"
+fi
+if [[ -z "${CHUNK_WINS}" && -n "${RH2M_OVERRIDE_FILE}" ]]; then
+    CHUNK_WINS=64
 fi
 
 PY_ARGS=(--window "${WINDOW}" --step "${STEP}")
@@ -109,6 +115,9 @@ if [[ -n "${GAP_HOURS}" ]]; then
 fi
 if [[ -n "${CHUNK_WINS}" ]]; then
     PY_ARGS+=(--chunk_wins "${CHUNK_WINS}")
+fi
+if [[ -n "${STAGING_DIR}" ]]; then
+    PY_ARGS+=(--staging_dir "${STAGING_DIR}")
 fi
 if [[ "${KEEP_STAGING}" == "1" || "${KEEP_STAGING}" == "true" ]]; then
     PY_ARGS+=(--keep_staging)

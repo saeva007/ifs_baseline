@@ -280,12 +280,22 @@ def main():
         action="store_true",
         help="Keep _staging_*.npy under out_dir after build (for debug).",
     )
+    ap.add_argument(
+        "--staging_dir",
+        default=os.environ.get("TIANJI_OVERLAP_STAGING_DIR", ""),
+        help=(
+            "Directory for temporary full-year staging memmaps. Defaults to out_dir. "
+            "Use a large scratch filesystem if out_dir quota is tight."
+        ),
+    )
     args = ap.parse_args()
 
     if args.chunk_wins < 1:
         raise ValueError("chunk_wins must be >= 1")
 
     os.makedirs(args.out_dir, exist_ok=True)
+    staging_dir = args.staging_dir or args.out_dir
+    os.makedirs(staging_dir, exist_ok=True)
 
     ds_in = None
     data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
@@ -359,9 +369,9 @@ def main():
     if pm25_da is not None:
         pm25_da.load()
 
-    st_dyn = os.path.join(args.out_dir, "_staging_X_dyn_flat.npy")
-    st_stat = os.path.join(args.out_dir, "_staging_X_stat_flat.npy")
-    st_fe = os.path.join(args.out_dir, "_staging_fe_flat.npy")
+    st_dyn = os.path.join(staging_dir, "_staging_X_dyn_flat.npy")
+    st_stat = os.path.join(staging_dir, "_staging_X_stat_flat.npy")
+    st_fe = os.path.join(staging_dir, "_staging_fe_flat.npy")
     fe_dim = 32 + 4
 
     print(
@@ -375,6 +385,8 @@ def main():
         ),
         flush=True,
     )
+    if staging_dir != args.out_dir:
+        print(f"[staging] using temporary staging_dir={staging_dir}", flush=True)
 
     mm_dyn = np.lib.format.open_memmap(
         st_dyn, mode="w+", dtype=np.float32, shape=(n_samples, dyn_flat_dim)
@@ -506,6 +518,7 @@ def main():
         "gap_hours": args.gap_hours,
         "max_vis_threshold": MAX_VIS_THRESHOLD,
         "chunk_wins": args.chunk_wins,
+        "staging_dir": staging_dir,
         "low_mem_pipeline": True,
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:
