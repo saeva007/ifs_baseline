@@ -12,6 +12,7 @@ import argparse
 import gc
 import json
 import os
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,11 @@ VIS_MLP_ROOT = "/public/home/putianshu/vis_mlp"
 IFS_BASELINE_ROOT = os.path.join(VIS_MLP_ROOT, "ifs_baseline")
 BASE_PATH = VIS_MLP_ROOT
 TIANJI_FILE_DEFAULT = os.path.join(BASE_PATH, "tianji_auto_station", "merged_final_all_vars.nc")
+RH2M_OVERRIDE_FILE_DEFAULT = os.path.join(
+    IFS_BASELINE_ROOT,
+    "tianji_rh2m_station",
+    "T2ND_rh2m_station_2025.nc",
+)
 VEG_FILE_DEFAULT = "/public/home/putianshu/vis_cnn/data_vegtype.nc"
 ORO_FILE_DEFAULT = "/public/home/putianshu/vis_cnn/data_orography.nc"
 PM10_S2_FILE_DEFAULT = os.path.join(BASE_PATH, "pm10_station", "pm10_station_s2_2025.nc")
@@ -79,7 +85,117 @@ VAR_MAPPING = {
 }
 
 
-def extract_tianji_overlap_fields(ds_in: xr.Dataset, t0: int, t1: int) -> dict[str, np.ndarray]:
+def _coord_name(ds_or_da, candidates):
+    for name in candidates:
+        if name in ds_or_da.coords or name in ds_or_da.dims:
+            return name
+    return None
+
+
+def _dataset_data_var(ds: xr.Dataset, requested: str) -> str:
+    if requested in ds.data_vars:
+        return requested
+    requested_upper = requested.upper()
+    for name in ds.data_vars:
+        if name.upper() == requested_upper:
+            return name
+    if len(ds.data_vars) == 1:
+        return next(iter(ds.data_vars))
+    raise KeyError(f"Cannot find variable {requested!r} in {list(ds.data_vars)}")
+
+
+def _normalize_rh2m_values(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float32)
+    finite = arr[np.isfinite(arr)]
+    if finite.size:
+        p99 = float(np.nanpercentile(finite, 99))
+        if p99 <= 2.0:
+            arr = arr * 100.0
+    return np.clip(arr, 0.0, 100.0).astype(np.float32)
+
+
+def load_rh2m_override_dataarray(path: str, var: str) -> Optional[xr.DataArray]:
+    if not path:
+        return None
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"RH2M override file not found: {path}")
+
+    ds = xr.open_dataset(path)
+    try:
+        v = _dataset_data_var(ds, var)
+        time_name = _coord_name(ds[v], ("time", "Time", "valid_time"))
+        station_name = _coord_name(ds[v], ("station_id", "num_station", "station", "id"))
+        if time_name is None or station_name is None:
+            raise ValueError(f"RH2M override must have time and station dimensions: {path}")
+        rename = {}
+        if time_name != "time":
+            rename[time_name] = "time"
+        if station_name != "station_id":
+            rename[station_name] = "station_id"
+        da = ds[v].rename(rename).transpose("time", "station_id").load()
+    finally:
+        ds.close()
+    return da
+
+
+def _station_indexer(source_ids: np.ndarray, target_ids: np.ndarray) -> np.ndarray:
+    source_index = pd.Index(source_ids)
+    pos = source_index.get_indexer(target_ids)
+    if (pos < 0).any():
+        source_index = pd.Index(np.asarray(source_ids).astype(str))
+        pos = source_index.get_indexer(np.asarray(target_ids).astype(str))
+    return pos
+
+
+def select_rh2m_override(
+    rh2m_da: xr.DataArray,
+    times: pd.DatetimeIndex,
+    stations: np.ndarray,
+    tolerance_minutes: int,
+    allow_missing: bool,
+) -> np.ndarray:
+    time_index = pd.DatetimeIndex(pd.to_datetime(rh2m_da["time"].values))
+    station_index = rh2m_da["station_id"].values
+    time_pos = time_index.get_indexer(times, method="nearest", tolerance=pd.Timedelta(minutes=tolerance_minutes))
+    station_pos = _station_indexer(station_index, stations)
+
+    missing_times = int((time_pos < 0).sum())
+    missing_stations = int((station_pos < 0).sum())
+    if (missing_times or missing_stations) and not allow_missing:
+        raise ValueError(
+            "RH2M override cannot be aligned: "
+            f"missing_times={missing_times}/{len(times)}, "
+            f"missing_stations={missing_stations}/{len(stations)}"
+        )
+    if missing_times or missing_stations:
+        print(
+            "[WARN] RH2M override partial alignment: "
+            f"missing_times={missing_times}/{len(times)}, "
+            f"missing_stations={missing_stations}/{len(stations)}",
+            flush=True,
+        )
+
+    nt, ns = len(times), len(stations)
+    out = np.full((nt, ns), np.nan, dtype=np.float32)
+    ok = (time_pos[:, None] >= 0) & (station_pos[None, :] >= 0)
+    if ok.any():
+        base = np.asarray(rh2m_da.values, dtype=np.float32).reshape(-1)
+        ns_src = int(rh2m_da.sizes["station_id"])
+        linear = time_pos[:, None] * ns_src + station_pos[None, :]
+        out[ok] = base[linear[ok]]
+    return _normalize_rh2m_values(out)
+
+
+def extract_tianji_overlap_fields(
+    ds_in: xr.Dataset,
+    t0: int,
+    t1: int,
+    times: pd.DatetimeIndex,
+    stations: np.ndarray,
+    rh2m_override_da: Optional[xr.DataArray] = None,
+    rh2m_tolerance_minutes: int = 90,
+    rh2m_allow_missing: bool = False,
+) -> dict[str, np.ndarray]:
     """Extract canonical source fields; Tianji precipitation is accumulated and differenced hourly."""
     fields: dict[str, np.ndarray] = {}
     for name in OVERLAP_SOURCE_FIELDS:
@@ -94,6 +210,17 @@ def extract_tianji_overlap_fields(ds_in: xr.Dataset, t0: int, t1: int) -> dict[s
             fields[name] = arr
             continue
         fields[name] = ds_in[name].isel(time=slice(t0, t1)).values.astype(np.float32)
+    if rh2m_override_da is not None:
+        override = select_rh2m_override(
+            rh2m_override_da,
+            times,
+            stations,
+            rh2m_tolerance_minutes,
+            rh2m_allow_missing,
+        )
+        if rh2m_allow_missing and "RH2M" in fields:
+            override = np.where(np.isfinite(override), override, fields["RH2M"]).astype(np.float32)
+        fields["RH2M"] = override
     return fields
 
 WINDOW_SIZE_DEFAULT = 12
@@ -113,6 +240,22 @@ def main():
     ap.add_argument("--input_file", default=TIANJI_FILE_DEFAULT)
     ap.add_argument("--veg_file", default=VEG_FILE_DEFAULT)
     ap.add_argument("--oro_file", default=ORO_FILE_DEFAULT)
+    ap.add_argument(
+        "--rh2m_override_file",
+        default=os.environ.get("RH2M_OVERRIDE_FILE", ""),
+        help=(
+            "Optional station-level rh2m NetCDF used to replace Tianji RH2M, "
+            "for example the T2ND_rh2m_station_2025.nc output from rh2m_station_IDW.py."
+        ),
+    )
+    ap.add_argument("--rh2m_override_var", default=os.environ.get("RH2M_OVERRIDE_VAR", "rh2m"))
+    ap.add_argument("--rh2m_source_tag", default=os.environ.get("RH2M_SOURCE_TAG", "T2ND_rh2m"))
+    ap.add_argument("--rh2m_time_tolerance_minutes", type=int, default=int(os.environ.get("RH2M_TIME_TOLERANCE_MINUTES", "90")))
+    ap.add_argument(
+        "--rh2m_override_allow_missing",
+        action="store_true",
+        help="Allow missing override times/stations and fall back to native Tianji RH2M where possible.",
+    )
     ap.add_argument("--pm10_file", default=PM10_S2_FILE_DEFAULT)
     ap.add_argument("--pm10_dir", default=PM10_DIR_DEFAULT)
     ap.add_argument("--pm25_file", default=PM25_S2_FILE_DEFAULT)
@@ -160,7 +303,10 @@ def main():
     if rename_map:
         ds_in = ds_in.rename(rename_map)
 
+    rh2m_override_da = load_rh2m_override_dataarray(args.rh2m_override_file, args.rh2m_override_var)
     available = describe_available_overlap_features(ds_in.data_vars)
+    if rh2m_override_da is not None:
+        available.add("RH2M")
     missing = [v for v in OVERLAP_CANONICAL if v not in available]
     if missing:
         raise KeyError(
@@ -249,7 +395,16 @@ def main():
             t1 = (w1 - 1) * step + win
             tlen = t1 - t0
 
-            fields = extract_tianji_overlap_fields(ds_in, t0, t1)
+            fields = extract_tianji_overlap_fields(
+                ds_in,
+                t0,
+                t1,
+                pd.DatetimeIndex(times[t0:t1]),
+                stations,
+                rh2m_override_da=rh2m_override_da,
+                rh2m_tolerance_minutes=args.rh2m_time_tolerance_minutes,
+                rh2m_allow_missing=args.rh2m_override_allow_missing,
+            )
             X_met = scatter_overlap_fields(tlen, ns, fields)
             del fields
             gc.collect()
@@ -327,6 +482,14 @@ def main():
 
     cfg = {
         "dataset": "tianji_overlap_pmst27_monthtail",
+        "rh2m_source": args.rh2m_source_tag if rh2m_override_da is not None else "tianji_native",
+        "rh2m_override_file": args.rh2m_override_file if rh2m_override_da is not None else "",
+        "rh2m_override_var": args.rh2m_override_var if rh2m_override_da is not None else "",
+        "rh2m_override_time_tolerance_minutes": (
+            args.rh2m_time_tolerance_minutes if rh2m_override_da is not None else None
+        ),
+        "rh2m_override_allow_missing": bool(args.rh2m_override_allow_missing),
+        "rh2m_override_units": "percent_0_100_clipped" if rh2m_override_da is not None else "",
         "overlap_vars": OVERLAP_CANONICAL,
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
         "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",

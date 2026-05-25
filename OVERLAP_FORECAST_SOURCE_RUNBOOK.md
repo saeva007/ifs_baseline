@@ -79,6 +79,33 @@ The overlap builder now fills the shared PMST slots
 Tianji `PRECIP` is treated as an accumulated amount and converted to hourly
 increments before window construction.
 
+To build the Tianji-input variant whose `RH2M` slot is replaced by the T2ND
+station interpolation, first create the station file from the completed fregrid
+tree and then pass it into the same data builder:
+
+```bash
+cd /public/home/putianshu/vis_mlp
+python tianji_regrid/rh2m_station_IDW.py \
+  --input_root /public/home/putianshu/vis_mlp/src_data \
+  --mode T2ND \
+  --res 0p1 \
+  --var rh2m \
+  --output /public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc
+
+sbatch tianji_regrid/sub_rh2m_station_idw.slurm
+
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+sbatch --export=ALL,RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,RH2M_SOURCE_TAG=T2ND_rh2m sub_tianji_overlap_data.slurm
+```
+
+`rh2m_station_IDW.py` defaults to per-init stitching with
+`12 <= lead_hour < 24`, matching the IFS overlap interpolation convention and
+avoiding duplicate lead-24 collisions. Use `--lead_end_inclusive` only for a
+diagnostic run where the 24h endpoint is intentionally retained.
+
+When `RH2M_OVERRIDE_FILE` is supplied and `OUT_DIR` is not, the output dataset
+defaults to `ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m`.
+
 ### 4. Rebuild IFS-Input S2 Overlap Data
 
 ```bash
@@ -105,6 +132,16 @@ differenced.
 ```bash
 sbatch --export=ALL,EXPERIMENT=s2_tianji sub_ifs_overlap_baseline.slurm
 ```
+
+For the T2ND-rh2m replacement dataset:
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m sub_ifs_overlap_baseline.slurm
+```
+
+Its default Static-RNN output names are
+`exp_overlap_static_rnn_s2_T2ND_rh2m_pm10_pm25_S2_PhaseB_best_score.pt` and
+`robust_scaler_exp_overlap_static_rnn_s2_T2ND_rh2m_pm10_pm25_s2_w12_dyn27_pm.pkl`.
 
 ### 6. Train IFS-Input S2
 
@@ -142,6 +179,8 @@ uses UTC+8 by default through `--local_time_offset_hours 8`. By default it reads
 the decision thresholds stored in each selected `*_best_score.pt` checkpoint;
 `--threshold_mode val_search` is available only when you intentionally want to
 rerun validation threshold selection inside the evaluator.
+For the T2ND-rh2m replacement model, add `--tianji_source_tag T2ND_rh2m` or pass
+explicit `--tianji_data_dir`, `--tianji_ckpt`, and `--tianji_scaler` paths.
 Feature replacement runs by default for
 `RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
 overlap datasets.
@@ -170,6 +209,10 @@ For a quick smoke test:
 ```bash
 sbatch --export=ALL,LIMIT_SAMPLES=2000,SKIP_BOOTSTRAP=1,NO_FIGURES=1,OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/overlap_softmax_ensemble_smoke sub_static_rnn_overlap_softmax_ensemble.slurm
 ```
+
+For the T2ND-rh2m replacement model, set
+`OVERLAP_TIANJI_SOURCE_TAG=T2ND_rh2m`; override `OVERLAP_TIANJI_DATA_DIR`,
+`TIANJI_CKPT`, or `TIANJI_SCALER` only when using non-default paths.
 
 Important outputs:
 

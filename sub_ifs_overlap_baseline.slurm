@@ -49,6 +49,7 @@ export LOWVIS_RNN_PATIENCE="${LOWVIS_RNN_PATIENCE:-18}"
 OVERLAP_CKPT_DIR="${OVERLAP_CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 OVERLAP_S1_DATA_DIR="${OVERLAP_S1_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap}"
 OVERLAP_TIANJI_S2_DATA_DIR="${OVERLAP_TIANJI_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_baseline}"
+OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m}"
 OVERLAP_IFS_S2_DATA_DIR="${OVERLAP_IFS_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_baseline}"
 
 case "${EXPERIMENT}" in
@@ -76,6 +77,18 @@ case "${EXPERIMENT}" in
             PY_ARGS=(--data_source tianji)
         fi
         ;;
+    s2_tianji_T2ND_rh2m|s2_T2ND_rh2m|s2_t2nd_rh2m)
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s2"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_T2ND_rh2m_pm10_pm25}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR}}"
+        else
+            TRAIN_SCRIPT="${BASELINE_DIR}/train_PMST_overlap_baseline_s2.py"
+            PY_ARGS=(--data_source T2ND_rh2m)
+        fi
+        ;;
     s2_ifs)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
             TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
@@ -89,7 +102,7 @@ case "${EXPERIMENT}" in
         fi
         ;;
     *)
-        echo "Unknown EXPERIMENT=${EXPERIMENT} (use s1_overlap | s2_tianji | s2_ifs)"
+        echo "Unknown EXPERIMENT=${EXPERIMENT} (use s1_overlap | s2_tianji | s2_tianji_T2ND_rh2m | s2_ifs)"
         exit 1
         ;;
 esac

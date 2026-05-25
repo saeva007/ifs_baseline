@@ -56,6 +56,9 @@ DEFAULT_CKPT_DIR = os.path.join(IFS_BASELINE_ROOT, "checkpoints")
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
 )
+DEFAULT_TIANJI_T2ND_RH2M_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m"
+)
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
@@ -70,6 +73,7 @@ DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
 SOURCE_LABELS = {
     "tianji": "Tianji-trained/Tianji-input model",
+    "T2ND_rh2m": "Tianji-trained/T2ND-rh2m-input model",
     "ifs": "IFS-trained/IFS-input model",
     "ifs_diagnostic": "IFS diagnostic visibility",
 }
@@ -197,7 +201,13 @@ def parse_args() -> argparse.Namespace:
             "month-tail test split."
         )
     )
-    ap.add_argument("--tianji_data_dir", default=os.environ.get("OVERLAP_TIANJI_DATA_DIR", DEFAULT_TIANJI_DIR))
+    ap.add_argument(
+        "--tianji_source_tag",
+        choices=["tianji", "T2ND_rh2m"],
+        default=os.environ.get("OVERLAP_TIANJI_SOURCE_TAG", "tianji"),
+        help="Which Tianji-input checkpoint/data naming family to use for defaults.",
+    )
+    ap.add_argument("--tianji_data_dir", default=os.environ.get("OVERLAP_TIANJI_DATA_DIR", ""))
     ap.add_argument("--ifs_data_dir", default=os.environ.get("OVERLAP_IFS_DATA_DIR", DEFAULT_IFS_DIR))
     ap.add_argument("--ckpt_dir", default=os.environ.get("OVERLAP_CKPT_DIR", DEFAULT_CKPT_DIR))
     ap.add_argument("--tianji_ckpt", default="")
@@ -287,6 +297,12 @@ def default_run_id(source: str, model_arch: str) -> str:
     if model_arch == "static_rnn":
         return f"exp_overlap_static_rnn_s2_{source}_pm10_pm25"
     return f"exp_overlap_pmst_baseline_s2_{source}_pm10_pm25"
+
+
+def default_tianji_data_dir(source_tag: str) -> str:
+    if source_tag == "T2ND_rh2m":
+        return DEFAULT_TIANJI_T2ND_RH2M_DIR
+    return DEFAULT_TIANJI_DIR
 
 
 def default_ckpt_path(source: str, ckpt_dir: str, checkpoint_tag: str, model_arch: str) -> str:
@@ -1970,12 +1986,12 @@ def main() -> None:
     specs = {
         "tianji": SourceSpec(
             name="tianji",
-            data_dir=args.tianji_data_dir,
+            data_dir=args.tianji_data_dir or default_tianji_data_dir(args.tianji_source_tag),
             ckpt_path=args.tianji_ckpt
-            or default_ckpt_path("tianji", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
+            or default_ckpt_path(args.tianji_source_tag, args.ckpt_dir, args.checkpoint_tag, args.model_arch),
             scaler_path=args.tianji_scaler
             or default_scaler_path(
-                "tianji",
+                args.tianji_source_tag,
                 args.ckpt_dir,
                 args.window,
                 args.dyn_vars_count,

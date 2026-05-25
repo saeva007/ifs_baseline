@@ -39,7 +39,8 @@ SCRIPT_PATH="${SCRIPT_PATH:-${BASELINE_DIR}/test_static_rnn_overlap_softmax_ense
 STATIC_RNN_TRAIN_DIR="${STATIC_RNN_TRAIN_DIR:-/public/home/putianshu/vis_mlp/train}"
 MODEL_ARCH="${MODEL_ARCH:-static_rnn}"
 OVERLAP_CKPT_DIR="${OVERLAP_CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
-OVERLAP_TIANJI_DATA_DIR="${OVERLAP_TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_baseline}"
+OVERLAP_TIANJI_SOURCE_TAG="${OVERLAP_TIANJI_SOURCE_TAG:-tianji}"
+OVERLAP_TIANJI_DATA_DIR="${OVERLAP_TIANJI_DATA_DIR:-}"
 OVERLAP_IFS_DATA_DIR="${OVERLAP_IFS_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_baseline}"
 OUT_DIR="${OUT_DIR:-/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/overlap_softmax_ensemble}"
 
@@ -70,7 +71,7 @@ CMD=(
   --model_arch "${MODEL_ARCH}"
   --static_rnn_train_dir "${STATIC_RNN_TRAIN_DIR}"
   --ckpt_dir "${OVERLAP_CKPT_DIR}"
-  --tianji_data_dir "${OVERLAP_TIANJI_DATA_DIR}"
+  --tianji_source_tag "${OVERLAP_TIANJI_SOURCE_TAG}"
   --ifs_data_dir "${OVERLAP_IFS_DATA_DIR}"
   --out_dir "${OUT_DIR}"
   --device "${DEVICE}"
@@ -82,6 +83,9 @@ CMD=(
   --bootstrap_size "${BOOTSTRAP_SIZE}"
 )
 
+if [[ -n "${OVERLAP_TIANJI_DATA_DIR}" ]]; then
+  CMD+=(--tianji_data_dir "${OVERLAP_TIANJI_DATA_DIR}")
+fi
 if [[ -n "${TIANJI_CKPT}" ]]; then
   CMD+=(--tianji_ckpt "${TIANJI_CKPT}")
 fi

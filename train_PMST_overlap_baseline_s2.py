@@ -25,7 +25,7 @@ warnings.filterwarnings('ignore')
 _OVERLAP_AP = argparse.ArgumentParser(add_help=False)
 _OVERLAP_AP.add_argument(
     "--data_source",
-    choices=["tianji", "ifs"],
+    choices=["tianji", "T2ND_rh2m", "ifs"],
     default=os.environ.get("OVERLAP_DATA_SOURCE", "tianji"),
     help="Which overlap baseline dataset under ifs_baseline/ builders to train on.",
 )
@@ -47,11 +47,14 @@ BASE_PATH = IFS_BASELINE_ROOT
 
 S1_DIR = os.path.join(IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap")
 _DEFAULT_S2_TIANJI = os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline")
+_DEFAULT_S2_TIANJI_T2ND_RH2M = os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m")
 _DEFAULT_S2_IFS = os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline")
 if _OVERLAP_ARGS.s2_data_dir:
     S2_DIR = _OVERLAP_ARGS.s2_data_dir
 elif _OVERLAP_ARGS.data_source == "ifs":
     S2_DIR = _DEFAULT_S2_IFS
+elif _OVERLAP_ARGS.data_source == "T2ND_rh2m":
+    S2_DIR = _DEFAULT_S2_TIANJI_T2ND_RH2M
 else:
     S2_DIR = _DEFAULT_S2_TIANJI
 OVERLAP_DATA_SOURCE_TAG = _OVERLAP_ARGS.data_source

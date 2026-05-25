@@ -34,6 +34,9 @@ DEFAULT_S1_DIR = os.path.join(
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
 )
+DEFAULT_TIANJI_T2ND_RH2M_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m"
+)
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
@@ -55,7 +58,12 @@ def parse_args() -> tuple[argparse.Namespace, List[str]]:
         ),
         allow_abbrev=False,
     )
-    parser.add_argument("--data_source", "--data-source", choices=["tianji", "ifs"], default="tianji")
+    parser.add_argument(
+        "--data_source",
+        "--data-source",
+        choices=["tianji", "T2ND_rh2m", "ifs"],
+        default="tianji",
+    )
     parser.add_argument("--s1_data_dir", "--s1-data-dir", default=os.environ.get("OVERLAP_S1_DATA_DIR", DEFAULT_S1_DIR))
     parser.add_argument("--s2_data_dir", "--s2-data-dir", default="")
     parser.add_argument("--ckpt_dir", "--ckpt-dir", default=os.environ.get("OVERLAP_CKPT_DIR", DEFAULT_CKPT_DIR))
@@ -85,6 +93,8 @@ def resolve_s2_data_dir(args: argparse.Namespace) -> str:
         return args.s2_data_dir
     if args.data_source == "ifs":
         return DEFAULT_IFS_DIR
+    if args.data_source == "T2ND_rh2m":
+        return DEFAULT_TIANJI_T2ND_RH2M_DIR
     return DEFAULT_TIANJI_DIR
 
 

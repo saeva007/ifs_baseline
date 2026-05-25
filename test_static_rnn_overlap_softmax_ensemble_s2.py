@@ -65,7 +65,13 @@ def parse_args() -> argparse.Namespace:
             "post-softmax class probabilities."
         )
     )
-    ap.add_argument("--tianji_data_dir", default=os.environ.get("OVERLAP_TIANJI_DATA_DIR", paired.DEFAULT_TIANJI_DIR))
+    ap.add_argument(
+        "--tianji_source_tag",
+        choices=["tianji", "T2ND_rh2m"],
+        default=os.environ.get("OVERLAP_TIANJI_SOURCE_TAG", "tianji"),
+        help="Which Tianji-input checkpoint/data naming family to use for defaults.",
+    )
+    ap.add_argument("--tianji_data_dir", default=os.environ.get("OVERLAP_TIANJI_DATA_DIR", ""))
     ap.add_argument("--ifs_data_dir", default=os.environ.get("OVERLAP_IFS_DATA_DIR", paired.DEFAULT_IFS_DIR))
     ap.add_argument("--ckpt_dir", default=os.environ.get("OVERLAP_CKPT_DIR", paired.DEFAULT_CKPT_DIR))
     ap.add_argument("--tianji_ckpt", default="")
@@ -146,12 +152,12 @@ def build_specs(args: argparse.Namespace) -> Dict[str, paired.SourceSpec]:
     return {
         "tianji": paired.SourceSpec(
             name="tianji",
-            data_dir=args.tianji_data_dir,
+            data_dir=args.tianji_data_dir or paired.default_tianji_data_dir(args.tianji_source_tag),
             ckpt_path=args.tianji_ckpt
-            or paired.default_ckpt_path("tianji", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
+            or paired.default_ckpt_path(args.tianji_source_tag, args.ckpt_dir, args.checkpoint_tag, args.model_arch),
             scaler_path=args.tianji_scaler
             or paired.default_scaler_path(
-                "tianji",
+                args.tianji_source_tag,
                 args.ckpt_dir,
                 args.window,
                 args.dyn_vars_count,

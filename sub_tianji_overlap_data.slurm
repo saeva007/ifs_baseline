@@ -40,6 +40,11 @@ PM10_FILE="${PM10_FILE:-}"
 PM10_DIR="${PM10_DIR:-}"
 PM25_FILE="${PM25_FILE:-}"
 PM25_DIR="${PM25_DIR:-}"
+RH2M_OVERRIDE_FILE="${RH2M_OVERRIDE_FILE:-}"
+RH2M_OVERRIDE_VAR="${RH2M_OVERRIDE_VAR:-}"
+RH2M_SOURCE_TAG="${RH2M_SOURCE_TAG:-}"
+RH2M_TIME_TOLERANCE_MINUTES="${RH2M_TIME_TOLERANCE_MINUTES:-}"
+RH2M_OVERRIDE_ALLOW_MISSING="${RH2M_OVERRIDE_ALLOW_MISSING:-0}"
 OUT_DIR="${OUT_DIR:-}"
 VAL_LAST_DAYS="${VAL_LAST_DAYS:-}"
 TEST_LAST_DAYS="${TEST_LAST_DAYS:-}"
@@ -47,6 +52,10 @@ GAP_HOURS="${GAP_HOURS:-}"
 CHUNK_WINS="${CHUNK_WINS:-}"
 KEEP_STAGING="${KEEP_STAGING:-0}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
+
+if [[ -z "${OUT_DIR}" && -n "${RH2M_OVERRIDE_FILE}" ]]; then
+    OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${RH2M_SOURCE_TAG:-T2ND_rh2m}"
+fi
 
 PY_ARGS=(--window "${WINDOW}" --step "${STEP}")
 
@@ -70,6 +79,21 @@ if [[ -n "${PM25_FILE}" ]]; then
 fi
 if [[ -n "${PM25_DIR}" ]]; then
     PY_ARGS+=(--pm25_dir "${PM25_DIR}")
+fi
+if [[ -n "${RH2M_OVERRIDE_FILE}" ]]; then
+    PY_ARGS+=(--rh2m_override_file "${RH2M_OVERRIDE_FILE}")
+fi
+if [[ -n "${RH2M_OVERRIDE_VAR}" ]]; then
+    PY_ARGS+=(--rh2m_override_var "${RH2M_OVERRIDE_VAR}")
+fi
+if [[ -n "${RH2M_SOURCE_TAG}" ]]; then
+    PY_ARGS+=(--rh2m_source_tag "${RH2M_SOURCE_TAG}")
+fi
+if [[ -n "${RH2M_TIME_TOLERANCE_MINUTES}" ]]; then
+    PY_ARGS+=(--rh2m_time_tolerance_minutes "${RH2M_TIME_TOLERANCE_MINUTES}")
+fi
+if [[ "${RH2M_OVERRIDE_ALLOW_MISSING}" == "1" || "${RH2M_OVERRIDE_ALLOW_MISSING}" == "true" ]]; then
+    PY_ARGS+=(--rh2m_override_allow_missing)
 fi
 if [[ -n "${OUT_DIR}" ]]; then
     PY_ARGS+=(--out_dir "${OUT_DIR}")
