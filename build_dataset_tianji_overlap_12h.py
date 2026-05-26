@@ -21,8 +21,9 @@ from numpy.lib.stride_tricks import sliding_window_view
 from tqdm import tqdm
 
 from pmst_overlap_common import (
-    OVERLAP_CANONICAL,
-    OVERLAP_SOURCE_FIELDS,
+    FEATURE_SET_CHOICES,
+    FINAL_FEATURE_ORDER,
+    PMST_SOURCE_FIELDS,
     TOTAL_DYN,
     append_pm10_channel,
     append_pm25_channel,
@@ -34,8 +35,9 @@ from pmst_overlap_common import (
     normalize_tianji_times,
     TIANJI_INPUT_TIME_SHIFT_HOURS,
     TIANJI_TIME_ALIGNMENT,
-    describe_available_overlap_features,
+    describe_available_pmst_features,
     precip_accum_to_hourly,
+    resolve_pmst_feature_set,
     scatter_overlap_fields,
     save_chunked_monthtail,
     calculate_zenith_angle,
@@ -198,7 +200,7 @@ def extract_tianji_overlap_fields(
 ) -> dict[str, np.ndarray]:
     """Extract canonical source fields; Tianji precipitation is accumulated and differenced hourly."""
     fields: dict[str, np.ndarray] = {}
-    for name in OVERLAP_SOURCE_FIELDS:
+    for name in PMST_SOURCE_FIELDS:
         if name not in ds_in.data_vars:
             continue
         if name == "PRECIP":
@@ -261,6 +263,16 @@ def main():
     ap.add_argument("--pm25_file", default=PM25_S2_FILE_DEFAULT)
     ap.add_argument("--pm25_dir", default=PM25_DIR_DEFAULT)
     ap.add_argument(
+        "--feature_set",
+        choices=FEATURE_SET_CHOICES,
+        default=os.environ.get("FEATURE_SET", "overlap_full"),
+        help=(
+            "PMST met slots to populate: common_core for the main fair Pangu-compatible "
+            "comparison, overlap_full for the historical Tianji/IFS overlap, source_full "
+            "for source-specific upper-bound runs."
+        ),
+    )
+    ap.add_argument(
         "--out_dir",
         default=os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"),
     )
@@ -314,15 +326,20 @@ def main():
         ds_in = ds_in.rename(rename_map)
 
     rh2m_override_da = load_rh2m_override_dataarray(args.rh2m_override_file, args.rh2m_override_var)
-    available = describe_available_overlap_features(ds_in.data_vars)
+    available = describe_available_pmst_features(ds_in.data_vars)
     if rh2m_override_da is not None:
         available.add("RH2M")
-    missing = [v for v in OVERLAP_CANONICAL if v not in available]
-    if missing:
+    feature_vars = resolve_pmst_feature_set(args.feature_set, available)
+    missing = [v for v in feature_vars if v not in available]
+    if args.feature_set != "source_full" and missing:
         raise KeyError(
-            "Tianji file cannot populate overlap variables: {!r}. "
-            "Available source variables include: {!r}".format(missing, sorted(ds_in.data_vars))
+            "Tianji file cannot populate requested feature_set={!r} variables: {!r}. "
+            "Available source variables include: {!r}".format(args.feature_set, missing, sorted(ds_in.data_vars))
         )
+    print(
+        "[feature-set] {} populates PMST slots: {}".format(args.feature_set, ",".join(feature_vars)),
+        flush=True,
+    )
 
     if "lat" in ds_in:
         lats, lons = ds_in["lat"].values, ds_in["lon"].values
@@ -417,7 +434,7 @@ def main():
                 rh2m_tolerance_minutes=args.rh2m_time_tolerance_minutes,
                 rh2m_allow_missing=args.rh2m_override_allow_missing,
             )
-            X_met = scatter_overlap_fields(tlen, ns, fields)
+            X_met = scatter_overlap_fields(tlen, ns, fields, feature_vars)
             del fields
             gc.collect()
 
@@ -502,7 +519,10 @@ def main():
         ),
         "rh2m_override_allow_missing": bool(args.rh2m_override_allow_missing),
         "rh2m_override_units": "percent_0_100_clipped" if rh2m_override_da is not None else "",
-        "overlap_vars": OVERLAP_CANONICAL,
+        "feature_set": args.feature_set,
+        "overlap_vars": feature_vars,
+        "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
+        "zero_filled_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
         "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",
         "fe_dim": fe_dim,

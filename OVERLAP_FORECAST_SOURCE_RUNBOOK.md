@@ -16,6 +16,10 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 - Static-RNN Slurm path: `sub_ifs_overlap_baseline.slurm` launches the main
   trainer at `/public/home/putianshu/vis_mlp/train/train_static_rnn_lowvis.py`
   directly for `MODEL_ARCH=static_rnn`.
+- Pangu grid-to-station interpolation: `interpolate_pangu_to_stations.py`
+- Generic station-source S2 builder for Pangu/ERA5: `build_dataset_station_source_overlap_12h.py`
+- Single-source Static-RNN evaluator: `sub_static_rnn_overlap_single_eval.slurm`
+- Multi-source RH2M quality analysis: `paper_eval/analyze_multi_source_rh2m_quality.py`
 - Legacy PMST S1 trainer: `train_PMST_s1_overlap_baseline.py`
 - Legacy PMST S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
 - Legacy PMST S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
@@ -23,6 +27,23 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 
 Each data-build path has its own Slurm entry point. Keep
 `sub_ifs_data.slurm` for IFS-input data only.
+
+## Feature-Set Policy
+
+The source-family experiment has two tiers:
+
+- `FEATURE_SET=common_core`: the main fair comparison. It keeps the fixed
+  PMST-27 input layout but only fills source variables shared with Pangu:
+  `RH2M,T2M,MSLP,U10,WSPD10,V10,WDIR10,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,DPD`.
+  Other PMST meteorological slots are zero-filled and recorded in
+  `dataset_build_config.json`.
+- `FEATURE_SET=source_full`: supplementary upper-bound runs. Each source fills
+  all PMST slots it can physically provide; this tests operational potential,
+  not a clean data-source-only comparison.
+
+Keep Tianji product RH2M and T2ND raw RH2M as separate sources. T2ND is included
+in the main `common_core` comparison because the current Tianji product RH2M can
+be less extreme than the raw-mode field.
 
 ## Required Order
 
@@ -110,6 +131,19 @@ If the job fails with disk quota or no-space errors, set `STAGING_DIR` to a
 large temporary filesystem; the staging memmaps alone are about 26 GiB for the
 2025 S2 overlap build.
 
+For the fair source-family run, build Tianji product RH2M and T2ND raw RH2M
+with the common-core feature set:
+
+```bash
+sbatch --export=ALL,FEATURE_SET=common_core sub_tianji_overlap_data.slurm
+
+sbatch --export=ALL,\
+FEATURE_SET=common_core,\
+RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,\
+RH2M_SOURCE_TAG=T2ND_rh2m \
+sub_tianji_overlap_data.slurm
+```
+
 ### 4. Rebuild IFS-Input S2 Overlap Data
 
 ```bash
@@ -131,6 +165,50 @@ specific humidity and pressure level, `DPD` from `T2M-D2M`, and wind speed or
 direction from U/V. IFS `PRECIP` is kept as an hourly amount/rate and is not
 differenced.
 
+For the fair source-family run:
+
+```bash
+sbatch --export=ALL,FEATURE_SET=common_core sub_ifs_data.slurm
+```
+
+### 4.1 Build Pangu-2021 And ERA5-2025 Source Datasets
+
+Pangu first needs grid-to-station interpolation:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+sbatch sub_pangu_station_idw.slurm
+```
+
+Then build its overlap dataset:
+
+```bash
+sbatch --export=ALL,\
+SOURCE_KIND=station_nc,\
+SOURCE_TAG=pangu2021,\
+YEAR=2021,\
+FEATURE_SET=common_core \
+sub_station_source_overlap_data.slurm
+```
+
+The Pangu `RH2M` field is a proxy derived in `pangu_data.py` from the 1000 hPa
+humidity field; keep this note in figure captions and RH2M quality discussion.
+
+ERA5-2025 can be built directly from the station feature directory:
+
+```bash
+sbatch --export=ALL,\
+SOURCE_KIND=era5_feature_dir,\
+SOURCE_TAG=era5_2025,\
+YEAR=2025,\
+FEATURE_SET=common_core \
+sub_station_source_overlap_data.slurm
+```
+
+For supplementary upper-bound datasets, repeat the same commands with
+`FEATURE_SET=source_full` and keep their outputs separate from the main
+common-core table.
+
 ### 5. Train Tianji-Input S2
 
 ```bash
@@ -146,6 +224,22 @@ sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m sub_ifs_overlap_baseline.slur
 Its default Static-RNN output names are
 `exp_overlap_static_rnn_s2_T2ND_rh2m_pm10_pm25_S2_PhaseB_best_score.pt` and
 `robust_scaler_exp_overlap_static_rnn_s2_T2ND_rh2m_pm10_pm25_s2_w12_dyn27_pm.pkl`.
+
+For the common-core source-family comparison:
+
+```bash
+for exp in s2_tianji_common_core s2_tianji_T2ND_rh2m_common_core s2_ifs_common_core s2_pangu2021_common_core s2_era5_2025_common_core; do
+  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+done
+```
+
+For supplementary upper-bound runs:
+
+```bash
+for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_pangu2021_source_full s2_era5_2025_source_full; do
+  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+done
+```
 
 ### 6. Train IFS-Input S2
 
@@ -188,6 +282,25 @@ explicit `--tianji_data_dir`, `--tianji_ckpt`, and `--tianji_scaler` paths.
 Feature replacement runs by default for
 `RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
 overlap datasets.
+
+For a single-source smoke test of a trained Static-RNN source model:
+
+```bash
+sbatch --export=ALL,SOURCE_TAG=T2ND_rh2m,FEATURE_SET=common_core,LIMIT_SAMPLES=2000 sub_static_rnn_overlap_single_eval.slurm
+```
+
+For RH2M extremeness and observation-anchored quality across all common-core
+sources:
+
+```bash
+sbatch --export=ALL,FEATURE_SET=common_core sub_rh2m_multi_source_quality.slurm
+```
+
+The RH2M analysis writes:
+
+- `rh2m_source_quality_metrics.csv`: MAE/RMSE/correlation, RH >= 90% hit/false alarm, and upper quantiles.
+- `rh2m_source_pairwise_distribution.csv`: paired source-source RH2M differences within the same year group.
+- `rh2m_tail_curve_<group>.csv` and `fig_rh2m_tail_multi_source_<group>.*`: near-saturation tail recovery curves.
 
 ### 8. Run The Mean-Softmax Ensemble Check
 

@@ -40,6 +40,21 @@ DEFAULT_TIANJI_T2ND_RH2M_DIR = os.path.join(
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
+DEFAULT_S2_DIRS = {
+    "tianji": DEFAULT_TIANJI_DIR,
+    "T2ND_rh2m": DEFAULT_TIANJI_T2ND_RH2M_DIR,
+    "ifs": DEFAULT_IFS_DIR,
+    "tianji_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"),
+    "T2ND_rh2m_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"),
+    "ifs_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"),
+    "pangu2021_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"),
+    "era5_2025_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"),
+    "tianji_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"),
+    "T2ND_rh2m_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full"),
+    "ifs_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"),
+    "pangu2021_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_source_full"),
+    "era5_2025_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full"),
+}
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
 DEFAULT_OVERLAP_S2_A_STEPS = "12000"
 DEFAULT_OVERLAP_S2_B_STEPS = "40000"
@@ -61,7 +76,7 @@ def parse_args() -> tuple[argparse.Namespace, List[str]]:
     parser.add_argument(
         "--data_source",
         "--data-source",
-        choices=["tianji", "T2ND_rh2m", "ifs"],
+        choices=sorted(DEFAULT_S2_DIRS),
         default="tianji",
     )
     parser.add_argument("--s1_data_dir", "--s1-data-dir", default=os.environ.get("OVERLAP_S1_DATA_DIR", DEFAULT_S1_DIR))
@@ -91,11 +106,7 @@ def parse_args() -> tuple[argparse.Namespace, List[str]]:
 def resolve_s2_data_dir(args: argparse.Namespace) -> str:
     if args.s2_data_dir:
         return args.s2_data_dir
-    if args.data_source == "ifs":
-        return DEFAULT_IFS_DIR
-    if args.data_source == "T2ND_rh2m":
-        return DEFAULT_TIANJI_T2ND_RH2M_DIR
-    return DEFAULT_TIANJI_DIR
+    return DEFAULT_S2_DIRS[args.data_source]
 
 
 def resolve_run_id(args: argparse.Namespace) -> str:

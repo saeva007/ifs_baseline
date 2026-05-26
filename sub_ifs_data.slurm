@@ -55,9 +55,19 @@ TEST_LAST_DAYS="${TEST_LAST_DAYS:-}"
 GAP_HOURS="${GAP_HOURS:-}"
 WINDOW_CHUNK="${WINDOW_CHUNK:-}"
 NO_AUTO_IFS_INTERP="${NO_AUTO_IFS_INTERP:-0}"
+FEATURE_SET="${FEATURE_SET:-overlap_full}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 
 PY_ARGS=(--year "${YEAR}" --window "${WINDOW}" --step "${STEP}")
+PY_ARGS+=(--feature_set "${FEATURE_SET}")
+
+if [[ -z "${OUT_DIR}" ]]; then
+    if [[ "${FEATURE_SET}" == "common_core" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
+    elif [[ "${FEATURE_SET}" == "source_full" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"
+    fi
+fi
 
 if [[ -n "${IFS_INTERP_NC}" ]]; then
     PY_ARGS+=(--ifs_interp_nc "${IFS_INTERP_NC}")

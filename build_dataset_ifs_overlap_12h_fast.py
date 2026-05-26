@@ -35,8 +35,9 @@ from numpy.lib.stride_tricks import sliding_window_view
 from scipy.spatial import cKDTree
 
 from pmst_overlap_common import (
-    OVERLAP_CANONICAL,
-    OVERLAP_SOURCE_FIELDS,
+    FEATURE_SET_CHOICES,
+    FINAL_FEATURE_ORDER,
+    PMST_SOURCE_FIELDS,
     PM10_IDX,
     PM25_IDX,
     PMST_MET_DIM,
@@ -45,7 +46,7 @@ from pmst_overlap_common import (
     build_station_reindex_map,
     compute_fog_features_pmst,
     cyclical_time_features,
-    describe_available_overlap_features,
+    describe_available_pmst_features,
     get_monthly_split_mask_last_days,
     load_pm10_dataarray,
     load_pm25_dataarray,
@@ -53,6 +54,7 @@ from pmst_overlap_common import (
     TIANJI_INPUT_TIME_SHIFT_HOURS,
     TIANJI_TIME_ALIGNMENT,
     normalize_var_coord,
+    resolve_pmst_feature_set,
     scatter_overlap_fields,
     calculate_zenith_angle,
 )
@@ -291,7 +293,12 @@ def _load_single_interp(path_nc: str):
             raise KeyError(f"{path_nc}: expected data var 'ifs_interp', got {list(ds.data_vars)}")
         return ds["ifs_interp"].values.astype(np.float32), pd.DatetimeIndex(ds["time"].values), ds["station_id"].values,[normalize_var_coord(v) for v in ds["variable"].values], path_nc
 
-def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeIndex, station_ids_tj: np.ndarray) -> np.ndarray:
+def _fill_from_interp_nc_multi(
+    paths_nc: Sequence[str],
+    tj_times: pd.DatetimeIndex,
+    station_ids_tj: np.ndarray,
+    feature_vars: Sequence[str],
+) -> np.ndarray:
     print(f"[INFO] Merging {len(paths_nc)} interp files...", flush=True)
     merged_var_names, chunks = [],[]
     results = [_load_single_interp(p) for p in paths_nc]
@@ -323,11 +330,11 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
 
     nt, ns = len(tj_times), len(station_ids_tj)
     fields = {}
-    available = describe_available_overlap_features(merged_var_names)
-    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    available = describe_available_pmst_features(merged_var_names)
+    missing = [name for name in feature_vars if name not in available]
     if missing:
-        raise KeyError(f"Interpolated IFS files cannot populate {missing!r}; have {merged_var_names}")
-    for name in OVERLAP_SOURCE_FIELDS:
+        raise KeyError(f"Interpolated IFS files cannot populate feature_set variables {missing!r}; have {merged_var_names}")
+    for name in PMST_SOURCE_FIELDS:
         if name not in merged_var_names:
             continue
         vi = merged_var_names.index(name)
@@ -335,7 +342,7 @@ def _fill_from_interp_nc_multi(paths_nc: Sequence[str], tj_times: pd.DatetimeInd
         if np.any(valid_t_mask): slot[valid_t_mask, :] = big[valid_time_idx[:, None], st_cols[None, :], vi]
         fields[name] = slot
     del big; gc.collect()
-    return scatter_overlap_fields(nt, ns, fields)
+    return scatter_overlap_fields(nt, ns, fields, feature_vars)
 
 # ================== 核心优化组件 ==================
 def _extract_pm_channel(pm_da: Optional[xr.DataArray], times: pd.DatetimeIndex, station_ids: np.ndarray) -> np.ndarray:
@@ -372,7 +379,8 @@ def _extract_pm_channel(pm_da: Optional[xr.DataArray], times: pd.DatetimeIndex, 
 @_timer
 def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex, 
                             lats: np.ndarray, lons: np.ndarray, 
-                            buffer_array: np.ndarray, start_idx: int):
+                            buffer_array: np.ndarray, start_idx: int,
+                            feature_vars: Sequence[str]):
     """Xarray -> station-first memmap injection in PMST 27-channel layout."""
     _ = start_idx
     lat_idx = lon_idx = None
@@ -417,11 +425,11 @@ def fetch_ifs_data_in_place(ifs_root: str, year: int, tj_times: pd.DatetimeIndex
         finally:
             ds.close()
 
-    available = describe_available_overlap_features(fields.keys())
-    missing = [name for name in OVERLAP_CANONICAL if name not in available]
+    available = describe_available_pmst_features(fields.keys())
+    missing = [name for name in feature_vars if name not in available]
     if missing:
-        raise KeyError(f"Gridded IFS inputs cannot populate overlap variable(s): {missing!r}")
-    X_met = scatter_overlap_fields(len(tj_times), len(lats), fields)
+        raise KeyError(f"Gridded IFS inputs cannot populate feature_set variable(s): {missing!r}")
+    X_met = scatter_overlap_fields(len(tj_times), len(lats), fields, feature_vars)
     buffer_array[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
     return PMST_MET_DIM
 
@@ -580,10 +588,26 @@ def main():
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
     ap.add_argument("--window_chunk", type=int, default=WINDOW_CHUNK_DEFAULT)
+    ap.add_argument(
+        "--feature_set",
+        choices=FEATURE_SET_CHOICES,
+        default=os.environ.get("FEATURE_SET", "overlap_full"),
+        help=(
+            "PMST met slots to populate: common_core for the main fair Pangu-compatible "
+            "comparison, overlap_full for the historical IFS/Tianji overlap, source_full "
+            "for source-specific upper-bound runs."
+        ),
+    )
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"[INFO] Booting streaming builder with window_chunk={args.window_chunk}.", flush=True)
+    available_from_map = describe_available_pmst_features(IFS_MAP.keys())
+    feature_vars = resolve_pmst_feature_set(args.feature_set, available_from_map)
+    print(
+        "[feature-set] {} populates PMST slots: {}".format(args.feature_set, ",".join(feature_vars)),
+        flush=True,
+    )
 
     with xr.open_dataset(args.tianji_file, engine="h5netcdf") as ds_tj:
         print(
@@ -646,13 +670,13 @@ def main():
             print(f"[INFO] Using interpolated IFS files: {len(interp_paths)}", flush=True)
             for p in interp_paths:
                 print(f"  -> {p}", flush=True)
-            X_met = _fill_from_interp_nc_multi(interp_paths, times, stations)
+            X_met = _fill_from_interp_nc_multi(interp_paths, times, stations, feature_vars)
             X_dyn[:, :, :PMST_MET_DIM] = X_met.transpose(1, 0, 2)
             del X_met; gc.collect()
             source_tag = "ifs_interp_nc"
         else:
             print(f"[INFO] Using gridded IFS root: {args.ifs_root}", flush=True)
-            fetch_ifs_data_in_place(args.ifs_root, args.year, times, lats, lons, X_dyn, 0)
+            fetch_ifs_data_in_place(args.ifs_root, args.year, times, lats, lons, X_dyn, 0, feature_vars)
             source_tag = "ifs_gridded"
 
         # 2. 填充 Zenith 与 PM
@@ -710,7 +734,10 @@ def main():
         "ifs_interp_nc_list": interp_paths if interp_paths else None,
         "ifs_root": args.ifs_root,
         "year": args.year,
-        "overlap_vars": OVERLAP_CANONICAL,
+        "feature_set": args.feature_set,
+        "overlap_vars": feature_vars,
+        "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available_from_map)],
+        "zero_filled_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "ifs_map_gridded": {
             k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
             for k, v in IFS_MAP.items()

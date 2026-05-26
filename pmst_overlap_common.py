@@ -86,6 +86,26 @@ OVERLAP_AUXILIARY_FIELDS: List[str] = ["D2M"]
 OVERLAP_SOURCE_FIELDS: List[str] = list(
     dict.fromkeys([*OVERLAP_CANONICAL, *OVERLAP_AUXILIARY_FIELDS])
 )
+COMMON_CORE_PMST_FEATURES: List[str] = [
+    "RH2M",
+    "T2M",
+    "MSLP",
+    "U10",
+    "WSPD10",
+    "V10",
+    "WDIR10",
+    "RH_925",
+    "U_925",
+    "WSPD925",
+    "V_925",
+    "DP_1000",
+    "DP_925",
+    "Q_1000",
+    "Q_925",
+    "DPD",
+]
+PMST_SOURCE_FIELDS: List[str] = list(dict.fromkeys([*FINAL_FEATURE_ORDER, *OVERLAP_AUXILIARY_FIELDS]))
+FEATURE_SET_CHOICES: Tuple[str, ...] = ("common_core", "overlap_full", "source_full")
 
 CANONICAL_VAR_ALIASES: Dict[str, str] = {
     "D2M": "D2M",
@@ -280,9 +300,9 @@ def _field_array(
     return arr
 
 
-def describe_available_overlap_features(field_names: Iterable[str]) -> Set[str]:
+def describe_available_pmst_features(field_names: Iterable[str]) -> Set[str]:
     names = {normalize_var_coord(v) for v in field_names}
-    available = {name for name in names if name in OVERLAP_CANONICAL and name in PMST_INDEX}
+    available = {name for name in names if name in PMST_INDEX}
     if {"U10", "V10"}.issubset(names):
         available.update({"WSPD10", "WDIR10"})
     if {"U_925", "V_925"}.issubset(names):
@@ -295,76 +315,116 @@ def describe_available_overlap_features(field_names: Iterable[str]) -> Set[str]:
         available.add("DP_1000")
     if "Q_925" in names:
         available.add("DP_925")
-    return available & set(OVERLAP_CANONICAL)
+    if {"T_925", "T2M"}.issubset(names):
+        available.add("INVERSION")
+    return available & set(FINAL_FEATURE_ORDER)
+
+
+def describe_available_overlap_features(field_names: Iterable[str]) -> Set[str]:
+    return describe_available_pmst_features(field_names) & set(OVERLAP_CANONICAL)
+
+
+def resolve_pmst_feature_set(feature_set: str, available_features: Optional[Iterable[str]] = None) -> List[str]:
+    key = str(feature_set or "overlap_full").strip().lower().replace("-", "_")
+    if key in {"common", "core", "pangu_core", "common_overlap"}:
+        key = "common_core"
+    if key in {"full", "overlap", "overlap_canonical"}:
+        key = "overlap_full"
+    if key in {"all", "all_available", "source"}:
+        key = "source_full"
+    if key == "common_core":
+        return list(COMMON_CORE_PMST_FEATURES)
+    if key == "overlap_full":
+        return list(OVERLAP_CANONICAL)
+    if key == "source_full":
+        if available_features is None:
+            return list(FINAL_FEATURE_ORDER)
+        available = {normalize_var_coord(v) for v in available_features}
+        return [name for name in FINAL_FEATURE_ORDER if name in available]
+    raise ValueError(f"Unknown feature_set={feature_set!r}; expected one of {FEATURE_SET_CHOICES}")
 
 
 def scatter_overlap_fields(
     nt: int,
     ns: int,
     fields: Dict[str, np.ndarray],
+    feature_names: Optional[Iterable[str]] = None,
 ) -> np.ndarray:
     """
     fields: canonical/source name -> (nt, ns) float32 array.
     Returns X_met (nt, ns, 24) with shared PMST slots filled and derived fields added.
     """
     fields = {normalize_var_coord(k): v for k, v in fields.items()}
+    enabled = {normalize_var_coord(v) for v in (feature_names if feature_names is not None else OVERLAP_CANONICAL)}
+    enabled = {v for v in enabled if v in PMST_INDEX}
     x = np.zeros((nt, ns, PMST_MET_DIM), dtype=np.float32)
-    for name in OVERLAP_CANONICAL:
-        if name in {"WSPD10", "WDIR10", "WSPD925", "RH2M", "DP_1000", "DP_925", "DPD"}:
+    derived = {"WSPD10", "WDIR10", "WSPD925", "RH2M", "DP_1000", "DP_925", "DPD", "INVERSION"}
+    for name in enabled:
+        if name in derived:
             continue
         if name not in fields:
             continue
         arr = _field_array(fields, name, nt, ns)
         if arr is not None:
-            x[:, :, OVERLAP_PMST_INDICES[name]] = arr
+            x[:, :, PMST_INDEX[name]] = arr
 
     t2m = _field_array(fields, "T2M", nt, ns)
     rh2m = _field_array(fields, "RH2M", nt, ns)
     d2m = _field_array(fields, "D2M", nt, ns)
-    if rh2m is not None:
+    if "RH2M" in enabled and rh2m is not None:
         x[:, :, RH2M_IDX] = rh2m
-    elif t2m is not None and d2m is not None:
+    elif "RH2M" in enabled and t2m is not None and d2m is not None:
         x[:, :, RH2M_IDX] = calculate_rh_from_dewpoint(t2m, d2m)
     if d2m is None and t2m is not None and rh2m is not None:
         d2m = calculate_dewpoint_from_rh(t2m, rh2m)
-    if t2m is not None and d2m is not None:
+    if "DPD" in enabled and t2m is not None and d2m is not None:
         x[:, :, DPD_IDX] = (t2m - d2m).astype(np.float32)
 
     q1000 = _field_array(fields, "Q_1000", nt, ns)
-    if "DP_1000" in fields:
+    if "DP_1000" in enabled and "DP_1000" in fields:
         x[:, :, DP1000_IDX] = _field_array(fields, "DP_1000", nt, ns)
-    elif q1000 is not None:
+    elif "DP_1000" in enabled and q1000 is not None:
         x[:, :, DP1000_IDX] = calculate_dewpoint_from_specific_humidity(q1000, 1000.0)
 
     q925 = _field_array(fields, "Q_925", nt, ns)
-    if "DP_925" in fields:
+    if "DP_925" in enabled and "DP_925" in fields:
         x[:, :, DP925_IDX] = _field_array(fields, "DP_925", nt, ns)
-    elif q925 is not None:
+    elif "DP_925" in enabled and q925 is not None:
         x[:, :, DP925_IDX] = calculate_dewpoint_from_specific_humidity(q925, 925.0)
 
     u10 = _field_array(fields, "U10", nt, ns)
     v10 = _field_array(fields, "V10", nt, ns)
-    if u10 is not None and v10 is not None:
+    if ("WSPD10" in enabled or "WDIR10" in enabled) and u10 is not None and v10 is not None:
         speed10, dir10 = calculate_wind_speed_dir(u10, v10)
-        x[:, :, WSPD10_IDX] = speed10
-        x[:, :, WDIR10_IDX] = dir10
+        if "WSPD10" in enabled:
+            x[:, :, WSPD10_IDX] = speed10
+        if "WDIR10" in enabled:
+            x[:, :, WDIR10_IDX] = dir10
     else:
         wspd10 = _field_array(fields, "WSPD10", nt, ns)
         wdir10 = _field_array(fields, "WDIR10", nt, ns)
-        if wspd10 is not None:
+        if "WSPD10" in enabled and wspd10 is not None:
             x[:, :, WSPD10_IDX] = wspd10
-        if wdir10 is not None:
+        if "WDIR10" in enabled and wdir10 is not None:
             x[:, :, WDIR10_IDX] = wdir10
 
     u925 = _field_array(fields, "U_925", nt, ns)
     v925 = _field_array(fields, "V_925", nt, ns)
-    if u925 is not None and v925 is not None:
+    if "WSPD925" in enabled and u925 is not None and v925 is not None:
         speed925, _ = calculate_wind_speed_dir(u925, v925)
         x[:, :, WSPD925_IDX] = speed925
     else:
         wspd925 = _field_array(fields, "WSPD925", nt, ns)
-        if wspd925 is not None:
+        if "WSPD925" in enabled and wspd925 is not None:
             x[:, :, WSPD925_IDX] = wspd925
+    if "INVERSION" in enabled:
+        inv = _field_array(fields, "INVERSION", nt, ns)
+        if inv is not None:
+            x[:, :, PMST_INDEX["INVERSION"]] = inv
+        else:
+            t925 = _field_array(fields, "T_925", nt, ns)
+            if t925 is not None and t2m is not None:
+                x[:, :, PMST_INDEX["INVERSION"]] = (t925 - t2m).astype(np.float32)
     return x
 
 
