@@ -82,7 +82,7 @@ OVERLAP_CANONICAL: List[str] = [
     "DPD",
 ]
 
-OVERLAP_AUXILIARY_FIELDS: List[str] = ["D2M"]
+OVERLAP_AUXILIARY_FIELDS: List[str] = ["D2M", "T_1000", "RH_1000"]
 OVERLAP_SOURCE_FIELDS: List[str] = list(
     dict.fromkeys([*OVERLAP_CANONICAL, *OVERLAP_AUXILIARY_FIELDS])
 )
@@ -114,6 +114,10 @@ CANONICAL_VAR_ALIASES: Dict[str, str] = {
     "DEW_POINT_2M": "D2M",
     "RH925": "RH_925",
     "R925": "RH_925",
+    "RH1000": "RH_1000",
+    "R1000": "RH_1000",
+    "T925": "T_925",
+    "T1000": "T_1000",
     "U925": "U_925",
     "V925": "V_925",
     "Q1000": "Q_1000",
@@ -252,6 +256,16 @@ def calculate_dewpoint_from_specific_humidity(q: np.ndarray, pressure_hpa: float
     return (td_c + 273.15).astype(np.float32)
 
 
+def calculate_specific_humidity(t: np.ndarray, rh: np.ndarray, pressure_hpa: float) -> np.ndarray:
+    """Return specific humidity (kg kg-1) from temperature (K), RH (%), and pressure."""
+    t_c = np.asarray(t, dtype=np.float32) - 273.15
+    rh_frac = np.clip(np.asarray(rh, dtype=np.float32) / 100.0, 0.0, 1.0)
+    es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
+    e = es * rh_frac
+    r = 0.622 * e / np.maximum(float(pressure_hpa) - e, 1e-6)
+    return np.clip(r / np.maximum(1.0 + r, 1e-8), 0.0, 0.08).astype(np.float32)
+
+
 def calculate_wind_speed_dir(u: np.ndarray, v: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     u_arr = np.asarray(u, dtype=np.float32)
     v_arr = np.asarray(v, dtype=np.float32)
@@ -313,8 +327,12 @@ def describe_available_pmst_features(field_names: Iterable[str]) -> Set[str]:
         available.add("DPD")
     if "Q_1000" in names:
         available.add("DP_1000")
+    if {"T_1000", "RH_1000"}.issubset(names):
+        available.update({"Q_1000", "DP_1000"})
     if "Q_925" in names:
         available.add("DP_925")
+    if {"T_925", "RH_925"}.issubset(names):
+        available.update({"Q_925", "DP_925"})
     if {"T_925", "T2M"}.issubset(names):
         available.add("INVERSION")
     return available & set(FINAL_FEATURE_ORDER)
@@ -358,7 +376,7 @@ def scatter_overlap_fields(
     enabled = {normalize_var_coord(v) for v in (feature_names if feature_names is not None else OVERLAP_CANONICAL)}
     enabled = {v for v in enabled if v in PMST_INDEX}
     x = np.zeros((nt, ns, PMST_MET_DIM), dtype=np.float32)
-    derived = {"WSPD10", "WDIR10", "WSPD925", "RH2M", "DP_1000", "DP_925", "DPD", "INVERSION"}
+    derived = {"WSPD10", "WDIR10", "WSPD925", "RH2M", "Q_1000", "Q_925", "DP_1000", "DP_925", "DPD", "INVERSION"}
     for name in enabled:
         if name in derived:
             continue
@@ -381,12 +399,26 @@ def scatter_overlap_fields(
         x[:, :, DPD_IDX] = (t2m - d2m).astype(np.float32)
 
     q1000 = _field_array(fields, "Q_1000", nt, ns)
+    if q1000 is None:
+        t1000 = _field_array(fields, "T_1000", nt, ns)
+        rh1000 = _field_array(fields, "RH_1000", nt, ns)
+        if t1000 is not None and rh1000 is not None:
+            q1000 = calculate_specific_humidity(t1000, rh1000, 1000.0)
+    if "Q_1000" in enabled and q1000 is not None:
+        x[:, :, Q1000_IDX] = q1000
     if "DP_1000" in enabled and "DP_1000" in fields:
         x[:, :, DP1000_IDX] = _field_array(fields, "DP_1000", nt, ns)
     elif "DP_1000" in enabled and q1000 is not None:
         x[:, :, DP1000_IDX] = calculate_dewpoint_from_specific_humidity(q1000, 1000.0)
 
     q925 = _field_array(fields, "Q_925", nt, ns)
+    if q925 is None:
+        t925 = _field_array(fields, "T_925", nt, ns)
+        rh925 = _field_array(fields, "RH_925", nt, ns)
+        if t925 is not None and rh925 is not None:
+            q925 = calculate_specific_humidity(t925, rh925, 925.0)
+    if "Q_925" in enabled and q925 is not None:
+        x[:, :, Q925_IDX] = q925
     if "DP_925" in enabled and "DP_925" in fields:
         x[:, :, DP925_IDX] = _field_array(fields, "DP_925", nt, ns)
     elif "DP_925" in enabled and q925 is not None:

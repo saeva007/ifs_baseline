@@ -56,6 +56,15 @@ def _load_stations(target_file: str, year: int) -> Tuple[np.ndarray, np.ndarray,
         lons = np.asarray(ds[lon_name].values, dtype=np.float64)
         if lats.ndim != 1 or lons.ndim != 1:
             raise ValueError("Station lat/lon must be 1D arrays.")
+        finite = np.isfinite(lats) & np.isfinite(lons)
+        if not finite.all():
+            n_bad = int((~finite).sum())
+            print(f"[WARN] drop {n_bad} stations with non-finite lat/lon from {target_file}", flush=True)
+            station_ids = station_ids[finite]
+            lats = lats[finite]
+            lons = lons[finite]
+        if len(station_ids) == 0:
+            raise ValueError(f"No finite station lat/lon pairs found in {target_file}.")
         return station_ids, lats, lons
     finally:
         ds.close()
@@ -75,13 +84,25 @@ def _grid_points(ds: xr.Dataset) -> Tuple[str, str, np.ndarray, np.ndarray, np.n
 
 
 def _station_neighbors(points: np.ndarray, station_lats: np.ndarray, station_lons: np.ndarray, k: int, eps: float) -> Tuple[np.ndarray, np.ndarray]:
-    tree = cKDTree(points)
-    dist, idx = tree.query(np.column_stack([station_lats, station_lons]), k=max(1, int(k)))
+    points = np.asarray(points, dtype=np.float64)
+    station_xy = np.column_stack([station_lats, station_lons]).astype(np.float64)
+    if not np.isfinite(station_xy).all():
+        raise ValueError("Station lat/lon passed to KDTree query still contain nan or inf values.")
+    finite_points = np.isfinite(points).all(axis=1)
+    point_idx = np.flatnonzero(finite_points)
+    if len(point_idx) == 0:
+        raise ValueError("Pangu grid has no finite lat/lon points for station interpolation.")
+    if len(point_idx) != len(points):
+        print(f"[WARN] drop {len(points) - len(point_idx)} non-finite Pangu grid points before KDTree.", flush=True)
+    tree = cKDTree(points[point_idx])
+    k_eff = min(max(1, int(k)), len(point_idx))
+    dist, idx = tree.query(station_xy, k=k_eff)
     dist = np.asarray(dist, dtype=np.float64)
     idx = np.asarray(idx, dtype=np.int64)
     if idx.ndim == 1:
         idx = idx[:, None]
         dist = dist[:, None]
+    idx = point_idx[idx]
     weights = 1.0 / np.maximum(dist, float(eps)) ** 2
     weights = weights / np.sum(weights, axis=1, keepdims=True)
     return idx, weights.astype(np.float32)

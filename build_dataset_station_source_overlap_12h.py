@@ -33,6 +33,7 @@ from pmst_overlap_common import (
     build_static_features,
     calculate_dewpoint_from_rh,
     calculate_rh_from_dewpoint,
+    calculate_specific_humidity,
     calculate_wind_speed_dir,
     compute_fog_features_pmst,
     cyclical_time_features,
@@ -217,6 +218,10 @@ def _ensure_derived(ds: xr.Dataset) -> xr.Dataset:
     if "WSPD925" not in ds and "U_925" in ds and "V_925" in ds:
         speed, _ = calculate_wind_speed_dir(ds["U_925"], ds["V_925"])
         assign_like("WSPD925", "U_925", speed)
+    if "Q_1000" not in ds and "T_1000" in ds and "RH_1000" in ds:
+        assign_like("Q_1000", "T_1000", calculate_specific_humidity(ds["T_1000"], ds["RH_1000"], 1000.0))
+    if "Q_925" not in ds and "T_925" in ds and "RH_925" in ds:
+        assign_like("Q_925", "T_925", calculate_specific_humidity(ds["T_925"], ds["RH_925"], 925.0))
     if "DP_1000" not in ds:
         if "Q_1000" in ds:
             pass
