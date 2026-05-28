@@ -2383,16 +2383,72 @@ def main() -> None:
     metrics_i = compute_metrics(y, i_preds, probs=i_probs)
     extra_alignment: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     extra_metrics: Dict[str, Dict[str, float]] = {}
+    alignment_rows: List[Dict[str, object]] = [
+        {
+            "source": "tianji",
+            "reference_source": "tianji",
+            "test_rows": int(len(evals["tianji"].test_targets)),
+            "paired_rows": int(len(y)),
+            "sample_scope": "tianji_ifs_paired_test",
+            "alignment_status": "reference",
+            "alignment_note": "",
+        },
+        {
+            "source": "ifs",
+            "reference_source": "tianji",
+            "test_rows": int(len(evals["ifs"].test_targets)),
+            "paired_rows": int(len(y)),
+            "sample_scope": "tianji_ifs_paired_test",
+            "alignment_status": "paired",
+            "alignment_note": "",
+        },
+    ]
     for source in specs:
         if source in {"tianji", "ifs"}:
             continue
-        idx_base, idx_src, _ = align_test_outputs(evals["tianji"], evals[source], args.strict_meta)
-        validate_paired_labels(evals["tianji"], evals[source], idx_base, idx_src)
+        try:
+            idx_base, idx_src, _ = align_test_outputs(evals["tianji"], evals[source], args.strict_meta)
+            validate_paired_labels(evals["tianji"], evals[source], idx_base, idx_src)
+        except RuntimeError as exc:
+            print(
+                f"[WARN] {source} has no usable paired test intersection with Tianji; "
+                "using its native full test split for source-level metrics only. "
+                f"Reason: {exc}",
+                flush=True,
+            )
+            extra_metrics[source] = compute_metrics(
+                evals[source].test_targets,
+                evals[source].test_preds,
+                probs=evals[source].test_probs,
+            )
+            alignment_rows.append(
+                {
+                    "source": source,
+                    "reference_source": "tianji",
+                    "test_rows": int(len(evals[source].test_targets)),
+                    "paired_rows": 0,
+                    "sample_scope": "native_full_test",
+                    "alignment_status": "not_paired",
+                    "alignment_note": str(exc),
+                }
+            )
+            continue
         extra_alignment[source] = (idx_base, idx_src)
         extra_metrics[source] = compute_metrics(
             evals["tianji"].test_targets[idx_base],
             evals[source].test_preds[idx_src],
             probs=evals[source].test_probs[idx_src],
+        )
+        alignment_rows.append(
+            {
+                "source": source,
+                "reference_source": "tianji",
+                "test_rows": int(len(evals[source].test_targets)),
+                "paired_rows": int(len(idx_src)),
+                "sample_scope": "paired_to_tianji_test",
+                "alignment_status": "paired",
+                "alignment_note": "",
+            }
         )
 
     overall_rows = [
@@ -2409,6 +2465,8 @@ def main() -> None:
                     "model_arch": args.model_arch,
                     "checkpoint": evals["tianji"].spec.ckpt_path,
                     "data_dir": evals["tianji"].spec.data_dir,
+                    "matched_rows": int(len(y)),
+                    "sample_scope": "tianji_ifs_paired_test",
                 },
             ),
         rows_from_metrics(
@@ -2424,17 +2482,24 @@ def main() -> None:
                     "model_arch": args.model_arch,
                     "checkpoint": evals["ifs"].spec.ckpt_path,
                     "data_dir": evals["ifs"].spec.data_dir,
+                    "matched_rows": int(len(y)),
+                    "sample_scope": "tianji_ifs_paired_test",
                 },
             ),
     ]
     for source, metrics in extra_metrics.items():
-        idx_base, _ = extra_alignment[source]
+        idx_base = extra_alignment[source][0] if source in extra_alignment else np.arange(
+            len(evals[source].test_targets), dtype=np.int64
+        )
+        sample_scope = "paired_to_tianji_test" if source in extra_alignment else "native_full_test"
         overall_rows.append(
             rows_from_metrics(
                 source,
                 metrics,
                 {
                     "matched_rows": int(len(idx_base)),
+                    "paired_rows": int(len(extra_alignment[source][0])) if source in extra_alignment else 0,
+                    "sample_scope": sample_scope,
                     "temperature": evals[source].temperature,
                     "fog_threshold": evals[source].thresholds.get("fog"),
                     "mist_threshold": evals[source].thresholds.get("mist"),
@@ -2449,6 +2514,8 @@ def main() -> None:
         )
     overall_df = pd.DataFrame(overall_rows)
     overall_df.to_csv(out_dir / "overall_metrics.csv", index=False)
+    alignment_df = pd.DataFrame(alignment_rows)
+    alignment_df.to_csv(out_dir / "source_alignment_summary.csv", index=False)
 
     validation_rows = [
         rows_from_metrics(
@@ -2723,6 +2790,7 @@ def main() -> None:
         "model_arch": args.model_arch,
         "build_configs": build_configs,
         "paired_rows": int(len(y)),
+        "source_alignment": alignment_rows,
         "evaluation_scope": "test split; validation split is used only for calibration/threshold selection",
         "source_thresholds": {
             source: {
@@ -2770,10 +2838,14 @@ def main() -> None:
     )
 
     if not args.no_figures:
-        plot_key_metrics_figure(
-            ifs_diag_metrics_df if ifs_diag_metrics_df is not None and not ifs_diag_metrics_df.empty else overall_df,
-            out_dir,
-        )
+        plot_df = overall_df.copy()
+        if ifs_diag_metrics_df is not None and not ifs_diag_metrics_df.empty:
+            diag_only = ifs_diag_metrics_df.loc[
+                ifs_diag_metrics_df["source"].astype(str) == "ifs_diagnostic"
+            ].copy()
+            if not diag_only.empty:
+                plot_df = pd.concat([plot_df, diag_only], ignore_index=True, sort=False)
+        plot_key_metrics_figure(plot_df, out_dir)
 
     print("\n[OK] wrote paired evaluation outputs to:", out_dir, flush=True)
     print(delta_df[delta_df["metric"].isin(BOOTSTRAP_DEFAULT_METRICS)].to_string(index=False), flush=True)
