@@ -32,8 +32,9 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 SCRIPT_PATH="${SCRIPT_PATH:-${BASE}/paper_eval/analyze_multi_source_rh2m_quality.py}"
 FEATURE_SET="${FEATURE_SET:-common_core}"
+FEATURES="${FEATURES:-RH2M,Q_1000,DP_1000,RH_925,PRECIP}"
 OBS_ROOT="${OBS_ROOT:-${BASE}/auto_station}"
-OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/rh2m_multi_source_quality_${FEATURE_SET}}"
+OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/key_variable_multi_source_quality_${FEATURE_SET}}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
@@ -42,7 +43,7 @@ SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 
 mkdir -p "${BASE}/ifs_baseline/logs"
 
-CMD=(python "${SCRIPT_PATH}" --sources "${SOURCES}" --obs_root "${OBS_ROOT}" --out_dir "${OUT_DIR}")
+CMD=(python "${SCRIPT_PATH}" --sources "${SOURCES}" --obs_root "${OBS_ROOT}" --out_dir "${OUT_DIR}" --features "${FEATURES}")
 if [[ -n "${LIMIT_SAMPLES}" ]]; then
     CMD+=(--limit_samples "${LIMIT_SAMPLES}")
 fi

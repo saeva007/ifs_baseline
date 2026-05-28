@@ -19,7 +19,7 @@ experiment after the validation-split, PM10/PM2.5 layout, and UTC fixes.
 - Pangu grid-to-station interpolation: `interpolate_pangu_to_stations.py`
 - Generic station-source S2 builder for Pangu/ERA5: `build_dataset_station_source_overlap_12h.py`
 - Single-source Static-RNN evaluator: `sub_static_rnn_overlap_single_eval.slurm`
-- Multi-source RH2M quality analysis: `paper_eval/analyze_multi_source_rh2m_quality.py`
+- Multi-source key-variable quality analysis: `paper_eval/analyze_multi_source_rh2m_quality.py`
 - Legacy PMST S1 trainer: `train_PMST_s1_overlap_baseline.py`
 - Legacy PMST S2 Tianji trainer: `train_PMST_overlap_baseline_s2.py`
 - Legacy PMST S2 IFS trainer: `train_PMST_overlap_baseline_s2_fast.py`
@@ -283,24 +283,64 @@ Feature replacement runs by default for
 `RH2M,Q_1000,DP_1000,RH_925,PRECIP` when those slots are populated in both
 overlap datasets.
 
+### 8. Test S1 Zero-Transfer Response to Forecast Sources
+
+This diagnostic asks whether the S1-only Static-RNN model responds at all to
+forecast-source inputs before any S2 transfer. It uses the same S1 checkpoint and
+S1 RobustScaler for every source, then reports full-test Fog, Mist, and low-vis
+recall/CSI/precision/FPR.
+
+Run all five common-core sources in one CPU job:
+
+```bash
+sbatch --export=ALL,SOURCE_GROUP=all,DEVICE=cpu sub_static_rnn_s1_zero_transfer_eval.slurm
+```
+
+Or split the inference by source and merge the metric tables afterwards:
+
+```bash
+deps=""
+for src in tianji_common_core ifs_common_core T2ND_rh2m_common_core pangu2021_common_core era5_2025_common_core; do
+  jid=$(sbatch --parsable --export=ALL,SOURCE_GROUP=${src},DEVICE=cpu sub_static_rnn_s1_zero_transfer_eval.slurm)
+  deps="${deps:+${deps}:}${jid}"
+done
+sbatch --dependency=afterok:${deps} --export=ALL,SOURCE_GROUP=merge sub_static_rnn_s1_zero_transfer_eval.slurm
+```
+
+Default inputs are:
+
+- checkpoint:
+  `ifs_baseline/checkpoints/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`
+- scaler:
+  `ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_pm10_pm25_s1_w12_dyn27_pm.pkl`
+- output root:
+  `paper_eval_results_pm10_pm25_journal/zero_transfer_s1_forecast_sources`
+
+Override `S1_CKPT`, `S1_SCALER`, `OUT_ROOT`, `BATCH_SIZE`, or `LIMIT_SAMPLES`
+through `--export=ALL,...` for audit runs.
+
 For a single-source smoke test of a trained Static-RNN source model:
 
 ```bash
 sbatch --export=ALL,SOURCE_TAG=T2ND_rh2m,FEATURE_SET=common_core,LIMIT_SAMPLES=2000 sub_static_rnn_overlap_single_eval.slurm
 ```
 
-For RH2M extremeness and observation-anchored quality across all common-core
-sources:
+For key-variable extremeness and observation-anchored quality across all
+common-core sources:
 
 ```bash
 sbatch --export=ALL,FEATURE_SET=common_core sub_rh2m_multi_source_quality.slurm
 ```
 
-The RH2M analysis writes:
+The default key-variable list is `RH2M,Q_1000,DP_1000,RH_925,PRECIP`; override
+it with `FEATURES=RH2M,Q_1000,DP_1000` if needed.
 
-- `rh2m_source_quality_metrics.csv`: MAE/RMSE/correlation, RH >= 90% hit/false alarm, and upper quantiles.
-- `rh2m_source_pairwise_distribution.csv`: paired source-source RH2M differences within the same year group.
-- `rh2m_tail_curve_<group>.csv` and `fig_rh2m_tail_multi_source_<group>.*`: near-saturation tail recovery curves.
+The key-variable analysis writes:
+
+- `key_variable_source_quality_metrics.csv`: per-source quantiles, and observation-anchored MAE/RMSE/correlation where station observations exist.
+- `key_variable_source_pairwise_distribution.csv`: paired source-source differences for RH2M, Q_1000, DP_1000, RH_925, and PRECIP within the same year group.
+- `fig_key_variable_tail_<feature>_<group>.*`: tail-frequency curves for each key variable.
+- legacy RH2M-specific files are still written for compatibility: `rh2m_source_quality_metrics.csv`, `rh2m_source_pairwise_distribution.csv`, `rh2m_tail_curve_<group>.csv`, and `fig_rh2m_tail_multi_source_<group>.*`.
 
 ### 8. Run The Mean-Softmax Ensemble Check
 

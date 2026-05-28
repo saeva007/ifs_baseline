@@ -59,8 +59,23 @@ DEFAULT_TIANJI_DIR = os.path.join(
 DEFAULT_TIANJI_T2ND_RH2M_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m"
 )
+DEFAULT_TIANJI_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"
+)
+DEFAULT_TIANJI_T2ND_RH2M_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"
+)
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
+)
+DEFAULT_IFS_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
+)
+DEFAULT_PANGU2021_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"
+)
+DEFAULT_ERA5_2025_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"
 )
 DEFAULT_IFS_FORECAST_NC = os.path.join(VIS_MLP_ROOT, "VIS_IDW_KDTree_20250101_20251231.nc")
 DEFAULT_OUT_DIR = os.path.join(
@@ -69,13 +84,30 @@ DEFAULT_OUT_DIR = os.path.join(
 DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
     "STATIC_RNN_TRAIN_DIR", os.path.join(VIS_MLP_ROOT, "train")
 )
+DEFAULT_STATIC_RNN_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
+DEFAULT_STATIC_RNN_S1_CKPT = os.path.join(
+    DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_RUN_ID}_S1_best_score.pt"
+)
+DEFAULT_STATIC_RNN_S1_SCALER = os.path.join(
+    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_RUN_ID}_s1_w12_dyn27_pm.pkl"
+)
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
 SOURCE_LABELS = {
     "tianji": "Tianji-trained/Tianji-input model",
     "T2ND_rh2m": "Tianji-trained/T2ND-rh2m-input model",
+    "T2ND_rh2m_common_core": "Tianji T2ND RH2M-trained",
     "ifs": "IFS-trained/IFS-input model",
+    "pangu2021_common_core": "Pangu-2021-trained",
+    "era5_2025_common_core": "ERA5-2025-trained",
     "ifs_diagnostic": "IFS diagnostic visibility",
+}
+ZERO_TRANSFER_SOURCE_LABELS = {
+    "tianji": "S1 zero-transfer / Tianji",
+    "ifs": "S1 zero-transfer / IFS",
+    "T2ND_rh2m_common_core": "S1 zero-transfer / T2ND RH2M",
+    "pangu2021_common_core": "S1 zero-transfer / Pangu-2021",
+    "era5_2025_common_core": "S1 zero-transfer / ERA5-2025",
 }
 
 STATIC_RNN_DATASET_ARG_DEFAULTS = {
@@ -209,6 +241,50 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--tianji_data_dir", default=os.environ.get("OVERLAP_TIANJI_DATA_DIR", ""))
     ap.add_argument("--ifs_data_dir", default=os.environ.get("OVERLAP_IFS_DATA_DIR", DEFAULT_IFS_DIR))
+    ap.add_argument(
+        "--extra_sources",
+        default=os.environ.get("OVERLAP_EXTRA_SOURCES", ""),
+        help=(
+            "Semicolon-separated extra source specs: "
+            "tag=data_dir|ckpt_path|scaler_path[|label]. Paths may be absolute or under VIS_MLP_ROOT."
+        ),
+    )
+    ap.add_argument(
+        "--source_subset",
+        "--source-subset",
+        default=os.environ.get("OVERLAP_SOURCE_SUBSET", ""),
+        help="Comma/semicolon-separated source tags to evaluate after building all specs; empty means all.",
+    )
+    ap.add_argument(
+        "--independent_sources",
+        "--independent-sources",
+        action="store_true",
+        help="Evaluate each selected source independently and skip paired Tianji-vs-IFS diagnostics.",
+    )
+    ap.add_argument(
+        "--zero_transfer_s1",
+        "--zero-transfer-s1",
+        action="store_true",
+        help="Use the overlap Static-RNN S1 best checkpoint/scaler for every selected forecast source.",
+    )
+    ap.add_argument(
+        "--shared_ckpt",
+        "--shared-ckpt",
+        default=os.environ.get("OVERLAP_SHARED_CKPT", ""),
+        help="Use this checkpoint for every selected source, overriding source-specific checkpoints.",
+    )
+    ap.add_argument(
+        "--shared_scaler",
+        "--shared-scaler",
+        default=os.environ.get("OVERLAP_SHARED_SCALER", ""),
+        help="Use this scaler for every selected source, overriding source-specific scalers.",
+    )
+    ap.add_argument(
+        "--skip_validation_inference",
+        "--skip-validation-inference",
+        action="store_true",
+        help="Skip validation inference when thresholds do not require validation search; useful for full-test audits.",
+    )
     ap.add_argument("--ckpt_dir", default=os.environ.get("OVERLAP_CKPT_DIR", DEFAULT_CKPT_DIR))
     ap.add_argument("--tianji_ckpt", default="")
     ap.add_argument("--ifs_ckpt", default="")
@@ -302,7 +378,21 @@ def default_run_id(source: str, model_arch: str) -> str:
 def default_tianji_data_dir(source_tag: str) -> str:
     if source_tag == "T2ND_rh2m":
         return DEFAULT_TIANJI_T2ND_RH2M_DIR
+    if source_tag == "tianji_common_core":
+        return DEFAULT_TIANJI_COMMON_CORE_DIR
+    if source_tag == "T2ND_rh2m_common_core":
+        return DEFAULT_TIANJI_T2ND_RH2M_COMMON_CORE_DIR
     return DEFAULT_TIANJI_DIR
+
+
+def resolve_under_root(path: str) -> str:
+    value = str(path or "").strip()
+    if not value:
+        return value
+    p = Path(value).expanduser()
+    if p.is_absolute():
+        return str(p)
+    return str(Path(VIS_MLP_ROOT) / p)
 
 
 def default_ckpt_path(source: str, ckpt_dir: str, checkpoint_tag: str, model_arch: str) -> str:
@@ -323,6 +413,78 @@ def default_scaler_path(
         run_id = default_run_id(source, model_arch)
         return os.path.join(ckpt_dir, f"robust_scaler_{run_id}_s2_w{window}_dyn{dyn_vars_count}_{pm_tag}.pkl")
     return os.path.join(ckpt_dir, f"robust_scaler_w{window}_dyn{dyn_vars_count}_overlap_baseline_{source}.pkl")
+
+
+def parse_extra_source_specs(text: str) -> Dict[str, SourceSpec]:
+    specs: Dict[str, SourceSpec] = {}
+    for raw in str(text or "").split(";"):
+        item = raw.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"Bad --extra_sources item {item!r}; expected tag=data|ckpt|scaler[|label].")
+        tag, payload = item.split("=", 1)
+        tag = tag.strip()
+        parts = [part.strip() for part in payload.split("|")]
+        if len(parts) < 3:
+            raise ValueError(f"Bad --extra_sources item {item!r}; expected tag=data|ckpt|scaler[|label].")
+        if tag in {"tianji", "ifs", "ifs_diagnostic"}:
+            raise ValueError(f"--extra_sources tag {tag!r} is reserved.")
+        if len(parts) >= 4 and parts[3]:
+            SOURCE_LABELS[tag] = parts[3]
+        specs[tag] = SourceSpec(
+            name=tag,
+            data_dir=resolve_under_root(parts[0]),
+            ckpt_path=resolve_under_root(parts[1]),
+            scaler_path=resolve_under_root(parts[2]),
+        )
+    return specs
+
+
+def split_source_tags(value: str) -> List[str]:
+    aliases = {
+        "tianji_common_core": "tianji",
+        "ifs_common_core": "ifs",
+        "T2ND_rh2m": "T2ND_rh2m_common_core",
+        "pangu2021": "pangu2021_common_core",
+        "era5_2025": "era5_2025_common_core",
+    }
+    tags: List[str] = []
+    for chunk in str(value or "").replace(";", ",").split(","):
+        tag = chunk.strip()
+        tag = aliases.get(tag, tag)
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags
+
+
+def filter_source_specs(specs: Dict[str, SourceSpec], subset_text: str) -> Dict[str, SourceSpec]:
+    subset = split_source_tags(subset_text)
+    if not subset:
+        return specs
+    missing = [tag for tag in subset if tag not in specs]
+    if missing:
+        raise KeyError(f"--source_subset contains unknown source tag(s): {missing}; available={list(specs)}")
+    return {tag: specs[tag] for tag in subset}
+
+
+def apply_shared_checkpoint_scaler(specs: Dict[str, SourceSpec], args: argparse.Namespace) -> None:
+    shared_ckpt = str(args.shared_ckpt or "").strip()
+    shared_scaler = str(args.shared_scaler or "").strip()
+    if args.zero_transfer_s1:
+        shared_ckpt = shared_ckpt or DEFAULT_STATIC_RNN_S1_CKPT
+        shared_scaler = shared_scaler or DEFAULT_STATIC_RNN_S1_SCALER
+    if not shared_ckpt and not shared_scaler:
+        return
+    if not shared_ckpt or not shared_scaler:
+        raise ValueError("Shared source evaluation requires both --shared_ckpt and --shared_scaler.")
+    shared_ckpt = resolve_under_root(shared_ckpt)
+    shared_scaler = resolve_under_root(shared_scaler)
+    for source, spec in specs.items():
+        spec.ckpt_path = shared_ckpt
+        spec.scaler_path = shared_scaler
+        if args.zero_transfer_s1:
+            SOURCE_LABELS[source] = ZERO_TRANSFER_SOURCE_LABELS.get(source, f"S1 zero-transfer / {source}")
 
 
 def load_checkpoint_payload(ckpt_path: str, device: torch.device):
@@ -426,6 +588,8 @@ def validate_build_time_alignment(build_configs: Dict[str, Dict], allow_legacy: 
     expected = {"bjt_minus_8_to_utc", "raw_utc_no_shift"}
     for source, cfg in build_configs.items():
         marker = cfg.get("tianji_raw_time_alignment") if cfg else None
+        if str(cfg.get("time_coordinate", "")).upper() == "UTC":
+            continue
         if marker in expected:
             continue
         msg = (
@@ -1080,14 +1244,15 @@ def evaluate_one_source(
     feature_dim, extra_dim = infer_feature_layout(
         spec.data_dir, "test", args.window, args.dyn_vars_count, args.expected_extra_dim
     )
-    val_feature_dim, val_extra_dim = infer_feature_layout(
-        spec.data_dir, "val", args.window, args.dyn_vars_count, args.expected_extra_dim
-    )
-    if val_feature_dim != feature_dim or val_extra_dim != extra_dim:
-        raise ValueError(
-            f"{source}: val/test feature layout differs: "
-            f"val=({val_feature_dim},{val_extra_dim}) test=({feature_dim},{extra_dim})"
+    if not args.skip_validation_inference:
+        val_feature_dim, val_extra_dim = infer_feature_layout(
+            spec.data_dir, "val", args.window, args.dyn_vars_count, args.expected_extra_dim
         )
+        if val_feature_dim != feature_dim or val_extra_dim != extra_dim:
+            raise ValueError(
+                f"{source}: val/test feature layout differs: "
+                f"val=({val_feature_dim},{val_extra_dim}) test=({feature_dim},{extra_dim})"
+            )
 
     require_file(spec.scaler_path, "RobustScaler")
     scaler = joblib.load(spec.scaler_path)
@@ -1103,20 +1268,6 @@ def evaluate_one_source(
         args,
     )
 
-    val_ds, _ = make_dataset(
-        train_mod,
-        spec.data_dir,
-        "val",
-        scaler,
-        args.window,
-        args.dyn_vars_count,
-        extra_dim,
-        args.limit_samples,
-        args.model_arch,
-        not args.static_rnn_no_fe,
-        not args.static_rnn_no_pm,
-        args,
-    )
     test_ds, test_meta = make_dataset(
         train_mod,
         spec.data_dir,
@@ -1131,48 +1282,84 @@ def evaluate_one_source(
         not args.static_rnn_no_pm,
         args,
     )
-    val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
     test_loader = make_loader(test_ds, args.batch_size, args.num_workers)
 
-    print(f"[{source}] running validation inference: N={len(val_ds)}", flush=True)
-    val_logits, val_targets, _ = collect_logits(model, val_loader, device)
-    if args.threshold_mode == "checkpoint":
-        # Checkpoint thresholds were selected from uncalibrated validation
-        # probabilities by the trainer, so keep the probability scale unchanged.
-        temperature = 1.0
-    elif args.no_temp_scaling:
-        temperature = 1.0
-    else:
-        temperature = calibrate_temperature_from_logits(
-            val_logits, val_targets, device, args.temp_lr, args.temp_max_iter
-        )
-    val_probs = softmax_np(val_logits, temperature)
-
     threshold_source = args.threshold_mode
-    if args.threshold_mode == "checkpoint":
-        thresholds = checkpoint_thresholds(ckpt_meta)
-        if thresholds is None:
-            print(f"[{source}] checkpoint has no saved thresholds; falling back to validation search.", flush=True)
-            thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
-            threshold_source = "val_search_fallback_no_checkpoint_thresholds"
+    if args.skip_validation_inference:
+        if args.threshold_mode == "val_search":
+            raise ValueError("--skip_validation_inference cannot be used with --threshold_mode val_search.")
+        temperature = 1.0
+        if args.threshold_mode == "checkpoint":
+            thresholds = checkpoint_thresholds(ckpt_meta)
+            if thresholds is None:
+                raise RuntimeError(
+                    f"{source}: checkpoint has no saved thresholds, so validation inference is required."
+                )
+            val_metrics = {"n": 0}
+            threshold_source = "checkpoint_metadata_no_val"
+            threshold_mode_for_pred = "fixed"
+        elif args.threshold_mode == "fixed":
+            thresholds = {"fog": float(args.fog_threshold), "mist": float(args.mist_threshold)}
+            val_metrics = {"n": 0}
+            threshold_mode_for_pred = "fixed"
         else:
+            thresholds = {"fog": math.nan, "mist": math.nan}
+            val_metrics = {"n": 0}
+            threshold_mode_for_pred = "argmax"
+    else:
+        val_ds, _ = make_dataset(
+            train_mod,
+            spec.data_dir,
+            "val",
+            scaler,
+            args.window,
+            args.dyn_vars_count,
+            extra_dim,
+            args.limit_samples,
+            args.model_arch,
+            not args.static_rnn_no_fe,
+            not args.static_rnn_no_pm,
+            args,
+        )
+        val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
+        print(f"[{source}] running validation inference: N={len(val_ds)}", flush=True)
+        val_logits, val_targets, _ = collect_logits(model, val_loader, device)
+        if args.threshold_mode == "checkpoint":
+            # Checkpoint thresholds were selected from uncalibrated validation
+            # probabilities by the trainer, so keep the probability scale unchanged.
+            temperature = 1.0
+        elif args.no_temp_scaling:
+            temperature = 1.0
+        else:
+            temperature = calibrate_temperature_from_logits(
+                val_logits, val_targets, device, args.temp_lr, args.temp_max_iter
+            )
+        val_probs = softmax_np(val_logits, temperature)
+
+        if args.threshold_mode == "checkpoint":
+            thresholds = checkpoint_thresholds(ckpt_meta)
+            if thresholds is None:
+                print(f"[{source}] checkpoint has no saved thresholds; falling back to validation search.", flush=True)
+                thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
+                threshold_source = "val_search_fallback_no_checkpoint_thresholds"
+            else:
+                val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
+                val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
+                threshold_source = "checkpoint_metadata"
+            threshold_mode_for_pred = "fixed"
+        elif args.threshold_mode == "val_search":
+            thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
+            threshold_mode_for_pred = "fixed"
+        elif args.threshold_mode == "fixed":
+            thresholds = {"fog": float(args.fog_threshold), "mist": float(args.mist_threshold)}
             val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
             val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
-            threshold_source = "checkpoint_metadata"
-        threshold_mode_for_pred = "fixed"
-    elif args.threshold_mode == "val_search":
-        thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
-        threshold_mode_for_pred = "fixed"
-    elif args.threshold_mode == "fixed":
-        thresholds = {"fog": float(args.fog_threshold), "mist": float(args.mist_threshold)}
-        val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
-        val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
-        threshold_mode_for_pred = "fixed"
-    else:
-        thresholds = {"fog": math.nan, "mist": math.nan}
-        val_preds = predict_from_probs(val_probs, "argmax", 0.5, 0.5)
-        val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
-        threshold_mode_for_pred = "argmax"
+            threshold_mode_for_pred = "fixed"
+        else:
+            thresholds = {"fog": math.nan, "mist": math.nan}
+            val_preds = predict_from_probs(val_probs, "argmax", 0.5, 0.5)
+            val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
+            threshold_mode_for_pred = "argmax"
 
     print(
         f"[{source}] temperature={temperature:.4f}, thresholds={thresholds}, "
@@ -1492,7 +1679,17 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         print(f"[WARN] matplotlib unavailable; skip key-metrics figure: {exc}", flush=True)
         return []
 
-    source_order = [s for s in ("tianji", "ifs", "ifs_diagnostic") if s in set(overall_df["source"].astype(str))]
+    available_sources = list(dict.fromkeys(overall_df["source"].astype(str).tolist()))
+    preferred = [
+        "tianji",
+        "ifs",
+        "T2ND_rh2m_common_core",
+        "pangu2021_common_core",
+        "era5_2025_common_core",
+        "ifs_diagnostic",
+    ]
+    source_order = [s for s in preferred if s in set(available_sources)]
+    source_order.extend([s for s in available_sources if s not in set(source_order)])
     if not source_order:
         return []
 
@@ -1504,13 +1701,25 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_labels = {
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
+        "T2ND_rh2m_common_core": "T2ND RH2M",
+        "pangu2021_common_core": "Pangu-2021",
+        "era5_2025_common_core": "ERA5-2025",
         "ifs_diagnostic": "IFS diagnostic VIS",
     }
+    for _, row in overall_df.iterrows():
+        src = str(row.get("source", ""))
+        label = str(row.get("source_label", "") or "").strip()
+        if src and label and label != src:
+            source_labels[src] = label
     source_colors = {
         "tianji": "#2E5A87",
         "ifs": "#6C6C6C",
+        "T2ND_rh2m_common_core": "#1B9E77",
+        "pangu2021_common_core": "#8E6BBE",
+        "era5_2025_common_core": "#D95F02",
         "ifs_diagnostic": "#E69F00",
     }
+    fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
 
     panels = [
         (
@@ -1564,7 +1773,8 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     )
 
     n_sources = len(source_order)
-    fig, axes = plt.subplots(1, 3, figsize=(12.8, 3.8), sharey=False, constrained_layout=True)
+    fig_w = max(12.8, 10.8 + 0.78 * max(0, n_sources - 3))
+    fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.05), sharey=False, constrained_layout=True)
     panel_letters = ["a", "b", "c"]
 
     def _adaptive_score_ylim(values: Sequence[float]) -> float:
@@ -1615,7 +1825,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 vals,
                 width * 0.92,
                 label=source_labels.get(source, source) if ax_idx == 0 else None,
-                color=source_colors.get(source, "#7F7F7F"),
+                color=source_colors.get(source, fallback_colors[src_idx % len(fallback_colors)]),
                 edgecolor="white",
                 linewidth=0.45,
                 alpha=0.96,
@@ -1665,7 +1875,14 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08), ncol=len(handles), frameon=False)
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.10),
+            ncol=min(len(handles), 4),
+            frameon=False,
+        )
 
     out_paths = [
         out_dir / "fig_forecast_source_key_metrics.png",
@@ -1978,6 +2195,115 @@ def run_feature_replacement_experiment(
     return repl_df
 
 
+def write_independent_source_outputs(
+    args: argparse.Namespace,
+    specs: Dict[str, SourceSpec],
+    build_configs: Dict[str, Dict[str, object]],
+    evals: Dict[str, SourceEval],
+    out_dir: Path,
+) -> None:
+    overall_rows: List[Dict[str, object]] = []
+    validation_rows: List[Dict[str, object]] = []
+    for source, eval_obj in evals.items():
+        test_metrics = compute_metrics(
+            eval_obj.test_targets,
+            eval_obj.test_preds,
+            probs=eval_obj.test_probs,
+        )
+        common_extra = {
+            "temperature": eval_obj.temperature,
+            "fog_threshold": eval_obj.thresholds.get("fog"),
+            "mist_threshold": eval_obj.thresholds.get("mist"),
+            "threshold_source": eval_obj.threshold_source,
+            "feature_dim": eval_obj.feature_dim,
+            "extra_feat_dim": eval_obj.extra_feat_dim,
+            "model_arch": args.model_arch,
+            "checkpoint": eval_obj.spec.ckpt_path,
+            "scaler": eval_obj.spec.scaler_path,
+            "data_dir": eval_obj.spec.data_dir,
+            "evaluation_mode": "independent_source",
+        }
+        overall_rows.append(rows_from_metrics(source, test_metrics, common_extra))
+        validation_rows.append(
+            rows_from_metrics(
+                source,
+                eval_obj.val_metrics,
+                {
+                    "temperature": eval_obj.temperature,
+                    "fog_threshold": eval_obj.thresholds.get("fog"),
+                    "mist_threshold": eval_obj.thresholds.get("mist"),
+                    "threshold_source": eval_obj.threshold_source,
+                    "model_arch": args.model_arch,
+                    "checkpoint": eval_obj.spec.ckpt_path,
+                    "scaler": eval_obj.spec.scaler_path,
+                    "data_dir": eval_obj.spec.data_dir,
+                    "evaluation_mode": "independent_source",
+                },
+            )
+        )
+        if not args.no_per_sample_csv and eval_obj.test_meta is not None:
+            sample = eval_obj.test_meta.reset_index(drop=True).copy()
+            sample["y_cls"] = eval_obj.test_targets
+            sample["vis_raw_m"] = eval_obj.test_raw_vis
+            sample["pred"] = eval_obj.test_preds
+            sample["p_fog"] = eval_obj.test_probs[:, 0]
+            sample["p_mist"] = eval_obj.test_probs[:, 1]
+            sample["p_clear"] = eval_obj.test_probs[:, 2]
+            sample["correct"] = eval_obj.test_preds == eval_obj.test_targets
+            sample.to_csv(out_dir / f"per_sample_{source}.csv", index=False)
+
+    overall_df = pd.DataFrame(overall_rows)
+    validation_df = pd.DataFrame(validation_rows)
+    overall_df.to_csv(out_dir / "overall_metrics.csv", index=False)
+    validation_df.to_csv(out_dir / "validation_metrics.csv", index=False)
+
+    run_config = {
+        "args": vars(args),
+        "specs": {k: vars(v) for k, v in specs.items()},
+        "model_arch": args.model_arch,
+        "build_configs": build_configs,
+        "evaluation_scope": "independent full test split for each selected source",
+        "source_thresholds": {
+            source: {
+                "threshold_source": eval_obj.threshold_source,
+                "temperature": eval_obj.temperature,
+                "fog_threshold": eval_obj.thresholds.get("fog"),
+                "mist_threshold": eval_obj.thresholds.get("mist"),
+                "checkpoint": eval_obj.spec.ckpt_path,
+                "scaler": eval_obj.spec.scaler_path,
+            }
+            for source, eval_obj in evals.items()
+        },
+        "class_definition": {
+            "0": "0 <= visibility < 500 m",
+            "1": "500 <= visibility < 1000 m",
+            "2": "visibility >= 1000 m",
+        },
+    }
+    with open(out_dir / "run_config.json", "w", encoding="utf-8") as f:
+        json.dump(run_config, f, ensure_ascii=False, indent=2)
+
+    if not args.no_figures:
+        plot_key_metrics_figure(overall_df, out_dir)
+
+    metric_cols = [
+        "source",
+        "source_label",
+        "n",
+        "fog_pod",
+        "fog_csi",
+        "mist_pod",
+        "mist_csi",
+        "low_vis_recall",
+        "low_vis_csi",
+        "low_vis_precision",
+        "low_vis_fpr",
+    ]
+    existing = [c for c in metric_cols if c in overall_df.columns]
+    print("\n[OK] wrote independent source evaluation outputs to:", out_dir, flush=True)
+    print(overall_df[existing].to_string(index=False), flush=True)
+
+
 def main() -> None:
     args = parse_args()
     out_dir = Path(args.out_dir)
@@ -2014,6 +2340,14 @@ def main() -> None:
             ),
         ),
     }
+    specs.update(parse_extra_source_specs(args.extra_sources))
+    specs = filter_source_specs(specs, args.source_subset)
+    apply_shared_checkpoint_scaler(specs, args)
+    if not args.independent_sources and not {"tianji", "ifs"}.issubset(specs):
+        raise ValueError(
+            "Paired mode requires both 'tianji' and 'ifs'. "
+            "Use --independent_sources when evaluating a source subset."
+        )
 
     for source, spec in specs.items():
         if not os.path.isdir(spec.data_dir):
@@ -2031,6 +2365,9 @@ def main() -> None:
         source: evaluate_one_source(source, spec, train_mod, args, device)
         for source, spec in specs.items()
     }
+    if args.independent_sources:
+        write_independent_source_outputs(args, specs, build_configs, evals, out_dir)
+        return
 
     idx_t, idx_i, meta_common = align_test_outputs(evals["tianji"], evals["ifs"], args.strict_meta)
     validate_paired_labels(evals["tianji"], evals["ifs"], idx_t, idx_i)
@@ -2044,9 +2381,22 @@ def main() -> None:
 
     metrics_t = compute_metrics(y, t_preds, probs=t_probs)
     metrics_i = compute_metrics(y, i_preds, probs=i_probs)
-    overall_df = pd.DataFrame(
-        [
-            rows_from_metrics(
+    extra_alignment: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    extra_metrics: Dict[str, Dict[str, float]] = {}
+    for source in specs:
+        if source in {"tianji", "ifs"}:
+            continue
+        idx_base, idx_src, _ = align_test_outputs(evals["tianji"], evals[source], args.strict_meta)
+        validate_paired_labels(evals["tianji"], evals[source], idx_base, idx_src)
+        extra_alignment[source] = (idx_base, idx_src)
+        extra_metrics[source] = compute_metrics(
+            evals["tianji"].test_targets[idx_base],
+            evals[source].test_preds[idx_src],
+            probs=evals[source].test_probs[idx_src],
+        )
+
+    overall_rows = [
+        rows_from_metrics(
                 "tianji",
                 metrics_t,
                 {
@@ -2061,7 +2411,7 @@ def main() -> None:
                     "data_dir": evals["tianji"].spec.data_dir,
                 },
             ),
-            rows_from_metrics(
+        rows_from_metrics(
                 "ifs",
                 metrics_i,
                 {
@@ -2076,13 +2426,32 @@ def main() -> None:
                     "data_dir": evals["ifs"].spec.data_dir,
                 },
             ),
-        ]
-    )
+    ]
+    for source, metrics in extra_metrics.items():
+        idx_base, _ = extra_alignment[source]
+        overall_rows.append(
+            rows_from_metrics(
+                source,
+                metrics,
+                {
+                    "matched_rows": int(len(idx_base)),
+                    "temperature": evals[source].temperature,
+                    "fog_threshold": evals[source].thresholds.get("fog"),
+                    "mist_threshold": evals[source].thresholds.get("mist"),
+                    "threshold_source": evals[source].threshold_source,
+                    "feature_dim": evals[source].feature_dim,
+                    "extra_feat_dim": evals[source].extra_feat_dim,
+                    "model_arch": args.model_arch,
+                    "checkpoint": evals[source].spec.ckpt_path,
+                    "data_dir": evals[source].spec.data_dir,
+                },
+            )
+        )
+    overall_df = pd.DataFrame(overall_rows)
     overall_df.to_csv(out_dir / "overall_metrics.csv", index=False)
 
-    validation_df = pd.DataFrame(
-        [
-            rows_from_metrics(
+    validation_rows = [
+        rows_from_metrics(
                 "tianji",
                 evals["tianji"].val_metrics,
                 {
@@ -2093,7 +2462,7 @@ def main() -> None:
                     "model_arch": args.model_arch,
                 },
             ),
-            rows_from_metrics(
+        rows_from_metrics(
                 "ifs",
                 evals["ifs"].val_metrics,
                 {
@@ -2104,8 +2473,24 @@ def main() -> None:
                     "model_arch": args.model_arch,
                 },
             ),
-        ]
-    )
+    ]
+    for source in specs:
+        if source in {"tianji", "ifs"}:
+            continue
+        validation_rows.append(
+            rows_from_metrics(
+                source,
+                evals[source].val_metrics,
+                {
+                    "temperature": evals[source].temperature,
+                    "fog_threshold": evals[source].thresholds.get("fog"),
+                    "mist_threshold": evals[source].thresholds.get("mist"),
+                    "threshold_source": evals[source].threshold_source,
+                    "model_arch": args.model_arch,
+                },
+            )
+        )
+    validation_df = pd.DataFrame(validation_rows)
     validation_df.to_csv(out_dir / "validation_metrics.csv", index=False)
 
     delta_df = compare_overall(metrics_t, metrics_i)
@@ -2143,9 +2528,8 @@ def main() -> None:
             metrics_i_diag = compute_metrics(y_diag, i_preds_diag, probs=i_probs_diag)
             metrics_d_diag = compute_metrics(y_diag, d_preds_diag, probs=None)
 
-            ifs_diag_metrics_df = pd.DataFrame(
-                [
-                    rows_from_metrics(
+            diag_rows = [
+                rows_from_metrics(
                         "tianji",
                         metrics_t_diag,
                         {
@@ -2157,7 +2541,7 @@ def main() -> None:
                             "threshold_source": evals["tianji"].threshold_source,
                         },
                     ),
-                    rows_from_metrics(
+                rows_from_metrics(
                         "ifs",
                         metrics_i_diag,
                         {
@@ -2169,7 +2553,7 @@ def main() -> None:
                             "threshold_source": evals["ifs"].threshold_source,
                         },
                     ),
-                    rows_from_metrics(
+                rows_from_metrics(
                         "ifs_diagnostic",
                         metrics_d_diag,
                         {
@@ -2179,8 +2563,43 @@ def main() -> None:
                             "ifs_forecast_var": args.ifs_forecast_var,
                         },
                     ),
-                ]
-            )
+            ]
+            common_pos_by_tianji_idx = {int(src_idx): pos for pos, src_idx in enumerate(idx_t.tolist())}
+            for source, (idx_base, idx_src) in extra_alignment.items():
+                keep_base: List[int] = []
+                keep_src: List[int] = []
+                keep_common: List[int] = []
+                for base_idx, src_idx in zip(idx_base.tolist(), idx_src.tolist()):
+                    common_pos = common_pos_by_tianji_idx.get(int(base_idx))
+                    if common_pos is None or not bool(valid_diag[common_pos]):
+                        continue
+                    keep_base.append(int(base_idx))
+                    keep_src.append(int(src_idx))
+                    keep_common.append(int(common_pos))
+                if not keep_src:
+                    continue
+                src_idx_arr = np.asarray(keep_src, dtype=np.int64)
+                common_idx_arr = np.asarray(keep_common, dtype=np.int64)
+                metrics_extra_diag = compute_metrics(
+                    y[common_idx_arr],
+                    evals[source].test_preds[src_idx_arr],
+                    probs=evals[source].test_probs[src_idx_arr],
+                )
+                diag_rows.append(
+                    rows_from_metrics(
+                        source,
+                        metrics_extra_diag,
+                        {
+                            "sample_scope": "ifs_diagnostic_matched_test",
+                            "matched_rows": int(len(src_idx_arr)),
+                            "temperature": evals[source].temperature,
+                            "fog_threshold": evals[source].thresholds.get("fog"),
+                            "mist_threshold": evals[source].thresholds.get("mist"),
+                            "threshold_source": evals[source].threshold_source,
+                        },
+                    )
+                )
+            ifs_diag_metrics_df = pd.DataFrame(diag_rows)
             ifs_diag_metrics_df.to_csv(out_dir / "ifs_diagnostic_matched_metrics.csv", index=False)
             ifs_diag_delta_df = compare_metric_sets(
                 metrics_t_diag,
