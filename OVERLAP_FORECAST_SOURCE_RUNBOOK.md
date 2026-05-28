@@ -294,7 +294,11 @@ The default decision rule is `THRESHOLD_MODE=argmax`, because this experiment is
 a response diagnostic rather than a deployment test. Reusing the S1 checkpoint's
 saved thresholds on forecast-source inputs can collapse all low-visibility
 predictions to clear under domain shift. To test "threshold recalibration only,
-no weight transfer", run with `THRESHOLD_MODE=val_search` instead.
+no weight transfer", run with `THRESHOLD_MODE=val_search` instead. The
+zero-transfer launcher defaults that validation search to
+`THRESHOLD_SEARCH_POLICY=response`, which relaxes the operational precision and
+clear-recall guards and asks whether any low-visibility response can be recovered
+without updating model weights.
 
 Run all five common-core sources in one CPU job:
 
@@ -305,7 +309,7 @@ sbatch --export=ALL,SOURCE_GROUP=all,DEVICE=cpu sub_static_rnn_s1_zero_transfer_
 Optional threshold-recalibration audit:
 
 ```bash
-sbatch --export=ALL,SOURCE_GROUP=all,DEVICE=cpu,THRESHOLD_MODE=val_search sub_static_rnn_s1_zero_transfer_eval.slurm
+sbatch --export=ALL,SOURCE_GROUP=all,DEVICE=cpu,THRESHOLD_MODE=val_search,SKIP_VALIDATION_INFERENCE=0,THRESHOLD_SEARCH_POLICY=response sub_static_rnn_s1_zero_transfer_eval.slurm
 ```
 
 Or split the inference by source and merge the metric tables afterwards:

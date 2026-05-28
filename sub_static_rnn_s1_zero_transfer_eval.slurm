@@ -51,6 +51,7 @@ LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 SOURCE_GROUP="${SOURCE_GROUP:-all}"
 MERGE_ONLY="${MERGE_ONLY:-0}"
 THRESHOLD_MODE="${THRESHOLD_MODE:-argmax}"
+THRESHOLD_SEARCH_POLICY="${THRESHOLD_SEARCH_POLICY:-response}"
 SKIP_VALIDATION_INFERENCE="${SKIP_VALIDATION_INFERENCE:-1}"
 SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
@@ -124,6 +125,7 @@ CMD=(
     --batch_size "${BATCH_SIZE}"
     --num_workers "${NUM_WORKERS}"
     --threshold_mode "${THRESHOLD_MODE}"
+    --threshold_search_policy "${THRESHOLD_SEARCH_POLICY}"
     --skip_bootstrap
     --no_per_sample_csv
 )

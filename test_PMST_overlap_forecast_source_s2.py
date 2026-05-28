@@ -338,6 +338,17 @@ def parse_args() -> argparse.Namespace:
             "threshold search, argmax, or fixed fog/mist thresholds."
         ),
     )
+    ap.add_argument(
+        "--threshold_search_policy",
+        "--threshold-search-policy",
+        choices=["operational", "response"],
+        default=os.environ.get("OVERLAP_THRESHOLD_SEARCH_POLICY", "operational"),
+        help=(
+            "Validation threshold-search objective. operational preserves precision/clear-recall "
+            "guards for deployable S2 comparisons; response is a diagnostic for S1 zero-transfer "
+            "that asks whether any low-visibility response can be recovered without weight transfer."
+        ),
+    )
     ap.add_argument("--fog_threshold", type=float, default=0.5)
     ap.add_argument("--mist_threshold", type=float, default=0.5)
     ap.add_argument("--no_temp_scaling", action="store_true")
@@ -1014,17 +1025,49 @@ def compute_target_achievement(metrics: Dict[str, float]) -> float:
     )
 
 
-def threshold_grid() -> np.ndarray:
+def threshold_grid(policy: str = "operational") -> np.ndarray:
+    if str(policy).lower() == "response":
+        return np.unique(np.concatenate([np.arange(0.01, 0.50, 0.01), np.arange(0.50, 0.96, 0.03)]))
     low_part = np.arange(0.10, 0.50, 0.04)
     high_part = np.arange(0.50, 0.96, 0.03)
     return np.unique(np.concatenate([low_part, high_part]))
 
 
-def search_thresholds_on_val(probs: np.ndarray, targets: np.ndarray) -> Tuple[Dict[str, float], Dict[str, float]]:
+def search_thresholds_on_val(
+    probs: np.ndarray,
+    targets: np.ndarray,
+    policy: str = "operational",
+) -> Tuple[Dict[str, float], Dict[str, float]]:
     best_score = -np.inf
     best_metrics: Optional[Dict[str, float]] = None
     best_th = {"fog": 0.5, "mist": 0.5}
-    grid = threshold_grid()
+    policy = str(policy or "operational").lower()
+    grid = threshold_grid(policy)
+
+    if policy == "response":
+        for f_th in grid:
+            for m_th in grid:
+                preds = predict_from_probs(probs, "fixed", float(f_th), float(m_th))
+                if not np.any(preds <= 1):
+                    continue
+                metrics = compute_metrics(targets, preds, probs=None, prefix_counts=False)
+                score = (
+                    0.30 * metrics["fog_pod"]
+                    + 0.30 * metrics["mist_pod"]
+                    + 0.25 * metrics["low_vis_csi"]
+                    + 0.15 * metrics["low_vis_precision"]
+                    - 0.10 * metrics["low_vis_fpr"]
+                )
+                if score > best_score:
+                    best_score = score
+                    best_metrics = metrics
+                    best_th = {"fog": float(f_th), "mist": float(m_th)}
+        if best_metrics is not None:
+            return best_th, best_metrics
+
+        preds = np.argmax(probs, axis=1).astype(np.int64)
+        best_metrics = compute_metrics(targets, preds, probs=None, prefix_counts=False)
+        return {"fog": math.nan, "mist": math.nan}, best_metrics
 
     def try_search(min_prec: float, min_clear_recall: float, penalty: bool = False) -> None:
         nonlocal best_score, best_metrics, best_th
@@ -1359,7 +1402,11 @@ def evaluate_one_source(
             thresholds = checkpoint_thresholds(ckpt_meta)
             if thresholds is None:
                 print(f"[{source}] checkpoint has no saved thresholds; falling back to validation search.", flush=True)
-                thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
+                thresholds, val_metrics = search_thresholds_on_val(
+                    val_probs,
+                    val_targets,
+                    args.threshold_search_policy,
+                )
                 threshold_source = "val_search_fallback_no_checkpoint_thresholds"
             else:
                 val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
@@ -1367,8 +1414,13 @@ def evaluate_one_source(
                 threshold_source = "checkpoint_metadata"
             threshold_mode_for_pred = pred_mode_from_thresholds(thresholds)
         elif args.threshold_mode == "val_search":
-            thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
+            thresholds, val_metrics = search_thresholds_on_val(
+                val_probs,
+                val_targets,
+                args.threshold_search_policy,
+            )
             threshold_mode_for_pred = pred_mode_from_thresholds(thresholds)
+            threshold_source = f"val_search_{args.threshold_search_policy}"
         elif args.threshold_mode == "fixed":
             thresholds = {"fog": float(args.fog_threshold), "mist": float(args.mist_threshold)}
             val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
