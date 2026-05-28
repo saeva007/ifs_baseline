@@ -1046,6 +1046,15 @@ def search_thresholds_on_val(probs: np.ndarray, targets: np.ndarray) -> Tuple[Di
     return best_th, best_metrics
 
 
+def pred_mode_from_thresholds(thresholds: Dict[str, float]) -> str:
+    try:
+        fog = float(thresholds.get("fog", math.nan))
+        mist = float(thresholds.get("mist", math.nan))
+    except Exception:
+        return "argmax"
+    return "fixed" if math.isfinite(fog) and math.isfinite(mist) else "argmax"
+
+
 def metric_direction(metric: str) -> str:
     if metric in LOWER_IS_BETTER:
         return "lower"
@@ -1346,10 +1355,10 @@ def evaluate_one_source(
                 val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
                 val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
                 threshold_source = "checkpoint_metadata"
-            threshold_mode_for_pred = "fixed"
+            threshold_mode_for_pred = pred_mode_from_thresholds(thresholds)
         elif args.threshold_mode == "val_search":
             thresholds, val_metrics = search_thresholds_on_val(val_probs, val_targets)
-            threshold_mode_for_pred = "fixed"
+            threshold_mode_for_pred = pred_mode_from_thresholds(thresholds)
         elif args.threshold_mode == "fixed":
             thresholds = {"fog": float(args.fog_threshold), "mist": float(args.mist_threshold)}
             val_preds = predict_from_probs(val_probs, "fixed", thresholds["fog"], thresholds["mist"])
