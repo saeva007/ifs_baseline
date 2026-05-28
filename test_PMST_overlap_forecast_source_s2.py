@@ -268,6 +268,16 @@ def parse_args() -> argparse.Namespace:
         help="Use the overlap Static-RNN S1 best checkpoint/scaler for every selected forecast source.",
     )
     ap.add_argument(
+        "--allow_zero_transfer_checkpoint_thresholds",
+        "--allow-zero-transfer-checkpoint-thresholds",
+        action="store_true",
+        help=(
+            "Allow S1 zero-transfer runs to reuse checkpoint thresholds directly. "
+            "By default this is blocked because it often collapses forecast-source "
+            "predictions to clear under domain shift."
+        ),
+    )
+    ap.add_argument(
         "--shared_ckpt",
         "--shared-ckpt",
         default=os.environ.get("OVERLAP_SHARED_CKPT", ""),
@@ -1678,7 +1688,7 @@ def write_report(
 
 
 def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str]:
-    """One publication-style figure for Fog/Mist/low-vis key metrics."""
+    """Publication-style split figures for Fog/Mist/low-vis key metrics."""
     try:
         import matplotlib
 
@@ -1689,24 +1699,11 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         return []
 
     available_sources = list(dict.fromkeys(overall_df["source"].astype(str).tolist()))
-    preferred = [
-        "tianji",
-        "ifs",
-        "T2ND_rh2m_common_core",
-        "pangu2021_common_core",
-        "era5_2025_common_core",
-        "ifs_diagnostic",
-    ]
-    source_order = [s for s in preferred if s in set(available_sources)]
-    source_order.extend([s for s in available_sources if s not in set(source_order)])
-    if not source_order:
+    available_set = set(available_sources)
+    if not available_sources:
         return []
 
-    row_by_source = {
-        str(row["source"]): row
-        for _, row in overall_df.iterrows()
-        if str(row.get("source", "")) in source_order
-    }
+    row_by_source = {str(row["source"]): row for _, row in overall_df.iterrows()}
     source_labels = {
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
@@ -1781,9 +1778,6 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         }
     )
 
-    n_sources = len(source_order)
-    fig_w = max(12.8, 10.8 + 0.78 * max(0, n_sources - 3))
-    fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.05), sharey=False, constrained_layout=True)
     panel_letters = ["a", "b", "c"]
 
     def _adaptive_score_ylim(values: Sequence[float]) -> float:
@@ -1803,106 +1797,140 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             upper = min(upper, 0.95)
         return min(1.0, upper)
 
-    for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
-        x = np.arange(len(metrics), dtype=np.float64)
-        width = min(0.34, 0.78 / max(n_sources, 1))
-        panel_values: List[float] = []
-        for source in source_order:
-            row = row_by_source[source]
-            for metric, _ in metrics:
-                try:
-                    panel_values.append(float(row.get(metric, np.nan)))
-                except Exception:
-                    panel_values.append(math.nan)
-        y_max = _adaptive_score_ylim(panel_values)
-        for src_idx, source in enumerate(source_order):
-            row = row_by_source[source]
-            vals: List[float] = []
-            finite_flags: List[bool] = []
-            for metric, _ in metrics:
-                val = row.get(metric, np.nan)
-                try:
-                    val = float(val)
-                except Exception:
-                    val = math.nan
-                finite_flags.append(bool(np.isfinite(val)))
-                vals.append(val if np.isfinite(val) else 0.0)
+    def _draw_group(source_order: List[str], stem: str) -> List[str]:
+        source_order = [src for src in source_order if src in available_set and src in row_by_source]
+        if not source_order:
+            return []
+        n_sources = len(source_order)
+        fig_w = max(11.2, 10.2 + 0.74 * max(0, n_sources - 2))
+        fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.05), sharey=False, constrained_layout=True)
 
-            offset = (src_idx - (n_sources - 1) / 2.0) * width
-            bars = ax.bar(
-                x + offset,
-                vals,
-                width * 0.92,
-                label=source_labels.get(source, source) if ax_idx == 0 else None,
-                color=source_colors.get(source, fallback_colors[src_idx % len(fallback_colors)]),
-                edgecolor="white",
-                linewidth=0.45,
-                alpha=0.96,
-            )
-            for bar, val, ok in zip(bars, vals, finite_flags):
-                if ok:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2.0,
-                        min(val + y_max * 0.025, y_max * 0.98),
-                        f"{val:.2f}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=7,
-                        rotation=90,
-                    )
+        for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
+            x = np.arange(len(metrics), dtype=np.float64)
+            width = min(0.34, 0.78 / max(n_sources, 1))
+            panel_values: List[float] = []
+            for source in source_order:
+                row = row_by_source[source]
+                for metric, _ in metrics:
+                    try:
+                        panel_values.append(float(row.get(metric, np.nan)))
+                    except Exception:
+                        panel_values.append(math.nan)
+            y_max = _adaptive_score_ylim(panel_values)
+            for src_idx, source in enumerate(source_order):
+                row = row_by_source[source]
+                vals: List[float] = []
+                finite_flags: List[bool] = []
+                for metric, _ in metrics:
+                    val = row.get(metric, np.nan)
+                    try:
+                        val = float(val)
+                    except Exception:
+                        val = math.nan
+                    finite_flags.append(bool(np.isfinite(val)))
+                    vals.append(val if np.isfinite(val) else 0.0)
 
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
-        ax.set_ylim(0, y_max)
-        ax.grid(axis="y", alpha=0.28)
-        ax.grid(axis="x", visible=False)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        ax.text(
-            -0.13,
-            1.04,
-            f"({panel_letters[ax_idx]})",
-            transform=ax.transAxes,
-            fontsize=11,
-            fontweight="bold",
-            va="bottom",
-        )
-        if ax_idx == 0:
-            ax.set_ylabel("Score")
-        if title.startswith("Low visibility"):
+                offset = (src_idx - (n_sources - 1) / 2.0) * width
+                bars = ax.bar(
+                    x + offset,
+                    vals,
+                    width * 0.92,
+                    label=source_labels.get(source, source) if ax_idx == 0 else None,
+                    color=source_colors.get(source, fallback_colors[src_idx % len(fallback_colors)]),
+                    edgecolor="white",
+                    linewidth=0.45,
+                    alpha=0.96,
+                )
+                for bar, val, ok in zip(bars, vals, finite_flags):
+                    if ok:
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2.0,
+                            min(val + y_max * 0.025, y_max * 0.98),
+                            f"{val:.2f}",
+                            ha="center",
+                            va="bottom",
+                            fontsize=7,
+                            rotation=90,
+                        )
+
+            ax.set_title(title)
+            ax.set_xticks(x)
+            ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
+            ax.set_ylim(0, y_max)
+            ax.grid(axis="y", alpha=0.28)
+            ax.grid(axis="x", visible=False)
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
             ax.text(
-                0.98,
-                0.96,
-                "FPR lower is better",
+                -0.13,
+                1.04,
+                f"({panel_letters[ax_idx]})",
                 transform=ax.transAxes,
-                ha="right",
-                va="top",
-                fontsize=7.5,
-                color="#444444",
+                fontsize=11,
+                fontweight="bold",
+                va="bottom",
+            )
+            if ax_idx == 0:
+                ax.set_ylabel("Score")
+            if title.startswith("Low visibility"):
+                ax.text(
+                    0.98,
+                    0.96,
+                    "FPR lower is better",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=7.5,
+                    color="#444444",
+                )
+
+        handles, labels = axes[0].get_legend_handles_labels()
+        if handles:
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.10),
+                ncol=min(len(handles), 5),
+                frameon=False,
             )
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.10),
-            ncol=min(len(handles), 4),
-            frameon=False,
-        )
+        out_paths = [
+            out_dir / f"{stem}.png",
+            out_dir / f"{stem}.pdf",
+            out_dir / f"{stem}.svg",
+        ]
+        for path in out_paths:
+            fig.savefig(path, dpi=300, bbox_inches="tight")
+            print(f"  [Fig] Saved -> {path}", flush=True)
+        plt.close(fig)
+        return [str(p) for p in out_paths]
 
-    out_paths = [
-        out_dir / "fig_forecast_source_key_metrics.png",
-        out_dir / "fig_forecast_source_key_metrics.pdf",
-        out_dir / "fig_forecast_source_key_metrics.svg",
-    ]
-    for path in out_paths:
-        fig.savefig(path, dpi=300, bbox_inches="tight")
-        print(f"  [Fig] Saved -> {path}", flush=True)
-    plt.close(fig)
-    return [str(p) for p in out_paths]
+    written: List[str] = []
+    written.extend(
+        _draw_group(
+            ["tianji", "T2ND_rh2m_common_core", "ifs", "era5_2025_common_core", "ifs_diagnostic"],
+            "fig_forecast_source_key_metrics_numerical_models",
+        )
+    )
+    written.extend(
+        _draw_group(
+            ["tianji", "pangu2021_common_core"],
+            "fig_forecast_source_key_metrics_tianji_pangu",
+        )
+    )
+    if not written:
+        fallback_order = [
+            "tianji",
+            "T2ND_rh2m_common_core",
+            "ifs",
+            "era5_2025_common_core",
+            "pangu2021_common_core",
+            "ifs_diagnostic",
+        ]
+        fallback_order.extend([s for s in available_sources if s not in set(fallback_order)])
+        written.extend(_draw_group(fallback_order, "fig_forecast_source_key_metrics"))
+    return written
 
 
 def split_feature_names(value: str) -> List[str]:
@@ -2213,6 +2241,13 @@ def write_independent_source_outputs(
 ) -> None:
     overall_rows: List[Dict[str, object]] = []
     validation_rows: List[Dict[str, object]] = []
+    ifs_diagnostic_info: Dict[str, object] = {
+        "enabled": bool(not args.skip_ifs_forecast_baseline),
+        "path": args.ifs_forecast_nc,
+        "variable": args.ifs_forecast_var,
+        "reference_source": "",
+        "matched_rows": 0,
+    }
     for source, eval_obj in evals.items():
         test_metrics = compute_metrics(
             eval_obj.test_targets,
@@ -2261,6 +2296,60 @@ def write_independent_source_outputs(
             sample["correct"] = eval_obj.test_preds == eval_obj.test_targets
             sample.to_csv(out_dir / f"per_sample_{source}.csv", index=False)
 
+    if not args.skip_ifs_forecast_baseline:
+        ref_order = [
+            "tianji",
+            "ifs",
+            "T2ND_rh2m_common_core",
+            "era5_2025_common_core",
+            *[source for source in evals if source not in {"tianji", "ifs", "T2ND_rh2m_common_core", "era5_2025_common_core"}],
+        ]
+        seen_ref: Set[str] = set()
+        for ref_source in ref_order:
+            if ref_source in seen_ref or ref_source not in evals:
+                continue
+            seen_ref.add(ref_source)
+            eval_obj = evals[ref_source]
+            if eval_obj.test_meta is None:
+                continue
+            try:
+                ifs_preds, ifs_vis_raw, ifs_valid = load_ifs_forecast_baseline(
+                    eval_obj.test_meta,
+                    args.ifs_forecast_nc,
+                    args.ifs_forecast_var,
+                )
+            except Exception as exc:
+                print(f"[WARN] independent IFS diagnostic baseline skipped for {ref_source}: {exc}", flush=True)
+                continue
+            matched = int(np.asarray(ifs_valid, dtype=bool).sum())
+            if matched <= 0:
+                continue
+            valid = np.asarray(ifs_valid, dtype=bool)
+            diag_metrics = compute_metrics(eval_obj.test_targets[valid], ifs_preds[valid], probs=None)
+            overall_rows.append(
+                rows_from_metrics(
+                    "ifs_diagnostic",
+                    diag_metrics,
+                    {
+                        "matched_rows": matched,
+                        "reference_source": ref_source,
+                        "ifs_forecast_nc": args.ifs_forecast_nc,
+                        "ifs_forecast_var": args.ifs_forecast_var,
+                        "evaluation_mode": "independent_source_diagnostic",
+                    },
+                )
+            )
+            ifs_diagnostic_info.update({"reference_source": ref_source, "matched_rows": matched})
+            if not args.no_per_sample_csv:
+                sample = eval_obj.test_meta.loc[valid].reset_index(drop=True).copy()
+                sample["y_cls"] = eval_obj.test_targets[valid]
+                sample["vis_raw_m"] = eval_obj.test_raw_vis[valid]
+                sample["ifs_diagnostic_vis_m"] = np.asarray(ifs_vis_raw, dtype=np.float32)[valid]
+                sample["ifs_diagnostic_pred"] = ifs_preds[valid]
+                sample["correct"] = ifs_preds[valid] == eval_obj.test_targets[valid]
+                sample.to_csv(out_dir / "per_sample_ifs_diagnostic.csv", index=False)
+            break
+
     overall_df = pd.DataFrame(overall_rows)
     validation_df = pd.DataFrame(validation_rows)
     overall_df.to_csv(out_dir / "overall_metrics.csv", index=False)
@@ -2283,6 +2372,7 @@ def write_independent_source_outputs(
             }
             for source, eval_obj in evals.items()
         },
+        "ifs_diagnostic": ifs_diagnostic_info,
         "class_definition": {
             "0": "0 <= visibility < 500 m",
             "1": "500 <= visibility < 1000 m",
@@ -2315,6 +2405,18 @@ def write_independent_source_outputs(
 
 def main() -> None:
     args = parse_args()
+    if (
+        args.zero_transfer_s1
+        and args.threshold_mode == "checkpoint"
+        and not args.allow_zero_transfer_checkpoint_thresholds
+    ):
+        raise ValueError(
+            "S1 zero-transfer with --threshold_mode checkpoint is blocked because "
+            "checkpoint thresholds were selected on the S1 station-analysis domain "
+            "and can collapse forecast-source predictions to clear. Use "
+            "--threshold_mode argmax for raw response, or --threshold_mode val_search "
+            "to recalibrate thresholds on each source validation split."
+        )
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 

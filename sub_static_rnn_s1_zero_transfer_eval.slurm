@@ -52,6 +52,7 @@ SOURCE_GROUP="${SOURCE_GROUP:-all}"
 MERGE_ONLY="${MERGE_ONLY:-0}"
 THRESHOLD_MODE="${THRESHOLD_MODE:-argmax}"
 SKIP_VALIDATION_INFERENCE="${SKIP_VALIDATION_INFERENCE:-1}"
+SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core}"
@@ -124,12 +125,14 @@ CMD=(
     --num_workers "${NUM_WORKERS}"
     --threshold_mode "${THRESHOLD_MODE}"
     --skip_bootstrap
-    --skip_ifs_forecast_baseline
     --no_per_sample_csv
 )
 
 if [[ "${SKIP_VALIDATION_INFERENCE}" == "1" && "${THRESHOLD_MODE}" != "val_search" ]]; then
     CMD+=(--skip_validation_inference)
+fi
+if [[ "${SKIP_IFS_FORECAST_BASELINE}" == "1" ]]; then
+    CMD+=(--skip_ifs_forecast_baseline)
 fi
 if [[ -n "${LIMIT_SAMPLES}" ]]; then
     CMD+=(--limit_samples "${LIMIT_SAMPLES}")
