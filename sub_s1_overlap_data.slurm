@@ -33,18 +33,28 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_s1_pm10_overlap_from_full.py"
 SOURCE_DIR="${SOURCE_DIR:-}"
 OUT_DIR="${OUT_DIR:-}"
+FEATURE_SET="${FEATURE_SET:-overlap_full}"
 CHUNK_ROWS="${CHUNK_ROWS:-}"
 MERGE_TRAIN_VAL="${MERGE_TRAIN_VAL:-0}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 
+if [[ -z "${OUT_DIR}" ]]; then
+    if [[ "${FEATURE_SET}" == "common_core" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core"
+    elif [[ "${FEATURE_SET}" == "source_full" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full"
+    else
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap"
+    fi
+fi
+
 PY_ARGS=()
+PY_ARGS+=(--feature_set "${FEATURE_SET}")
 
 if [[ -n "${SOURCE_DIR}" ]]; then
     PY_ARGS+=(--source_dir "${SOURCE_DIR}")
 fi
-if [[ -n "${OUT_DIR}" ]]; then
-    PY_ARGS+=(--out_dir "${OUT_DIR}")
-fi
+PY_ARGS+=(--out_dir "${OUT_DIR}")
 if [[ -n "${CHUNK_ROWS}" ]]; then
     PY_ARGS+=(--chunk_rows "${CHUNK_ROWS}")
 fi

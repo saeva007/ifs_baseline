@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
-from typing import List
+from typing import List, Sequence
 
+import numpy as np
 import pandas as pd
-
-from test_PMST_overlap_forecast_source_s2 import plot_key_metrics_figure
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,11 +69,264 @@ def read_table(paths: List[Path], name: str) -> pd.DataFrame:
 def dedupe_sources(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "source" not in df:
         return df
-    preferred = ["tianji", "ifs", "T2ND_rh2m_common_core", "pangu2021_common_core", "era5_2025_common_core"]
+    preferred = [
+        "tianji",
+        "T2ND_rh2m_common_core",
+        "ifs",
+        "era5_2025_common_core",
+        "pangu2021_common_core",
+        "ifs_diagnostic",
+    ]
     df = df.copy()
     df["_order"] = df["source"].astype(str).map({s: i for i, s in enumerate(preferred)}).fillna(len(preferred))
     df = df.sort_values(["_order", "source", "run_dir"], kind="stable")
     return df.drop_duplicates("source", keep="last").drop(columns=["_order"]).reset_index(drop=True)
+
+
+def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str]:
+    """Redraw split key-metric figures without importing the torch evaluator."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # pragma: no cover - plotting env dependent.
+        print(f"[WARN] matplotlib unavailable; skip key-metrics figure: {exc}", flush=True)
+        return []
+
+    if overall_df.empty or "source" not in overall_df:
+        return []
+
+    available_sources = list(dict.fromkeys(overall_df["source"].astype(str).tolist()))
+    available_set = set(available_sources)
+    row_by_source = {str(row["source"]): row for _, row in overall_df.iterrows()}
+    source_labels = {
+        "tianji": "Tianji-trained",
+        "ifs": "IFS-trained",
+        "T2ND_rh2m_common_core": "T2ND RH2M",
+        "pangu2021_common_core": "Pangu-2021",
+        "era5_2025_common_core": "ERA5-2025",
+        "ifs_diagnostic": "IFS diagnostic VIS",
+    }
+    for _, row in overall_df.iterrows():
+        src = str(row.get("source", ""))
+        label = str(row.get("source_label", "") or "").strip()
+        if src and label and label != src:
+            source_labels[src] = label
+    source_colors = {
+        "tianji": "#2E5A87",
+        "ifs": "#6C6C6C",
+        "T2ND_rh2m_common_core": "#1B9E77",
+        "pangu2021_common_core": "#8E6BBE",
+        "era5_2025_common_core": "#D95F02",
+        "ifs_diagnostic": "#E69F00",
+    }
+    fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
+
+    panels = [
+        (
+            "Fog (0-500 m)",
+            [
+                ("fog_precision", "Precision"),
+                ("fog_pod", "Recall"),
+                ("fog_f1", "F1"),
+                ("fog_csi", "CSI"),
+            ],
+        ),
+        (
+            "Mist (500-1000 m)",
+            [
+                ("mist_precision", "Precision"),
+                ("mist_pod", "Recall"),
+                ("mist_f1", "F1"),
+                ("mist_csi", "CSI"),
+            ],
+        ),
+        (
+            "Low visibility (<1000 m)",
+            [
+                ("low_vis_precision", "Precision"),
+                ("low_vis_recall", "Recall"),
+                ("low_vis_f1", "F1"),
+                ("low_vis_csi", "CSI"),
+                ("low_vis_fpr", "FPR"),
+            ],
+        ),
+    ]
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Serif",
+            "font.size": 9,
+            "axes.labelsize": 10,
+            "axes.titlesize": 11,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 8,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "savefig.bbox": "tight",
+            "axes.grid": True,
+            "grid.alpha": 0.25,
+            "axes.axisbelow": True,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+
+    panel_letters = ["a", "b", "c"]
+
+    def _adaptive_score_ylim(values: Sequence[float]) -> float:
+        arr = np.asarray(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return 0.20
+        vmax = float(np.nanmax(arr))
+        if vmax <= 0:
+            return 0.10
+        padded = min(1.0, vmax + max(0.025, 0.10 * vmax))
+        step = 0.02 if padded <= 0.20 else 0.05
+        upper = max(step * 3, math.ceil(padded / step) * step)
+        if vmax < 0.80:
+            upper = min(upper, 0.85)
+        elif vmax < 0.90:
+            upper = min(upper, 0.95)
+        return min(1.0, upper)
+
+    def _draw_group(source_order: List[str], stem: str) -> List[str]:
+        source_order = [src for src in source_order if src in available_set and src in row_by_source]
+        if not source_order:
+            return []
+        n_sources = len(source_order)
+        fig_w = max(11.2, 10.2 + 0.74 * max(0, n_sources - 2))
+        fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.05), sharey=False, constrained_layout=True)
+
+        for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
+            x = np.arange(len(metrics), dtype=np.float64)
+            width = min(0.34, 0.78 / max(n_sources, 1))
+            panel_values: List[float] = []
+            for source in source_order:
+                row = row_by_source[source]
+                for metric, _ in metrics:
+                    try:
+                        panel_values.append(float(row.get(metric, np.nan)))
+                    except Exception:
+                        panel_values.append(math.nan)
+            y_max = _adaptive_score_ylim(panel_values)
+            for src_idx, source in enumerate(source_order):
+                row = row_by_source[source]
+                vals: List[float] = []
+                finite_flags: List[bool] = []
+                for metric, _ in metrics:
+                    val = row.get(metric, np.nan)
+                    try:
+                        val = float(val)
+                    except Exception:
+                        val = math.nan
+                    finite_flags.append(bool(np.isfinite(val)))
+                    vals.append(val if np.isfinite(val) else 0.0)
+
+                offset = (src_idx - (n_sources - 1) / 2.0) * width
+                bars = ax.bar(
+                    x + offset,
+                    vals,
+                    width * 0.92,
+                    label=source_labels.get(source, source) if ax_idx == 0 else None,
+                    color=source_colors.get(source, fallback_colors[src_idx % len(fallback_colors)]),
+                    edgecolor="white",
+                    linewidth=0.45,
+                    alpha=0.96,
+                )
+                for bar, val, ok in zip(bars, vals, finite_flags):
+                    if ok:
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2.0,
+                            min(val + y_max * 0.025, y_max * 0.98),
+                            f"{val:.2f}",
+                            ha="center",
+                            va="bottom",
+                            fontsize=7,
+                            rotation=90,
+                        )
+
+            ax.set_title(title)
+            ax.set_xticks(x)
+            ax.set_xticklabels([label for _, label in metrics], rotation=25, ha="right")
+            ax.set_ylim(0, y_max)
+            ax.grid(axis="y", alpha=0.28)
+            ax.grid(axis="x", visible=False)
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+            ax.text(
+                -0.13,
+                1.04,
+                f"({panel_letters[ax_idx]})",
+                transform=ax.transAxes,
+                fontsize=11,
+                fontweight="bold",
+                va="bottom",
+            )
+            if ax_idx == 0:
+                ax.set_ylabel("Score")
+            if title.startswith("Low visibility"):
+                ax.text(
+                    0.98,
+                    0.96,
+                    "FPR lower is better",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=7.5,
+                    color="#444444",
+                )
+
+        handles, labels = axes[0].get_legend_handles_labels()
+        if handles:
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.10),
+                ncol=min(len(handles), 5),
+                frameon=False,
+            )
+
+        out_paths = [
+            out_dir / f"{stem}.png",
+            out_dir / f"{stem}.pdf",
+            out_dir / f"{stem}.svg",
+        ]
+        for path in out_paths:
+            fig.savefig(path, dpi=300, bbox_inches="tight")
+            print(f"  [Fig] Saved -> {path}", flush=True)
+        plt.close(fig)
+        return [str(p) for p in out_paths]
+
+    written: List[str] = []
+    written.extend(
+        _draw_group(
+            ["tianji", "T2ND_rh2m_common_core", "ifs", "era5_2025_common_core", "ifs_diagnostic"],
+            "fig_forecast_source_key_metrics_numerical_models",
+        )
+    )
+    written.extend(
+        _draw_group(
+            ["tianji", "pangu2021_common_core"],
+            "fig_forecast_source_key_metrics_tianji_pangu",
+        )
+    )
+    if not written:
+        fallback_order = [
+            "tianji",
+            "T2ND_rh2m_common_core",
+            "ifs",
+            "era5_2025_common_core",
+            "pangu2021_common_core",
+            "ifs_diagnostic",
+        ]
+        fallback_order.extend([s for s in available_sources if s not in set(fallback_order)])
+        written.extend(_draw_group(fallback_order, "fig_forecast_source_key_metrics"))
+    return written
 
 
 def main() -> None:

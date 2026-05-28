@@ -84,7 +84,7 @@ DEFAULT_OUT_DIR = os.path.join(
 DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
     "STATIC_RNN_TRAIN_DIR", os.path.join(VIS_MLP_ROOT, "train")
 )
-DEFAULT_STATIC_RNN_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
+DEFAULT_STATIC_RNN_S1_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
 DEFAULT_STATIC_RNN_S1_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_RUN_ID}_S1_best_score.pt"
 )

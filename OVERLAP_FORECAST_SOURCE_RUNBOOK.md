@@ -63,6 +63,14 @@ dataset is missing, or when you need to verify the 27-dyn layout from scratch.
 sbatch sub_s1_overlap_data.slurm
 ```
 
+For the five-source `common_core` comparison and the S1 zero-transfer response
+diagnostic, build a separate S1 dataset whose masked variables exactly match the
+Pangu-compatible common-core layout:
+
+```bash
+sbatch --export=ALL,FEATURE_SET=common_core sub_s1_overlap_data.slurm
+```
+
 Optional explicit paths:
 
 ```bash
@@ -77,6 +85,13 @@ Do not use `--merge_train_val` for the paper experiment.
 sbatch --export=ALL,EXPERIMENT=s1_overlap sub_ifs_overlap_baseline.slurm
 ```
 
+For common-core source-family experiments, train the matching S1 checkpoint
+instead of reusing the overlap-full S1 checkpoint:
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s1_common_core sub_ifs_overlap_baseline.slurm
+```
+
 The default `MODEL_ARCH=static_rnn` trains
 `exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The Slurm launcher uses
 the same direct main-trainer path and stable knobs as
@@ -86,6 +101,11 @@ the same direct main-trainer path and stable knobs as
 overridden. The trainer requires explicit `X_train/y_train` and `X_val/y_val`,
 and it fails if the row layout is not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst`
 only for legacy PMST audits.
+
+`EXPERIMENT=s1_common_core` writes
+`exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt` and
+`robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn27_pm.pkl`.
+Use this pair for S1 zero-transfer tests against common-core forecast sources.
 
 ### 3. Rebuild Tianji-Input S2 Overlap Data
 
@@ -326,9 +346,9 @@ sbatch --dependency=afterok:${deps} --export=ALL,SOURCE_GROUP=merge sub_static_r
 Default inputs are:
 
 - checkpoint:
-  `ifs_baseline/checkpoints/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`
+  `ifs_baseline/checkpoints/exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt`
 - scaler:
-  `ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_pm10_pm25_s1_w12_dyn27_pm.pkl`
+  `ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn27_pm.pkl`
 - output root:
   `paper_eval_results_pm10_pm25_journal/zero_transfer_s1_forecast_sources`
 

@@ -31,6 +31,9 @@ DEFAULT_STATIC_TRAIN_DIR = os.environ.get(
 DEFAULT_S1_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap"
 )
+DEFAULT_S1_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core"
+)
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
 )
@@ -56,6 +59,7 @@ DEFAULT_S2_DIRS = {
     "era5_2025_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full"),
 }
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
+DEFAULT_S1_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
 DEFAULT_OVERLAP_S2_A_STEPS = "12000"
 DEFAULT_OVERLAP_S2_B_STEPS = "40000"
 DEFAULT_OVERLAP_S2_PATIENCE = "18"
@@ -116,6 +120,8 @@ def resolve_run_id(args: argparse.Namespace) -> str:
     if env_run_id:
         return env_run_id
     if args.mode == "s1":
+        if "common_core" in str(args.s1_data_dir):
+            return DEFAULT_S1_COMMON_CORE_RUN_ID
         return DEFAULT_S1_RUN_ID
     if args.mode == "both":
         return f"exp_overlap_static_rnn_both_{args.data_source}_pm10_pm25"
@@ -127,7 +133,9 @@ def resolve_pretrained_ckpt(args: argparse.Namespace) -> str:
         return args.pretrained_ckpt
     if args.mode != "s2" or args.no_default_s1_pretrained:
         return ""
-    default_path = os.path.join(args.ckpt_dir, f"{DEFAULT_S1_RUN_ID}_S1_best_score.pt")
+    s2_dir = resolve_s2_data_dir(args)
+    run_id = DEFAULT_S1_COMMON_CORE_RUN_ID if "common_core" in str(s2_dir) else DEFAULT_S1_RUN_ID
+    default_path = os.path.join(args.ckpt_dir, f"{run_id}_S1_best_score.pt")
     return default_path if os.path.isfile(default_path) else ""
 
 

@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 从已构建的完整 S1 数据集（27 动态维：24 met + zenith + pm10 + pm2p5，例如 PMST_s1_data_pm10.ipynb
-或含 pm2p5 的变体 → ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25）派生「仅重合气象槽位」版本，
-供与 IFS/Tianji overlap 槽位对齐；若 S1 已用 s2_data_monthtail_v2 全变量数据训练，可跳过本脚本。
+或含 pm2p5 的变体 → ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25）派生固定变量子集版本。
+`overlap_full` 供与 IFS/Tianji overlap 槽位对齐；`common_core` 供 Pangu 兼容的五源公平比较。
 
 做法：对每条样本的动态张量 (12,27)，只保留 Tianji/IFS 共同可填充的气象槽位（含 RH2M、
 Q_1000、DP_1000、RH_925 等，并由 U/V 或温湿度派生风速、风向、露点差等），
@@ -28,10 +28,15 @@ import os
 import numpy as np
 
 from pmst_overlap_common import (
+    COMMON_CORE_PMST_FEATURES,
+    FEATURE_SET_CHOICES,
+    FINAL_FEATURE_ORDER,
     OVERLAP_CANONICAL,
-    OVERLAP_PMST_INDICES,
+    PMST_INDEX,
+    PMST_SOURCE_FIELDS,
     TOTAL_DYN,
     compute_fog_features_pmst,
+    resolve_pmst_feature_set,
     scatter_overlap_fields,
 )
 
@@ -43,7 +48,7 @@ FE_DIM = 36
 EXPECTED_ROW = BASE_DYN + STATIC_VEG + FE_DIM
 
 
-def _transform_chunk(dyn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _transform_chunk(dyn: np.ndarray, feature_vars: list[str]) -> tuple[np.ndarray, np.ndarray]:
     """
     dyn: (N, 12, 27) full dynamic from source (24 met + zenith + pm10 + pm2p5).
     Returns (dyn_new, fe32) — fe32 与 pmst_overlap_common.compute_fog_features_pmst 一致；
@@ -51,14 +56,14 @@ def _transform_chunk(dyn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     met = dyn[:, :, :24].copy()
     zen_pm = dyn[:, :, 24:].copy()
-    fields = {name: met[:, :, OVERLAP_PMST_INDICES[name]] for name in OVERLAP_CANONICAL}
-    met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields)
+    fields = {name: met[:, :, PMST_INDEX[name]] for name in FINAL_FEATURE_ORDER}
+    met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields, feature_vars)
     dyn_new = np.concatenate([met_new, zen_pm], axis=-1).astype(np.float32)
     fe32 = compute_fog_features_pmst(dyn_new, WINDOW, TOTAL_DYN)
     return dyn_new, fe32
 
 
-def transform_file(src_path: str, dst_path: str, chunk: int) -> int:
+def transform_file(src_path: str, dst_path: str, chunk: int, feature_vars: list[str]) -> int:
     X = np.load(src_path, mmap_mode="r")
     if len(X.shape) != 2 or X.shape[1] != EXPECTED_ROW:
         raise ValueError(f"{src_path}: expected shape [N,{EXPECTED_ROW}], got {X.shape}")
@@ -68,7 +73,7 @@ def transform_file(src_path: str, dst_path: str, chunk: int) -> int:
         sl = slice(i, min(i + chunk, n))
         block = np.array(X[sl], dtype=np.float32)
         dyn = block[:, :BASE_DYN].reshape(-1, WINDOW, DYN_VARS)
-        dyn_new, fe32 = _transform_chunk(dyn)
+        dyn_new, fe32 = _transform_chunk(dyn, feature_vars)
         block[:, :BASE_DYN] = dyn_new.reshape(-1, BASE_DYN)
         c0 = BASE_DYN + STATIC_VEG
         block[:, c0 : c0 + 32] = fe32
@@ -98,6 +103,15 @@ def main():
         "--out_dir",
         default="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap",
     )
+    ap.add_argument(
+        "--feature_set",
+        choices=FEATURE_SET_CHOICES,
+        default="overlap_full",
+        help=(
+            "S1 PMST met slots to keep. overlap_full preserves Tianji/IFS overlap slots; "
+            "common_core keeps only the Pangu-compatible fair-comparison slots."
+        ),
+    )
     ap.add_argument("--chunk_rows", type=int, default=4096)
     ap.add_argument(
         "--merge_train_val",
@@ -107,6 +121,7 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
+    feature_vars = resolve_pmst_feature_set(args.feature_set, PMST_SOURCE_FIELDS)
 
     if args.merge_train_val:
         xt = os.path.join(args.source_dir, "X_train.npy")
@@ -130,7 +145,7 @@ def main():
                 sl = slice(i, min(i + args.chunk_rows, n_src))
                 block = np.array(X[sl], dtype=np.float32)
                 dyn = block[:, :BASE_DYN].reshape(-1, WINDOW, DYN_VARS)
-                dyn_new, fe32 = _transform_chunk(dyn)
+                dyn_new, fe32 = _transform_chunk(dyn, feature_vars)
                 block[:, :BASE_DYN] = dyn_new.reshape(-1, BASE_DYN)
                 c0 = BASE_DYN + STATIC_VEG
                 block[:, c0 : c0 + 32] = fe32
@@ -147,7 +162,7 @@ def main():
                 print(f"[SKIP] missing {src_x}", flush=True)
                 continue
             dst_x = os.path.join(args.out_dir, x_name)
-            n = transform_file(src_x, dst_x, args.chunk_rows)
+            n = transform_file(src_x, dst_x, args.chunk_rows, feature_vars)
             print(f"[OK] {x_name} -> {dst_x} (N={n})", flush=True)
             y_name = f"y_{tag}.npy"
             copy_if_exists(args.source_dir, y_name, args.out_dir)
@@ -156,11 +171,15 @@ def main():
         copy_if_exists(args.source_dir, meta, args.out_dir)
 
     cfg = {
-        "dataset": "s1_pm10_overlap_derived_from_full",
+        "dataset": f"s1_pm10_{args.feature_set}_derived_from_full",
         "source_dir": args.source_dir,
+        "feature_set": args.feature_set,
         "row_layout": f"{BASE_DYN} dyn + {STATIC_VEG} static/veg + {FE_DIM} FE",
         "source_row_requirement": "12*27 dyn + 5 static + 1 veg + 36 FE",
         "overlap_channels": OVERLAP_CANONICAL,
+        "common_core_channels": COMMON_CORE_PMST_FEATURES,
+        "populated_pmst_features": feature_vars,
+        "zero_filled_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "note": "FE: 32-d fog recompute from masked dyn +4-d cyclical time kept from source row.",
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:
