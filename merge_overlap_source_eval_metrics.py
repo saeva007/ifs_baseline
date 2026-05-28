@@ -66,6 +66,51 @@ def read_table(paths: List[Path], name: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
 
 
+def read_ifs_diagnostic_table(paths: List[Path]) -> pd.DataFrame:
+    """Read IFS empirical VIS rows stored outside overall_metrics.csv."""
+    rename = {
+        "model_label": "source_label",
+        "fog_th": "fog_threshold",
+        "mist_th": "mist_threshold",
+        "Fog_P": "fog_precision",
+        "Fog_R": "fog_pod",
+        "Fog_CSI": "fog_csi",
+        "Fog_FAR": "fog_far",
+        "Fog_support": "fog_support",
+        "Mist_P": "mist_precision",
+        "Mist_R": "mist_pod",
+        "Mist_CSI": "mist_csi",
+        "Mist_FAR": "mist_far",
+        "Mist_support": "mist_support",
+        "Clear_P": "clear_precision",
+        "Clear_R": "clear_recall",
+        "Clear_CSI": "clear_csi",
+        "Clear_FAR": "clear_far",
+        "Clear_support": "clear_support",
+    }
+    frames = []
+    for path in paths:
+        table_path = path.parent / "ifs_diagnostic_matched_metrics.csv"
+        if not table_path.is_file():
+            continue
+        df = pd.read_csv(table_path)
+        if "source" not in df:
+            continue
+        df = df[df["source"].astype(str).eq("ifs_diagnostic")].copy()
+        if df.empty:
+            continue
+        df = df.rename(columns=rename)
+        if "source_label" not in df or df["source_label"].isna().all() or (df["source_label"].astype(str).str.len() == 0).all():
+            df["source_label"] = "IFS empirical VIS"
+        else:
+            df["source_label"] = df["source_label"].fillna("").replace("", "IFS empirical VIS")
+        if "low_vis_fpr" not in df and "false_positive_rate" in df:
+            df["low_vis_fpr"] = df["false_positive_rate"]
+        df["run_dir"] = str(path.parent)
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
 def dedupe_sources(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "source" not in df:
         return df
@@ -199,7 +244,8 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             return []
         n_sources = len(source_order)
         fig_w = max(11.2, 10.2 + 0.74 * max(0, n_sources - 2))
-        fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.05), sharey=False, constrained_layout=True)
+        fig, axes = plt.subplots(1, 3, figsize=(fig_w, 4.45), sharey=False, constrained_layout=False)
+        fig.subplots_adjust(left=0.065, right=0.995, bottom=0.22, top=0.79, wspace=0.24)
 
         for ax_idx, (ax, (title, metrics)) in enumerate(zip(axes, panels)):
             x = np.arange(len(metrics), dtype=np.float64)
@@ -286,7 +332,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 handles,
                 labels,
                 loc="upper center",
-                bbox_to_anchor=(0.5, 1.10),
+                bbox_to_anchor=(0.5, 0.985),
                 ncol=min(len(handles), 5),
                 frameon=False,
             )
@@ -297,7 +343,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             out_dir / f"{stem}.svg",
         ]
         for path in out_paths:
-            fig.savefig(path, dpi=300, bbox_inches="tight")
+            fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.04)
             print(f"  [Fig] Saved -> {path}", flush=True)
         plt.close(fig)
         return [str(p) for p in out_paths]
@@ -338,7 +384,11 @@ def main() -> None:
     if not paths:
         raise FileNotFoundError("No overall_metrics.csv files were found.")
 
-    overall = dedupe_sources(read_table(paths, "overall_metrics.csv"))
+    overall_raw = read_table(paths, "overall_metrics.csv")
+    ifs_diagnostic = read_ifs_diagnostic_table(paths)
+    if not ifs_diagnostic.empty:
+        overall_raw = pd.concat([overall_raw, ifs_diagnostic], ignore_index=True, sort=False)
+    overall = dedupe_sources(overall_raw)
     validation = dedupe_sources(read_table(paths, "validation_metrics.csv"))
     overall.to_csv(out_dir / "overall_metrics.csv", index=False)
     if not validation.empty:

@@ -228,6 +228,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
         echo "ERROR: static_rnn S2 overlap training must start from the overlap S1 best checkpoint." >&2
         echo "Expected: ${DEFAULT_STATIC_RNN_S1_CKPT}" >&2
         echo "Run S1 first with: sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+        echo "Before common_core S1 training, build data with: sbatch --export=ALL,FEATURE_SET=common_core sub_s1_overlap_data.slurm" >&2
         echo "For common_core S2, run: sbatch --export=ALL,EXPERIMENT=s1_common_core,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
         echo "Or set OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/*_S1_best_score.pt explicitly." >&2
         exit 1

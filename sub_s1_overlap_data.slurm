@@ -48,12 +48,17 @@ if [[ -z "${OUT_DIR}" ]]; then
     fi
 fi
 
+if [[ -z "${SOURCE_DIR}" ]]; then
+    if [[ "${FEATURE_SET}" == "common_core" ]]; then
+        SOURCE_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap"
+    else
+        SOURCE_DIR="/public/home/putianshu/vis_mlp/ml_dataset_pmst_v5_aligned_12h_pm10_pm25"
+    fi
+fi
+
 PY_ARGS=()
 PY_ARGS+=(--feature_set "${FEATURE_SET}")
-
-if [[ -n "${SOURCE_DIR}" ]]; then
-    PY_ARGS+=(--source_dir "${SOURCE_DIR}")
-fi
+PY_ARGS+=(--source_dir "${SOURCE_DIR}")
 PY_ARGS+=(--out_dir "${OUT_DIR}")
 if [[ -n "${CHUNK_ROWS}" ]]; then
     PY_ARGS+=(--chunk_rows "${CHUNK_ROWS}")

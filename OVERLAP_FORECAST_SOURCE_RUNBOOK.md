@@ -71,10 +71,17 @@ Pangu-compatible common-core layout:
 sbatch --export=ALL,FEATURE_SET=common_core sub_s1_overlap_data.slurm
 ```
 
+The common-core S1 build derives from
+`/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap`
+by default, so the plain `sbatch sub_s1_overlap_data.slurm` step above must
+finish successfully first.
+
 Optional explicit paths:
 
 ```bash
-sbatch --export=ALL,SOURCE_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25,OUT_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap sub_s1_overlap_data.slurm
+sbatch --export=ALL,SOURCE_DIR=/public/home/putianshu/vis_mlp/ml_dataset_pmst_v5_aligned_12h_pm10_pm25,OUT_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap sub_s1_overlap_data.slurm
+
+sbatch --export=ALL,FEATURE_SET=common_core,SOURCE_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap,OUT_DIR=/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core sub_s1_overlap_data.slurm
 ```
 
 Do not use `--merge_train_val` for the paper experiment.
