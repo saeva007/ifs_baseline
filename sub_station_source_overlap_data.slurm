@@ -41,6 +41,10 @@ FEATURE_DIR="${FEATURE_DIR:-}"
 YEAR="${YEAR:-2021}"
 TARGET_FILE="${TARGET_FILE:-}"
 FEATURE_SET="${FEATURE_SET:-common_core}"
+FEATURE_SUFFIX="${FEATURE_SET}"
+if [[ "${FEATURE_SET}" == compact_common_core* ]]; then
+    FEATURE_SUFFIX="compact_common_core_no_rh2m"
+fi
 OUT_DIR="${OUT_DIR:-}"
 PM10_FILE="${PM10_FILE:-}"
 PM10_DIR="${PM10_DIR:-}"
@@ -62,7 +66,7 @@ if [[ -z "${TARGET_FILE}" ]]; then
     fi
 fi
 if [[ -z "${OUT_DIR}" ]]; then
-    OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_${SOURCE_TAG}_12h_pm10_pm25_${FEATURE_SET}"
+    OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_${SOURCE_TAG}_12h_pm10_pm25_${FEATURE_SUFFIX}"
 fi
 
 PY_ARGS=(--source_kind "${SOURCE_KIND}" --source_tag "${SOURCE_TAG}" --year "${YEAR}" --target_file "${TARGET_FILE}" --feature_set "${FEATURE_SET}" --out_dir "${OUT_DIR}")

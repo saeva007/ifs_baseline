@@ -519,7 +519,7 @@ def main():
                         pass
 
     cfg = {
-        "dataset": "tianji_overlap_compact_common_core_monthtail" if args.feature_set == "compact_common_core" else "tianji_overlap_pmst27_monthtail",
+        "dataset": "tianji_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "tianji_overlap_pmst27_monthtail",
         "rh2m_source": args.rh2m_source_tag if rh2m_override_da is not None else "tianji_native",
         "rh2m_override_file": args.rh2m_override_file if rh2m_override_da is not None else "",
         "rh2m_override_var": args.rh2m_override_var if rh2m_override_da is not None else "",
@@ -531,7 +531,7 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
-        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "dyn_layout": dynamic_layout_name(args.feature_set),
         "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
         "dyn_vars": int(dyn_vars_count),

@@ -35,7 +35,7 @@ DEFAULT_S1_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core"
 )
 DEFAULT_S1_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_compact_common_core_no_rh2m"
 )
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
@@ -55,11 +55,11 @@ DEFAULT_S2_DIRS = {
     "ifs_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"),
     "pangu2021_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"),
     "era5_2025_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"),
-    "tianji_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"),
-    "T2ND_rh2m_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core"),
-    "ifs_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"),
-    "pangu2021_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core"),
-    "era5_2025_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core"),
+    "tianji_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core_no_rh2m"),
+    "T2ND_rh2m_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core_no_rh2m"),
+    "ifs_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core_no_rh2m"),
+    "pangu2021_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core_no_rh2m"),
+    "era5_2025_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core_no_rh2m"),
     "tianji_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"),
     "T2ND_rh2m_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full"),
     "ifs_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"),
@@ -68,13 +68,15 @@ DEFAULT_S2_DIRS = {
 }
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
 DEFAULT_S1_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
-DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_pm10_pm25"
+DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25"
 DEFAULT_OVERLAP_S2_A_STEPS = "12000"
 DEFAULT_OVERLAP_S2_B_STEPS = "40000"
 DEFAULT_OVERLAP_S2_PATIENCE = "18"
 
 
 def default_s2_run_id(source: str) -> str:
+    if "compact_common_core" in source and "no_rh2m" not in source:
+        source = source.replace("compact_common_core", "compact_common_core_no_rh2m")
     return f"exp_overlap_static_rnn_s2_{source}_pm10_pm25"
 
 

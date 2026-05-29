@@ -735,7 +735,7 @@ def main():
         print("[INFO] Temporary dynamic memmap cleaned.", flush=True)
 
     cfg = {
-        "dataset": "ifs_overlap_compact_common_core_monthtail" if args.feature_set == "compact_common_core" else "ifs_overlap_pmst27_monthtail",
+        "dataset": "ifs_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "ifs_overlap_pmst27_monthtail",
         "ifs_source": source_tag,
         "ifs_interp_nc": args.ifs_interp_nc or None,
         "ifs_interp_glob": args.ifs_interp_glob or None,
@@ -747,7 +747,7 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available_from_map)],
-        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "ifs_map_gridded": {
             k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
             for k, v in IFS_MAP.items()

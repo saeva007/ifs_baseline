@@ -48,6 +48,10 @@ RH2M_SOURCE_TAG="${RH2M_SOURCE_TAG:-}"
 RH2M_TIME_TOLERANCE_MINUTES="${RH2M_TIME_TOLERANCE_MINUTES:-}"
 RH2M_OVERRIDE_ALLOW_MISSING="${RH2M_OVERRIDE_ALLOW_MISSING:-0}"
 FEATURE_SET="${FEATURE_SET:-overlap_full}"
+FEATURE_SUFFIX="${FEATURE_SET}"
+if [[ "${FEATURE_SET}" == compact_common_core* ]]; then
+    FEATURE_SUFFIX="compact_common_core_no_rh2m"
+fi
 OUT_DIR="${OUT_DIR:-}"
 VAL_LAST_DAYS="${VAL_LAST_DAYS:-}"
 TEST_LAST_DAYS="${TEST_LAST_DAYS:-}"
@@ -62,14 +66,14 @@ if [[ -z "${OUT_DIR}" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${RH2M_SOURCE_TAG:-T2ND_rh2m}"
     elif [[ "${FEATURE_SET}" == "common_core" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"
-    elif [[ "${FEATURE_SET}" == "compact_common_core" ]]; then
-        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"
+    elif [[ "${FEATURE_SET}" == compact_common_core* ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${FEATURE_SUFFIX}"
     elif [[ "${FEATURE_SET}" == "source_full" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"
     fi
 fi
-if [[ -n "${RH2M_OVERRIDE_FILE}" && "${FEATURE_SET}" != "overlap_full" && "${OUT_DIR}" != *"${FEATURE_SET}" ]]; then
-    OUT_DIR="${OUT_DIR}_${FEATURE_SET}"
+if [[ -n "${RH2M_OVERRIDE_FILE}" && "${FEATURE_SET}" != "overlap_full" && "${OUT_DIR}" != *"${FEATURE_SUFFIX}" ]]; then
+    OUT_DIR="${OUT_DIR}_${FEATURE_SUFFIX}"
 fi
 if [[ -z "${CHUNK_WINS}" && -n "${RH2M_OVERRIDE_FILE}" ]]; then
     CHUNK_WINS=64

@@ -104,14 +104,17 @@ COMMON_CORE_PMST_FEATURES: List[str] = [
     "Q_925",
     "DPD",
 ]
+COMPACT_COMMON_CORE_PMST_FEATURES: List[str] = [
+    name for name in COMMON_CORE_PMST_FEATURES if name != "RH2M"
+]
 COMPACT_COMMON_CORE_DYN_FEATURES: List[str] = [
-    *COMMON_CORE_PMST_FEATURES,
+    *COMPACT_COMMON_CORE_PMST_FEATURES,
     "ZENITH",
     "PM10_ugm3",
     "PM25_ugm3",
 ]
 COMPACT_COMMON_CORE_DYN_INDICES: List[int] = [
-    *[PMST_INDEX[name] for name in COMMON_CORE_PMST_FEATURES],
+    *[PMST_INDEX[name] for name in COMPACT_COMMON_CORE_PMST_FEATURES],
     ZENITH_IDX,
     PM10_IDX,
     PM25_IDX,
@@ -119,7 +122,13 @@ COMPACT_COMMON_CORE_DYN_INDICES: List[int] = [
 COMPACT_TOTAL_DYN = len(COMPACT_COMMON_CORE_DYN_FEATURES)
 COMPACT_INDEX: Dict[str, int] = {name: i for i, name in enumerate(COMPACT_COMMON_CORE_DYN_FEATURES)}
 PMST_SOURCE_FIELDS: List[str] = list(dict.fromkeys([*FINAL_FEATURE_ORDER, *OVERLAP_AUXILIARY_FIELDS]))
-FEATURE_SET_CHOICES: Tuple[str, ...] = ("common_core", "compact_common_core", "overlap_full", "source_full")
+FEATURE_SET_CHOICES: Tuple[str, ...] = (
+    "common_core",
+    "compact_common_core",
+    "compact_common_core_no_rh2m",
+    "overlap_full",
+    "source_full",
+)
 
 CANONICAL_VAR_ALIASES: Dict[str, str] = {
     "D2M": "D2M",
@@ -362,12 +371,16 @@ def resolve_pmst_feature_set(feature_set: str, available_features: Optional[Iter
         key = "common_core"
     if key in {"compact", "compact_common", "compact_core"}:
         key = "compact_common_core"
+    if key in {"compact_no_rh2m", "compact_common_no_rh2m", "compact_core_no_rh2m"}:
+        key = "compact_common_core_no_rh2m"
     if key in {"full", "overlap", "overlap_canonical"}:
         key = "overlap_full"
     if key in {"all", "all_available", "source"}:
         key = "source_full"
-    if key in {"common_core", "compact_common_core"}:
+    if key == "common_core":
         return list(COMMON_CORE_PMST_FEATURES)
+    if key in {"compact_common_core", "compact_common_core_no_rh2m"}:
+        return list(COMPACT_COMMON_CORE_PMST_FEATURES)
     if key == "overlap_full":
         return list(OVERLAP_CANONICAL)
     if key == "source_full":
@@ -380,7 +393,16 @@ def resolve_pmst_feature_set(feature_set: str, available_features: Optional[Iter
 
 def is_compact_common_core(feature_set: str) -> bool:
     key = str(feature_set or "").strip().lower().replace("-", "_")
-    return key in {"compact", "compact_common", "compact_core", "compact_common_core"}
+    return key in {
+        "compact",
+        "compact_common",
+        "compact_core",
+        "compact_common_core",
+        "compact_common_core_no_rh2m",
+        "compact_no_rh2m",
+        "compact_common_no_rh2m",
+        "compact_core_no_rh2m",
+    }
 
 
 def dyn_vars_for_feature_set(feature_set: str) -> int:
@@ -395,7 +417,7 @@ def dynamic_feature_order_for_feature_set(feature_set: str) -> List[str]:
 
 def dynamic_layout_name(feature_set: str) -> str:
     if is_compact_common_core(feature_set):
-        return "16_common_core_met + zenith + pm10 + pm2p5"
+        return "15_common_core_no_rh2m_met + zenith + pm10 + pm2p5"
     return "24_pmst_met + zenith + pm10 + pm2p5"
 
 
@@ -718,10 +740,9 @@ def append_pm25_channel(
 
 
 def _compute_compact_common_core_fog_features(X_dyn_window: np.ndarray) -> np.ndarray:
-    """Compact common-core FE using only variables present in the 19-dyn layout."""
+    """Compact common-core FE using only variables present in the no-RH2M layout."""
     idx = COMPACT_INDEX
     x_cur = X_dyn_window[:, -1, :]
-    rh2m = x_cur[:, idx["RH2M"]]
     t2m = x_cur[:, idx["T2M"]]
     wspd = x_cur[:, idx["WSPD10"]]
     rh925 = x_cur[:, idx["RH_925"]]
@@ -738,11 +759,10 @@ def _compute_compact_common_core_fog_features(X_dyn_window: np.ndarray) -> np.nd
     zenith = x_cur[:, idx["ZENITH"]]
     t2m_c = t2m - 273.15 if np.nanmean(t2m) > 200 else t2m
 
-    rh_norm = np.clip(rh2m / 100.0, 0.0, 1.0)
     dpd_weight = 1.0 / (1.0 + np.exp(dpd / 2.0))
+    rh925_norm = np.clip(rh925 / 100.0, 0.0, 1.0)
     wind_fav = np.exp(-0.5 * ((wspd - 3.5) / 2.5) ** 2)
     is_night = (zenith > 90.0).astype(np.float32)
-    rh_strat = np.tanh((rh2m - rh925) / 50.0)
     shear_mag = np.sqrt((u925 - u10) ** 2 + (v925 - v10) ** 2)
     theta10 = np.arctan2(v10, u10)
     theta925 = np.arctan2(v925, u925)
@@ -751,29 +771,29 @@ def _compute_compact_common_core_fog_features(X_dyn_window: np.ndarray) -> np.nd
     moisture_strat = np.tanh((q1000 - q925) * 1500.0)
     dewpoint_contrast = np.tanh((dp1000 - dp925) / 8.0)
     pressure_anom = np.tanh((mslp - np.nanmedian(mslp)) / 2000.0)
-    fog_pot = rh_norm * 0.50 + wind_fav * 0.30 + is_night * 0.20
+    fog_pot = dpd_weight * 0.45 + rh925_norm * 0.25 + wind_fav * 0.15 + is_night * 0.15
 
     feats = [
-        (rh_norm * dpd_weight).reshape(-1, 1),
+        dpd_weight.reshape(-1, 1),
         wind_fav.reshape(-1, 1),
-        rh_strat.reshape(-1, 1),
+        rh925_norm.reshape(-1, 1),
         fog_pot.reshape(-1, 1),
     ]
-    for name in ("RH2M", "T2M", "WSPD10"):
+    for name in ("T2M", "WSPD10", "DPD"):
         seq = X_dyn_window[:, :, idx[name]]
         feats.append((seq[:, -1] - seq[:, -4]).reshape(-1, 1))
         feats.append((seq[:, -1] - seq[:, -7]).reshape(-1, 1))
         feats.append(np.std(seq, axis=1).reshape(-1, 1))
         feats.append((np.max(seq, axis=1) - np.min(seq, axis=1)).reshape(-1, 1))
-    rh_seq = X_dyn_window[:, :, idx["RH2M"]]
-    rh_accel = (rh_seq[:, -1] - rh_seq[:, -4]) - (rh_seq[:, -4] - rh_seq[:, -7])
+    dpd_seq = X_dyn_window[:, :, idx["DPD"]]
+    dpd_accel = (dpd_seq[:, -1] - dpd_seq[:, -4]) - (dpd_seq[:, -4] - dpd_seq[:, -7])
     feats.extend(
         [
-            rh_accel.reshape(-1, 1),
-            (rh2m * np.exp(-t2m_c / 10.0)).reshape(-1, 1),
-            ((is_night > 0) & (rh2m > 90.0)).astype(np.float32).reshape(-1, 1),
-            ((rh2m > 90.0) & (t2m_c < 10.0) & (wspd < 4.0)).astype(np.float32).reshape(-1, 1),
-            ((rh2m / 100.0) ** 2).reshape(-1, 1),
+            dpd_accel.reshape(-1, 1),
+            (dpd_weight * np.exp(-t2m_c / 10.0)).reshape(-1, 1),
+            ((is_night > 0) & (dpd < 2.0)).astype(np.float32).reshape(-1, 1),
+            ((dpd < 2.0) & (t2m_c < 10.0) & (wspd < 4.0)).astype(np.float32).reshape(-1, 1),
+            (dpd_weight ** 2).reshape(-1, 1),
             np.tanh(shear_mag / 8.0).reshape(-1, 1),
             dir_turning.reshape(-1, 1),
             ventilation.reshape(-1, 1),

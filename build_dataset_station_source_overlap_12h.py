@@ -530,7 +530,7 @@ def main() -> None:
                         pass
 
     cfg = {
-        "dataset": "station_source_overlap_compact_common_core_monthtail" if args.feature_set == "compact_common_core" else "station_source_overlap_pmst27_monthtail",
+        "dataset": "station_source_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "station_source_overlap_pmst27_monthtail",
         "source_tag": args.source_tag,
         "source_kind": args.source_kind,
         "source_inputs": source_inputs,
@@ -540,7 +540,7 @@ def main() -> None:
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
-        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "dyn_layout": dynamic_layout_name(args.feature_set),
         "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
         "dyn_vars": int(dyn_vars_count),

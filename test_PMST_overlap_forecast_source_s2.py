@@ -66,10 +66,10 @@ DEFAULT_TIANJI_T2ND_RH2M_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"
 )
 DEFAULT_TIANJI_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core_no_rh2m"
 )
 DEFAULT_TIANJI_T2ND_RH2M_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core_no_rh2m"
 )
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
@@ -78,19 +78,19 @@ DEFAULT_IFS_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
 )
 DEFAULT_IFS_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core_no_rh2m"
 )
 DEFAULT_PANGU2021_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"
 )
 DEFAULT_PANGU2021_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core_no_rh2m"
 )
 DEFAULT_ERA5_2025_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"
 )
 DEFAULT_ERA5_2025_COMPACT_COMMON_CORE_DIR = os.path.join(
-    IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core"
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core_no_rh2m"
 )
 DEFAULT_IFS_FORECAST_NC = os.path.join(VIS_MLP_ROOT, "VIS_IDW_KDTree_20250101_20251231.nc")
 DEFAULT_OUT_DIR = os.path.join(
@@ -100,7 +100,7 @@ DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
     "STATIC_RNN_TRAIN_DIR", os.path.join(VIS_MLP_ROOT, "train")
 )
 DEFAULT_STATIC_RNN_S1_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
-DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_pm10_pm25"
+DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25"
 DEFAULT_STATIC_RNN_S1_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_RUN_ID}_S1_best_score.pt"
 )
@@ -111,7 +111,7 @@ DEFAULT_STATIC_RNN_S1_COMPACT_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_S1_best_score.pt"
 )
 DEFAULT_STATIC_RNN_S1_COMPACT_SCALER = os.path.join(
-    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_s1_w12_dyn19_pm.pkl"
+    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_s1_w12_dyn18_pm.pkl"
 )
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
@@ -119,14 +119,14 @@ SOURCE_LABELS = {
     "tianji": "Tianji-trained/Tianji-input model",
     "T2ND_rh2m": "Tianji-trained/T2ND-rh2m-input model",
     "T2ND_rh2m_common_core": "Tianji T2ND RH2M-trained",
-    "tianji_compact_common_core": "Tianji compact common-core-trained",
-    "T2ND_rh2m_compact_common_core": "Tianji T2ND RH2M compact common-core-trained",
+    "tianji_compact_common_core": "Tianji compact no-RH2M-trained",
+    "T2ND_rh2m_compact_common_core": "Tianji T2ND compact no-RH2M-trained",
     "ifs": "IFS-trained/IFS-input model",
-    "ifs_compact_common_core": "IFS compact common-core-trained",
+    "ifs_compact_common_core": "IFS compact no-RH2M-trained",
     "pangu2021_common_core": "Pangu-2021-trained",
-    "pangu2021_compact_common_core": "Pangu-2021 compact common-core-trained",
+    "pangu2021_compact_common_core": "Pangu-2021 compact no-RH2M-trained",
     "era5_2025_common_core": "ERA5-2025-trained",
-    "era5_2025_compact_common_core": "ERA5-2025 compact common-core-trained",
+    "era5_2025_compact_common_core": "ERA5-2025 compact no-RH2M-trained",
     "ifs_diagnostic": "IFS diagnostic visibility",
 }
 ZERO_TRANSFER_SOURCE_LABELS = {
@@ -534,7 +534,7 @@ def apply_shared_checkpoint_scaler(specs: Dict[str, SourceSpec], args: argparse.
     shared_ckpt = str(args.shared_ckpt or "").strip()
     shared_scaler = str(args.shared_scaler or "").strip()
     if args.zero_transfer_s1:
-        use_compact_s1 = int(args.dyn_vars_count) == 19 or any(
+        use_compact_s1 = int(args.dyn_vars_count) in {18, 19} or any(
             "compact_common_core" in str(spec.data_dir) for spec in specs.values()
         )
         shared_ckpt = shared_ckpt or (
@@ -2074,9 +2074,8 @@ def split_feature_names(value: str) -> List[str]:
 
 
 def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
-    if int(dyn_vars_count) == 19:
+    if int(dyn_vars_count) == 18:
         compact = [
-            "RH2M",
             "T2M",
             "MSLP",
             "U10",
@@ -2097,6 +2096,29 @@ def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
             "PM25_ugm3",
         ]
         return {name: i for i, name in enumerate(compact)}
+    if int(dyn_vars_count) == 19:
+        legacy_compact = [
+            "RH2M",
+            "T2M",
+            "MSLP",
+            "U10",
+            "WSPD10",
+            "V10",
+            "WDIR10",
+            "RH_925",
+            "U_925",
+            "WSPD925",
+            "V_925",
+            "DP_1000",
+            "DP_925",
+            "Q_1000",
+            "Q_925",
+            "DPD",
+            "zenith",
+            "PM10_ugm3",
+            "PM25_ugm3",
+        ]
+        return {name: i for i, name in enumerate(legacy_compact)}
     vis_eval_dir = Path(__file__).resolve().parent.parent / "vis_eval"
     if str(vis_eval_dir) not in sys.path:
         sys.path.insert(0, str(vis_eval_dir))
@@ -2568,6 +2590,8 @@ def write_independent_source_outputs(
 
 def main() -> None:
     args = parse_args()
+    if int(args.dyn_vars_count) == 18 and int(args.expected_extra_dim) == 36:
+        args.expected_extra_dim = 31
     if int(args.dyn_vars_count) == 19 and int(args.expected_extra_dim) == 36:
         args.expected_extra_dim = 31
     if (

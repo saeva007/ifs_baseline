@@ -5,10 +5,11 @@
 或含 pm2p5 的变体 → /public/home/putianshu/vis_mlp/ml_dataset_pmst_v5_aligned_12h_pm10_pm25）
 派生固定变量子集版本。
 `overlap_full` 供与 IFS/Tianji overlap 槽位对齐；`common_core` 供 Pangu 兼容的五源公平比较。
+`compact_common_core` 写出真实较小输入，并移除 Pangu 中由 1000 hPa 湿度近似的 RH2M。
 
 做法：对每条样本的动态张量 (12,27)，只保留 Tianji/IFS 共同可填充的气象槽位（含 RH2M、
 Q_1000、DP_1000、RH_925 等，并由 U/V 或温湿度派生风速、风向、露点差等），
-其余 24 维气象槽置 0；天顶角与 PM10、PM2.5 保持原值；按新 dyn 重算 32 维雾 FE，
+普通 27-dyn 子集会将其余 24 维气象槽置 0；compact 子集会直接切成较小 dyn；按新 dyn 重算雾 FE，
 后 4 维时间周期特征从源行原样保留（与样本标签时刻一致）。静态+植被列不变。
 
 注意：当前 overlap S1 训练脚本要求显式 X_train/y_train 与 X_val/y_val；
@@ -230,7 +231,7 @@ def main():
         "overlap_channels": OVERLAP_CANONICAL,
         "common_core_channels": COMMON_CORE_PMST_FEATURES,
         "populated_pmst_features": feature_vars,
-        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "note": "FE recomputed from the selected dynamic layout; 4-d cyclical time kept from source row.",
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:
