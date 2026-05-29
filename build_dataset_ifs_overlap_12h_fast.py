@@ -47,6 +47,9 @@ from pmst_overlap_common import (
     compute_fog_features_pmst,
     cyclical_time_features,
     describe_available_pmst_features,
+    dynamic_feature_order_for_feature_set,
+    dynamic_layout_name,
+    dyn_vars_for_feature_set,
     get_monthly_split_mask_last_days,
     load_pm10_dataarray,
     load_pm25_dataarray,
@@ -56,6 +59,7 @@ from pmst_overlap_common import (
     normalize_var_coord,
     resolve_pmst_feature_set,
     scatter_overlap_fields,
+    select_dynamic_layout,
     calculate_zenith_angle,
 )
 
@@ -483,6 +487,7 @@ def save_streamed_monthtail(
     val_last_days: int,
     test_last_days: int,
     window_chunk: int,
+    feature_set: str,
 ) -> Tuple[int, int, int]:
     """Write train/val/test arrays in time-major order without materializing all windows."""
     if step < 1:
@@ -510,8 +515,11 @@ def save_streamed_monthtail(
     tr_m, val_m, test_m = get_monthly_split_mask_last_days(valid_times, gap_hours, val_last_days, test_last_days)
     splits = {"train": valid_idxs[tr_m], "val": valid_idxs[val_m], "test": valid_idxs[test_m]}
 
-    dummy_fe_dim = compute_fog_features_pmst(np.zeros((1, window, TOTAL_DYN), dtype=np.float32), window, TOTAL_DYN).shape[1]
-    dyn_dim = window * TOTAL_DYN
+    dyn_vars_count = dyn_vars_for_feature_set(feature_set)
+    dummy_fe_dim = compute_fog_features_pmst(
+        np.zeros((1, window, dyn_vars_count), dtype=np.float32), window, dyn_vars_count
+    ).shape[1]
+    dyn_dim = window * dyn_vars_count
     stat_dim = X_stat.shape[1]
     fe_dim = dummy_fe_dim + 4
     total_dim = dyn_dim + stat_dim + fe_dim
@@ -528,7 +536,8 @@ def save_streamed_monthtail(
             win_view = sliding_window_view(block, window_shape=window, axis=1)[:, ::step, :, :]
             win_view = win_view[:, : (w1 - w0), :, :]
             samples = np.ascontiguousarray(win_view.transpose(1, 0, 3, 2).reshape(-1, window, TOTAL_DYN))
-            fe_base = compute_fog_features_pmst(samples, window, TOTAL_DYN)
+            samples = select_dynamic_layout(samples, feature_set)
+            fe_base = compute_fog_features_pmst(samples, window, dyn_vars_count)
             chunk_times = np.repeat(sample_times[w0:w1].values, ns)
             time_fe = cyclical_time_features(pd.DatetimeIndex(chunk_times))
             global_start = w0 * ns
@@ -713,6 +722,7 @@ def main():
             args.val_last_days,
             args.test_last_days,
             max(1, args.window_chunk),
+            args.feature_set,
         )
     finally:
         try:
@@ -725,7 +735,7 @@ def main():
         print("[INFO] Temporary dynamic memmap cleaned.", flush=True)
 
     cfg = {
-        "dataset": "ifs_overlap_pmst27_monthtail",
+        "dataset": "ifs_overlap_compact_common_core_monthtail" if args.feature_set == "compact_common_core" else "ifs_overlap_pmst27_monthtail",
         "ifs_source": source_tag,
         "ifs_interp_nc": args.ifs_interp_nc or None,
         "ifs_interp_glob": args.ifs_interp_glob or None,
@@ -737,12 +747,14 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available_from_map)],
-        "zero_filled_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "ifs_map_gridded": {
             k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
             for k, v in IFS_MAP.items()
         },
-        "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "dyn_layout": dynamic_layout_name(args.feature_set),
+        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
+        "dyn_vars": int(dyn_vars_for_feature_set(args.feature_set)),
         "derived_overlap_vars": {
             "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
             "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",

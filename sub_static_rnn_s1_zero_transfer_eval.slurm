@@ -40,15 +40,43 @@ EVAL_SCRIPT="${EVAL_SCRIPT:-${BASELINE_DIR}/test_PMST_overlap_forecast_source_s2
 MERGE_SCRIPT="${MERGE_SCRIPT:-${BASELINE_DIR}/merge_overlap_source_eval_metrics.py}"
 TRAIN_DIR="${TRAIN_DIR:-${BASE}/train}"
 CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
-S1_RUN_ID="${S1_RUN_ID:-exp_overlap_static_rnn_s1_common_core_pm10_pm25}"
+FEATURE_SET="${FEATURE_SET:-common_core}"
+if [[ "${FEATURE_SET}" == "compact_common_core" ]]; then
+    DEFAULT_S1_RUN_ID="exp_overlap_static_rnn_s1_compact_common_core_pm10_pm25"
+    DEFAULT_SCALER_DYN=19
+    DEFAULT_EXTRA_DIM=31
+    DEFAULT_TIANJI_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"
+    DEFAULT_IFS_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"
+    DEFAULT_T2ND_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core"
+    DEFAULT_PANGU_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core"
+    DEFAULT_ERA5_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core"
+    T2ND_SOURCE_TAG="T2ND_rh2m_compact_common_core"
+    PANGU_SOURCE_TAG="pangu2021_compact_common_core"
+    ERA5_SOURCE_TAG="era5_2025_compact_common_core"
+else
+    DEFAULT_S1_RUN_ID="exp_overlap_static_rnn_s1_common_core_pm10_pm25"
+    DEFAULT_SCALER_DYN=27
+    DEFAULT_EXTRA_DIM=36
+    DEFAULT_TIANJI_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"
+    DEFAULT_IFS_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
+    DEFAULT_T2ND_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"
+    DEFAULT_PANGU_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"
+    DEFAULT_ERA5_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"
+    T2ND_SOURCE_TAG="T2ND_rh2m_common_core"
+    PANGU_SOURCE_TAG="pangu2021_common_core"
+    ERA5_SOURCE_TAG="era5_2025_common_core"
+fi
+S1_RUN_ID="${S1_RUN_ID:-${DEFAULT_S1_RUN_ID}}"
 S1_CKPT="${S1_CKPT:-${CKPT_DIR}/${S1_RUN_ID}_S1_best_score.pt}"
-S1_SCALER="${S1_SCALER:-${CKPT_DIR}/robust_scaler_${S1_RUN_ID}_s1_w12_dyn27_pm.pkl}"
+S1_SCALER="${S1_SCALER:-${CKPT_DIR}/robust_scaler_${S1_RUN_ID}_s1_w12_dyn${DEFAULT_SCALER_DYN}_pm.pkl}"
 OUT_ROOT="${OUT_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/zero_transfer_s1_forecast_sources}"
 DEVICE="${DEVICE:-cpu}"
 BATCH_SIZE="${BATCH_SIZE:-4096}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 SOURCE_GROUP="${SOURCE_GROUP:-all}"
+DYN_VARS_COUNT="${DYN_VARS_COUNT:-${DEFAULT_SCALER_DYN}}"
+EXPECTED_EXTRA_DIM="${EXPECTED_EXTRA_DIM:-${DEFAULT_EXTRA_DIM}}"
 MERGE_ONLY="${MERGE_ONLY:-0}"
 THRESHOLD_MODE="${THRESHOLD_MODE:-argmax}"
 THRESHOLD_SEARCH_POLICY="${THRESHOLD_SEARCH_POLICY:-response}"
@@ -56,13 +84,13 @@ SKIP_VALIDATION_INFERENCE="${SKIP_VALIDATION_INFERENCE:-1}"
 SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
-TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core}"
-IFS_DATA_DIR="${IFS_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core}"
-T2ND_DATA_DIR="${T2ND_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core}"
-PANGU_DATA_DIR="${PANGU_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core}"
-ERA5_DATA_DIR="${ERA5_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core}"
+TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${DEFAULT_TIANJI_DATA_DIR}}"
+IFS_DATA_DIR="${IFS_DATA_DIR:-${DEFAULT_IFS_DATA_DIR}}"
+T2ND_DATA_DIR="${T2ND_DATA_DIR:-${DEFAULT_T2ND_DATA_DIR}}"
+PANGU_DATA_DIR="${PANGU_DATA_DIR:-${DEFAULT_PANGU_DATA_DIR}}"
+ERA5_DATA_DIR="${ERA5_DATA_DIR:-${DEFAULT_ERA5_DATA_DIR}}"
 
-EXTRA_SOURCES="${EXTRA_SOURCES:-T2ND_rh2m_common_core=${T2ND_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / T2ND RH2M; pangu2021_common_core=${PANGU_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / Pangu-2021; era5_2025_common_core=${ERA5_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / ERA5-2025}"
+EXTRA_SOURCES="${EXTRA_SOURCES:-${T2ND_SOURCE_TAG}=${T2ND_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / T2ND RH2M; ${PANGU_SOURCE_TAG}=${PANGU_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / Pangu-2021; ${ERA5_SOURCE_TAG}=${ERA5_DATA_DIR}|${S1_CKPT}|${S1_SCALER}|S1 zero-transfer / ERA5-2025}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_ROOT}"
 
@@ -77,28 +105,31 @@ fi
 
 case "${SOURCE_GROUP}" in
     all)
-        SOURCE_SUBSET="tianji,ifs,T2ND_rh2m_common_core,pangu2021_common_core,era5_2025_common_core"
+        SOURCE_SUBSET="tianji,ifs,${T2ND_SOURCE_TAG},${PANGU_SOURCE_TAG},${ERA5_SOURCE_TAG}"
         RUN_TAG="all"
+        if [[ "${FEATURE_SET}" == "compact_common_core" ]]; then
+            RUN_TAG="all_compact_common_core"
+        fi
         ;;
-    tianji|tianji_common_core)
+    tianji|tianji_common_core|tianji_compact_common_core)
         SOURCE_SUBSET="tianji"
-        RUN_TAG="tianji_common_core"
+        RUN_TAG="tianji_${FEATURE_SET}"
         ;;
-    ifs|ifs_common_core)
+    ifs|ifs_common_core|ifs_compact_common_core)
         SOURCE_SUBSET="ifs"
-        RUN_TAG="ifs_common_core"
+        RUN_TAG="ifs_${FEATURE_SET}"
         ;;
-    T2ND_rh2m|T2ND_rh2m_common_core|t2nd|t2nd_common_core)
-        SOURCE_SUBSET="T2ND_rh2m_common_core"
-        RUN_TAG="T2ND_rh2m_common_core"
+    T2ND_rh2m|T2ND_rh2m_common_core|T2ND_rh2m_compact_common_core|t2nd|t2nd_common_core|t2nd_compact_common_core)
+        SOURCE_SUBSET="${T2ND_SOURCE_TAG}"
+        RUN_TAG="${T2ND_SOURCE_TAG}"
         ;;
-    pangu|pangu2021|pangu2021_common_core)
-        SOURCE_SUBSET="pangu2021_common_core"
-        RUN_TAG="pangu2021_common_core"
+    pangu|pangu2021|pangu2021_common_core|pangu2021_compact_common_core)
+        SOURCE_SUBSET="${PANGU_SOURCE_TAG}"
+        RUN_TAG="${PANGU_SOURCE_TAG}"
         ;;
-    era5|era5_2025|era5_2025_common_core)
-        SOURCE_SUBSET="era5_2025_common_core"
-        RUN_TAG="era5_2025_common_core"
+    era5|era5_2025|era5_2025_common_core|era5_2025_compact_common_core)
+        SOURCE_SUBSET="${ERA5_SOURCE_TAG}"
+        RUN_TAG="${ERA5_SOURCE_TAG}"
         ;;
     *)
         SOURCE_SUBSET="${SOURCE_GROUP}"
@@ -116,6 +147,8 @@ CMD=(
     --zero_transfer_s1
     --shared_ckpt "${S1_CKPT}"
     --shared_scaler "${S1_SCALER}"
+    --dyn_vars_count "${DYN_VARS_COUNT}"
+    --expected_extra_dim "${EXPECTED_EXTRA_DIM}"
     --source_subset "${SOURCE_SUBSET}"
     --tianji_data_dir "${TIANJI_DATA_DIR}"
     --ifs_data_dir "${IFS_DATA_DIR}"

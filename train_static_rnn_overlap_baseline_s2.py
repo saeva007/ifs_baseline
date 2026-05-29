@@ -34,6 +34,9 @@ DEFAULT_S1_DIR = os.path.join(
 DEFAULT_S1_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core"
 )
+DEFAULT_S1_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_compact_common_core"
+)
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
 )
@@ -52,6 +55,11 @@ DEFAULT_S2_DIRS = {
     "ifs_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"),
     "pangu2021_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"),
     "era5_2025_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"),
+    "tianji_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"),
+    "T2ND_rh2m_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core"),
+    "ifs_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"),
+    "pangu2021_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core"),
+    "era5_2025_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core"),
     "tianji_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"),
     "T2ND_rh2m_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full"),
     "ifs_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"),
@@ -60,6 +68,7 @@ DEFAULT_S2_DIRS = {
 }
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
 DEFAULT_S1_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
+DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_pm10_pm25"
 DEFAULT_OVERLAP_S2_A_STEPS = "12000"
 DEFAULT_OVERLAP_S2_B_STEPS = "40000"
 DEFAULT_OVERLAP_S2_PATIENCE = "18"
@@ -120,6 +129,8 @@ def resolve_run_id(args: argparse.Namespace) -> str:
     if env_run_id:
         return env_run_id
     if args.mode == "s1":
+        if "compact_common_core" in str(args.s1_data_dir):
+            return DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID
         if "common_core" in str(args.s1_data_dir):
             return DEFAULT_S1_COMMON_CORE_RUN_ID
         return DEFAULT_S1_RUN_ID
@@ -134,7 +145,12 @@ def resolve_pretrained_ckpt(args: argparse.Namespace) -> str:
     if args.mode != "s2" or args.no_default_s1_pretrained:
         return ""
     s2_dir = resolve_s2_data_dir(args)
-    run_id = DEFAULT_S1_COMMON_CORE_RUN_ID if "common_core" in str(s2_dir) else DEFAULT_S1_RUN_ID
+    if "compact_common_core" in str(s2_dir):
+        run_id = DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID
+    elif "common_core" in str(s2_dir):
+        run_id = DEFAULT_S1_COMMON_CORE_RUN_ID
+    else:
+        run_id = DEFAULT_S1_RUN_ID
     default_path = os.path.join(args.ckpt_dir, f"{run_id}_S1_best_score.pt")
     return default_path if os.path.isfile(default_path) else ""
 

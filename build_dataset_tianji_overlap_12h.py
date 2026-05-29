@@ -30,6 +30,9 @@ from pmst_overlap_common import (
     build_static_features,
     compute_fog_features_pmst,
     cyclical_time_features,
+    dynamic_feature_order_for_feature_set,
+    dynamic_layout_name,
+    dyn_vars_for_feature_set,
     load_pm10_dataarray,
     load_pm25_dataarray,
     normalize_tianji_times,
@@ -40,6 +43,7 @@ from pmst_overlap_common import (
     resolve_pmst_feature_set,
     scatter_overlap_fields,
     save_chunked_monthtail,
+    select_dynamic_layout,
     calculate_zenith_angle,
 )
 
@@ -358,7 +362,8 @@ def main():
         raise ValueError("Time series too short: nt={} window={}".format(nt, win))
 
     n_samples = n_wins * ns
-    dyn_flat_dim = win * TOTAL_DYN
+    dyn_vars_count = dyn_vars_for_feature_set(args.feature_set)
+    dyn_flat_dim = win * dyn_vars_count
 
     X_stat = build_static_features(lats, lons, data_veg, data_oro, UNIQUE_VEG_IDS)
     stat_dim = int(X_stat.shape[1])
@@ -389,7 +394,10 @@ def main():
     st_dyn = os.path.join(staging_dir, "_staging_X_dyn_flat.npy")
     st_stat = os.path.join(staging_dir, "_staging_X_stat_flat.npy")
     st_fe = os.path.join(staging_dir, "_staging_fe_flat.npy")
-    fe_dim = 32 + 4
+    fog_fe_dim = compute_fog_features_pmst(
+        np.zeros((1, win, dyn_vars_count), dtype=np.float32), win, dyn_vars_count
+    ).shape[1]
+    fe_dim = fog_fe_dim + 4
 
     print(
         "[mem] nt={} ns={} n_wins={} n_samples={} chunk_wins={} staging ~{:.1f} GiB on disk".format(
@@ -446,12 +454,13 @@ def main():
             X_dyn_26 = append_pm10_channel(X_dyn_25, pm10_da, times_chunk, stations)
             del X_dyn_25
             X_chunk = append_pm25_channel(X_dyn_26, pm25_da, times_chunk, stations)
+            X_chunk = select_dynamic_layout(X_chunk, args.feature_set)
             del X_dyn_26
             gc.collect()
 
             raw = sliding_window_view(X_chunk, win, axis=0)[::step]
             raw = raw.transpose(0, 1, 3, 2)
-            X_samples = raw.reshape(-1, win, TOTAL_DYN).astype(np.float32)
+            X_samples = raw.reshape(-1, win, dyn_vars_count).astype(np.float32)
             del raw, X_chunk
             gc.collect()
 
@@ -465,7 +474,7 @@ def main():
             row_hi = w1 * ns
             mm_dyn[row_lo:row_hi] = X_samples.reshape(n_loc, dyn_flat_dim)
 
-            fe_part = compute_fog_features_pmst(X_samples, win, TOTAL_DYN)
+            fe_part = compute_fog_features_pmst(X_samples, win, dyn_vars_count)
             cyc = cyclical_time_features(pd.DatetimeIndex(m_t[row_lo:row_hi]))
             mm_fe[row_lo:row_hi] = np.concatenate([fe_part, cyc], axis=1).astype(np.float32)
             del fe_part, cyc
@@ -510,7 +519,7 @@ def main():
                         pass
 
     cfg = {
-        "dataset": "tianji_overlap_pmst27_monthtail",
+        "dataset": "tianji_overlap_compact_common_core_monthtail" if args.feature_set == "compact_common_core" else "tianji_overlap_pmst27_monthtail",
         "rh2m_source": args.rh2m_source_tag if rh2m_override_da is not None else "tianji_native",
         "rh2m_override_file": args.rh2m_override_file if rh2m_override_da is not None else "",
         "rh2m_override_var": args.rh2m_override_var if rh2m_override_da is not None else "",
@@ -522,10 +531,13 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
-        "zero_filled_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
-        "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "zero_filled_pmst_features": [] if args.feature_set == "compact_common_core" else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "dyn_layout": dynamic_layout_name(args.feature_set),
+        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
+        "dyn_vars": int(dyn_vars_count),
         "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",
         "fe_dim": fe_dim,
+        "fog_fe_dim": int(fog_fe_dim),
         "window": args.window,
         "step": args.step,
         "split": "month_tail",

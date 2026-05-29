@@ -65,17 +65,32 @@ DEFAULT_TIANJI_COMMON_CORE_DIR = os.path.join(
 DEFAULT_TIANJI_T2ND_RH2M_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"
 )
+DEFAULT_TIANJI_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"
+)
+DEFAULT_TIANJI_T2ND_RH2M_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core"
+)
 DEFAULT_IFS_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"
 )
 DEFAULT_IFS_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
 )
+DEFAULT_IFS_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"
+)
 DEFAULT_PANGU2021_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"
 )
+DEFAULT_PANGU2021_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core"
+)
 DEFAULT_ERA5_2025_COMMON_CORE_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"
+)
+DEFAULT_ERA5_2025_COMPACT_COMMON_CORE_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core"
 )
 DEFAULT_IFS_FORECAST_NC = os.path.join(VIS_MLP_ROOT, "VIS_IDW_KDTree_20250101_20251231.nc")
 DEFAULT_OUT_DIR = os.path.join(
@@ -85,11 +100,18 @@ DEFAULT_STATIC_RNN_TRAIN_DIR = os.environ.get(
     "STATIC_RNN_TRAIN_DIR", os.path.join(VIS_MLP_ROOT, "train")
 )
 DEFAULT_STATIC_RNN_S1_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
+DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_pm10_pm25"
 DEFAULT_STATIC_RNN_S1_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_RUN_ID}_S1_best_score.pt"
 )
 DEFAULT_STATIC_RNN_S1_SCALER = os.path.join(
     DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_RUN_ID}_s1_w12_dyn27_pm.pkl"
+)
+DEFAULT_STATIC_RNN_S1_COMPACT_CKPT = os.path.join(
+    DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_S1_best_score.pt"
+)
+DEFAULT_STATIC_RNN_S1_COMPACT_SCALER = os.path.join(
+    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_s1_w12_dyn19_pm.pkl"
 )
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
@@ -97,17 +119,27 @@ SOURCE_LABELS = {
     "tianji": "Tianji-trained/Tianji-input model",
     "T2ND_rh2m": "Tianji-trained/T2ND-rh2m-input model",
     "T2ND_rh2m_common_core": "Tianji T2ND RH2M-trained",
+    "tianji_compact_common_core": "Tianji compact common-core-trained",
+    "T2ND_rh2m_compact_common_core": "Tianji T2ND RH2M compact common-core-trained",
     "ifs": "IFS-trained/IFS-input model",
+    "ifs_compact_common_core": "IFS compact common-core-trained",
     "pangu2021_common_core": "Pangu-2021-trained",
+    "pangu2021_compact_common_core": "Pangu-2021 compact common-core-trained",
     "era5_2025_common_core": "ERA5-2025-trained",
+    "era5_2025_compact_common_core": "ERA5-2025 compact common-core-trained",
     "ifs_diagnostic": "IFS diagnostic visibility",
 }
 ZERO_TRANSFER_SOURCE_LABELS = {
     "tianji": "S1 zero-transfer / Tianji",
     "ifs": "S1 zero-transfer / IFS",
     "T2ND_rh2m_common_core": "S1 zero-transfer / T2ND RH2M",
+    "tianji_compact_common_core": "S1 compact zero-transfer / Tianji",
+    "ifs_compact_common_core": "S1 compact zero-transfer / IFS",
+    "T2ND_rh2m_compact_common_core": "S1 compact zero-transfer / T2ND RH2M",
     "pangu2021_common_core": "S1 zero-transfer / Pangu-2021",
+    "pangu2021_compact_common_core": "S1 compact zero-transfer / Pangu-2021",
     "era5_2025_common_core": "S1 zero-transfer / ERA5-2025",
+    "era5_2025_compact_common_core": "S1 compact zero-transfer / ERA5-2025",
 }
 
 STATIC_RNN_DATASET_ARG_DEFAULTS = {
@@ -235,7 +267,7 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument(
         "--tianji_source_tag",
-        choices=["tianji", "T2ND_rh2m"],
+        choices=["tianji", "T2ND_rh2m", "tianji_compact_common_core", "T2ND_rh2m_compact_common_core"],
         default=os.environ.get("OVERLAP_TIANJI_SOURCE_TAG", "tianji"),
         help="Which Tianji-input checkpoint/data naming family to use for defaults.",
     )
@@ -403,6 +435,10 @@ def default_tianji_data_dir(source_tag: str) -> str:
         return DEFAULT_TIANJI_COMMON_CORE_DIR
     if source_tag == "T2ND_rh2m_common_core":
         return DEFAULT_TIANJI_T2ND_RH2M_COMMON_CORE_DIR
+    if source_tag == "tianji_compact_common_core":
+        return DEFAULT_TIANJI_COMPACT_COMMON_CORE_DIR
+    if source_tag == "T2ND_rh2m_compact_common_core":
+        return DEFAULT_TIANJI_T2ND_RH2M_COMPACT_COMMON_CORE_DIR
     return DEFAULT_TIANJI_DIR
 
 
@@ -469,6 +505,11 @@ def split_source_tags(value: str) -> List[str]:
         "T2ND_rh2m": "T2ND_rh2m_common_core",
         "pangu2021": "pangu2021_common_core",
         "era5_2025": "era5_2025_common_core",
+        "tianji_compact": "tianji",
+        "ifs_compact": "ifs",
+        "T2ND_rh2m_compact": "T2ND_rh2m_compact_common_core",
+        "pangu2021_compact": "pangu2021_compact_common_core",
+        "era5_2025_compact": "era5_2025_compact_common_core",
     }
     tags: List[str] = []
     for chunk in str(value or "").replace(";", ",").split(","):
@@ -493,8 +534,15 @@ def apply_shared_checkpoint_scaler(specs: Dict[str, SourceSpec], args: argparse.
     shared_ckpt = str(args.shared_ckpt or "").strip()
     shared_scaler = str(args.shared_scaler or "").strip()
     if args.zero_transfer_s1:
-        shared_ckpt = shared_ckpt or DEFAULT_STATIC_RNN_S1_CKPT
-        shared_scaler = shared_scaler or DEFAULT_STATIC_RNN_S1_SCALER
+        use_compact_s1 = int(args.dyn_vars_count) == 19 or any(
+            "compact_common_core" in str(spec.data_dir) for spec in specs.values()
+        )
+        shared_ckpt = shared_ckpt or (
+            DEFAULT_STATIC_RNN_S1_COMPACT_CKPT if use_compact_s1 else DEFAULT_STATIC_RNN_S1_CKPT
+        )
+        shared_scaler = shared_scaler or (
+            DEFAULT_STATIC_RNN_S1_COMPACT_SCALER if use_compact_s1 else DEFAULT_STATIC_RNN_S1_SCALER
+        )
     if not shared_ckpt and not shared_scaler:
         return
     if not shared_ckpt or not shared_scaler:
@@ -1760,8 +1808,13 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
         "T2ND_rh2m_common_core": "T2ND RH2M",
+        "tianji_compact_common_core": "Tianji compact",
+        "ifs_compact_common_core": "IFS compact",
+        "T2ND_rh2m_compact_common_core": "T2ND RH2M compact",
         "pangu2021_common_core": "Pangu-2021",
+        "pangu2021_compact_common_core": "Pangu-2021 compact",
         "era5_2025_common_core": "ERA5-2025",
+        "era5_2025_compact_common_core": "ERA5-2025 compact",
         "ifs_diagnostic": "IFS diagnostic VIS",
     }
     for _, row in overall_df.iterrows():
@@ -1773,8 +1826,13 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "tianji": "#2E5A87",
         "ifs": "#6C6C6C",
         "T2ND_rh2m_common_core": "#1B9E77",
+        "tianji_compact_common_core": "#2E5A87",
+        "ifs_compact_common_core": "#6C6C6C",
+        "T2ND_rh2m_compact_common_core": "#1B9E77",
         "pangu2021_common_core": "#8E6BBE",
+        "pangu2021_compact_common_core": "#8E6BBE",
         "era5_2025_common_core": "#D95F02",
+        "era5_2025_compact_common_core": "#D95F02",
         "ifs_diagnostic": "#E69F00",
     }
     fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
@@ -1965,9 +2023,22 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "fig_forecast_source_key_metrics_numerical_models",
         )
     )
+    if any("compact_common_core" in src for src in available_sources):
+        written.extend(
+            _draw_group(
+                [
+                    "tianji",
+                    "T2ND_rh2m_compact_common_core",
+                    "ifs",
+                    "era5_2025_compact_common_core",
+                    "ifs_diagnostic",
+                ],
+                "fig_forecast_source_key_metrics_compact_common_core",
+            )
+        )
     written.extend(
         _draw_group(
-            ["tianji", "pangu2021_common_core"],
+            ["tianji", "pangu2021_common_core", "pangu2021_compact_common_core"],
             "fig_forecast_source_key_metrics_tianji_pangu",
         )
     )
@@ -1975,9 +2046,12 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         fallback_order = [
             "tianji",
             "T2ND_rh2m_common_core",
+            "T2ND_rh2m_compact_common_core",
             "ifs",
             "era5_2025_common_core",
+            "era5_2025_compact_common_core",
             "pangu2021_common_core",
+            "pangu2021_compact_common_core",
             "ifs_diagnostic",
         ]
         fallback_order.extend([s for s in available_sources if s not in set(fallback_order)])
@@ -2000,6 +2074,29 @@ def split_feature_names(value: str) -> List[str]:
 
 
 def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
+    if int(dyn_vars_count) == 19:
+        compact = [
+            "RH2M",
+            "T2M",
+            "MSLP",
+            "U10",
+            "WSPD10",
+            "V10",
+            "WDIR10",
+            "RH_925",
+            "U_925",
+            "WSPD925",
+            "V_925",
+            "DP_1000",
+            "DP_925",
+            "Q_1000",
+            "Q_925",
+            "DPD",
+            "zenith",
+            "PM10_ugm3",
+            "PM25_ugm3",
+        ]
+        return {name: i for i, name in enumerate(compact)}
     vis_eval_dir = Path(__file__).resolve().parent.parent / "vis_eval"
     if str(vis_eval_dir) not in sys.path:
         sys.path.insert(0, str(vis_eval_dir))
@@ -2353,8 +2450,22 @@ def write_independent_source_outputs(
             "tianji",
             "ifs",
             "T2ND_rh2m_common_core",
+            "T2ND_rh2m_compact_common_core",
             "era5_2025_common_core",
-            *[source for source in evals if source not in {"tianji", "ifs", "T2ND_rh2m_common_core", "era5_2025_common_core"}],
+            "era5_2025_compact_common_core",
+            *[
+                source
+                for source in evals
+                if source
+                not in {
+                    "tianji",
+                    "ifs",
+                    "T2ND_rh2m_common_core",
+                    "T2ND_rh2m_compact_common_core",
+                    "era5_2025_common_core",
+                    "era5_2025_compact_common_core",
+                }
+            ],
         ]
         seen_ref: Set[str] = set()
         for ref_source in ref_order:
@@ -2457,6 +2568,8 @@ def write_independent_source_outputs(
 
 def main() -> None:
     args = parse_args()
+    if int(args.dyn_vars_count) == 19 and int(args.expected_extra_dim) == 36:
+        args.expected_extra_dim = 31
     if (
         args.zero_transfer_s1
         and args.threshold_mode == "checkpoint"

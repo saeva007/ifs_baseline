@@ -62,6 +62,8 @@ if [[ -z "${OUT_DIR}" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${RH2M_SOURCE_TAG:-T2ND_rh2m}"
     elif [[ "${FEATURE_SET}" == "common_core" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"
+    elif [[ "${FEATURE_SET}" == "compact_common_core" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core"
     elif [[ "${FEATURE_SET}" == "source_full" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"
     fi

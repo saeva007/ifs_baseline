@@ -64,6 +64,8 @@ PY_ARGS+=(--feature_set "${FEATURE_SET}")
 if [[ -z "${OUT_DIR}" ]]; then
     if [[ "${FEATURE_SET}" == "common_core" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"
+    elif [[ "${FEATURE_SET}" == "compact_common_core" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core"
     elif [[ "${FEATURE_SET}" == "source_full" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"
     fi
