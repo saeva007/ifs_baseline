@@ -61,10 +61,12 @@ SOURCE_EXPECTED_ROW = SOURCE_BASE_DYN + STATIC_VEG + SOURCE_FE_DIM
 
 
 def _output_dims(feature_set: str) -> tuple[int, int, int, int]:
-    dyn_vars = dyn_vars_for_feature_set(feature_set)
+    feature_vars = resolve_pmst_feature_set(feature_set, PMST_SOURCE_FIELDS)
+    dynamic_order = dynamic_feature_order_for_feature_set(feature_set, feature_vars)
+    dyn_vars = dyn_vars_for_feature_set(feature_set, feature_vars)
     dyn_dim = WINDOW * dyn_vars
     fog_fe_dim = compute_fog_features_pmst(
-        np.zeros((1, WINDOW, dyn_vars), dtype=np.float32), WINDOW, dyn_vars
+        np.zeros((1, WINDOW, dyn_vars), dtype=np.float32), WINDOW, dyn_vars, dynamic_order
     ).shape[1]
     fe_dim = fog_fe_dim + 4
     row_dim = dyn_dim + STATIC_VEG + fe_dim
@@ -81,8 +83,9 @@ def _transform_chunk(dyn: np.ndarray, feature_vars: list[str], feature_set: str)
     fields = {name: met[:, :, PMST_INDEX[name]] for name in FINAL_FEATURE_ORDER}
     met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields, feature_vars)
     dyn_27 = np.concatenate([met_new, zen_pm], axis=-1).astype(np.float32)
-    dyn_new = select_dynamic_layout(dyn_27, feature_set)
-    fe_base = compute_fog_features_pmst(dyn_new, WINDOW, dyn_new.shape[-1])
+    dyn_new = select_dynamic_layout(dyn_27, feature_set, feature_vars)
+    dynamic_order = dynamic_feature_order_for_feature_set(feature_set, feature_vars)
+    fe_base = compute_fog_features_pmst(dyn_new, WINDOW, dyn_new.shape[-1], dynamic_order)
     return dyn_new, fe_base
 
 
@@ -223,15 +226,16 @@ def main():
         "feature_set": args.feature_set,
         "row_layout": f"{dyn_dim} dyn + {STATIC_VEG} static/veg + {fog_fe_dim + 4} FE",
         "source_row_requirement": "12*27 dyn + 5 static + 1 veg + 36 FE",
-        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
-        "dyn_layout": dynamic_layout_name(args.feature_set),
+        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set, feature_vars),
+        "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
         "dyn_vars": int(dyn_vars),
         "fog_fe_dim": int(fog_fe_dim),
         "fe_dim": int(fog_fe_dim + 4),
         "overlap_channels": OVERLAP_CANONICAL,
         "common_core_channels": COMMON_CORE_PMST_FEATURES,
         "populated_pmst_features": feature_vars,
-        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [],
+        "excluded_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "note": "FE recomputed from the selected dynamic layout; 4-d cyclical time kept from source row.",
     }
     with open(os.path.join(args.out_dir, "dataset_build_config.json"), "w", encoding="utf-8") as f:

@@ -150,6 +150,17 @@ CANONICAL_VAR_ALIASES: Dict[str, str] = {
     "DP1000": "DP_1000",
     "DP925": "DP_925",
     "WSPD925": "WSPD925",
+    "ZENITH": "ZENITH",
+    "PM10": "PM10",
+    "PM10_UGM3": "PM10",
+    "PM10UGM3": "PM10",
+    "PM10_UG_M3": "PM10",
+    "PM25": "PM25",
+    "PM25_UGM3": "PM25",
+    "PM25UGM3": "PM25",
+    "PM25_UG_M3": "PM25",
+    "PM2P5": "PM25",
+    "PM2_5": "PM25",
 }
 
 TIANJI_INPUT_TIME_SHIFT_HOURS = float(os.environ.get("TIANJI_INPUT_TIME_SHIFT_HOURS", "0"))
@@ -405,32 +416,86 @@ def is_compact_common_core(feature_set: str) -> bool:
     }
 
 
-def dyn_vars_for_feature_set(feature_set: str) -> int:
-    return COMPACT_TOTAL_DYN if is_compact_common_core(feature_set) else TOTAL_DYN
+def _feature_set_key(feature_set: str) -> str:
+    key = str(feature_set or "overlap_full").strip().lower().replace("-", "_")
+    if key in {"common", "core", "pangu_core", "common_overlap"}:
+        return "common_core"
+    if key in {"compact", "compact_common", "compact_core", "compact_no_rh2m", "compact_common_no_rh2m", "compact_core_no_rh2m"}:
+        return "compact_common_core_no_rh2m"
+    if key in {"full", "overlap", "overlap_canonical"}:
+        return "overlap_full"
+    if key in {"all", "all_available", "source"}:
+        return "source_full"
+    return key
 
 
-def dynamic_feature_order_for_feature_set(feature_set: str) -> List[str]:
-    if is_compact_common_core(feature_set):
-        return list(COMPACT_COMMON_CORE_DYN_FEATURES)
-    return [*FINAL_FEATURE_ORDER, "ZENITH", "PM10_ugm3", "PM25_ugm3"]
+def _normalise_pmst_feature_list(feature_names: Optional[Iterable[str]], fallback: List[str]) -> List[str]:
+    if feature_names is None:
+        names = fallback
+    else:
+        names = [normalize_var_coord(v) for v in feature_names]
+    seen: Set[str] = set()
+    out: List[str] = []
+    for name in names:
+        if name in PMST_INDEX and name not in seen:
+            out.append(name)
+            seen.add(name)
+    return out
 
 
-def dynamic_layout_name(feature_set: str) -> str:
-    if is_compact_common_core(feature_set):
-        return "15_common_core_no_rh2m_met + zenith + pm10 + pm2p5"
-    return "24_pmst_met + zenith + pm10 + pm2p5"
+def dynamic_feature_order_for_feature_set(
+    feature_set: str,
+    feature_names: Optional[Iterable[str]] = None,
+) -> List[str]:
+    key = _feature_set_key(feature_set)
+    if key == "compact_common_core_no_rh2m":
+        met = list(COMPACT_COMMON_CORE_PMST_FEATURES)
+    elif key == "common_core":
+        met = list(COMMON_CORE_PMST_FEATURES)
+    elif key == "overlap_full":
+        met = _normalise_pmst_feature_list(feature_names, list(OVERLAP_CANONICAL))
+    elif key == "source_full":
+        met = _normalise_pmst_feature_list(feature_names, list(FINAL_FEATURE_ORDER))
+    else:
+        met = _normalise_pmst_feature_list(feature_names, list(FINAL_FEATURE_ORDER))
+    return [*met, "ZENITH", "PM10_ugm3", "PM25_ugm3"]
 
 
-def select_dynamic_layout(x_dyn: np.ndarray, feature_set: str) -> np.ndarray:
-    """Return PMST-27 dynamics in the requested per-time-step layout."""
-    if not is_compact_common_core(feature_set):
-        return x_dyn
+def dyn_vars_for_feature_set(feature_set: str, feature_names: Optional[Iterable[str]] = None) -> int:
+    return len(dynamic_feature_order_for_feature_set(feature_set, feature_names))
+
+
+def dynamic_layout_name(feature_set: str, feature_names: Optional[Iterable[str]] = None) -> str:
+    order = dynamic_feature_order_for_feature_set(feature_set, feature_names)
+    met_n = max(0, len(order) - 3)
+    return f"{met_n}_native_pmst_met + zenith + pm10 + pm2p5"
+
+
+def select_dynamic_layout(
+    x_dyn: np.ndarray,
+    feature_set: str,
+    feature_names: Optional[Iterable[str]] = None,
+) -> np.ndarray:
+    """Return PMST-27 dynamics in the requested native per-time-step layout."""
     arr = np.asarray(x_dyn)
     if arr.shape[-1] != TOTAL_DYN:
         raise ValueError(
-            f"compact_common_core expects PMST-27 source dynamics before slicing; got last dim={arr.shape[-1]}"
+            f"native feature selection expects PMST-27 source dynamics before slicing; got last dim={arr.shape[-1]}"
         )
-    return arr[..., COMPACT_COMMON_CORE_DYN_INDICES].astype(np.float32, copy=False)
+    indices: List[int] = []
+    for name in dynamic_feature_order_for_feature_set(feature_set, feature_names):
+        canon = normalize_var_coord(name)
+        if canon in PMST_INDEX:
+            indices.append(PMST_INDEX[canon])
+        elif canon == "ZENITH":
+            indices.append(ZENITH_IDX)
+        elif canon in {"PM10", "PM10_UGM3", "PM10_UG_M3"}:
+            indices.append(PM10_IDX)
+        elif canon in {"PM25", "PM25_UGM3", "PM25_UG_M3", "PM2P5"}:
+            indices.append(PM25_IDX)
+        else:
+            raise KeyError(f"Unknown dynamic feature name {name!r}")
+    return arr[..., indices].astype(np.float32, copy=False)
 
 
 def scatter_overlap_fields(
@@ -806,11 +871,140 @@ def _compute_compact_common_core_fog_features(X_dyn_window: np.ndarray) -> np.nd
     return np.nan_to_num(out, nan=0.0, posinf=10.0, neginf=-10.0)
 
 
-def compute_fog_features_pmst(X_dyn_window: np.ndarray, window_size: int = 12, dyn_vars: int = 27) -> np.ndarray:
+def _dynamic_order_lookup(feature_order: Iterable[str]) -> Dict[str, int]:
+    lookup: Dict[str, int] = {}
+    for i, raw in enumerate(feature_order):
+        name = normalize_var_coord(raw)
+        aliases = {name}
+        if name in {"PM10_UGM3", "PM10_UG_M3"}:
+            aliases.add("PM10")
+        if name in {"PM25_UGM3", "PM25_UG_M3", "PM2P5"}:
+            aliases.update({"PM25", "PM2P5"})
+        for alias in aliases:
+            lookup[alias] = i
+    return lookup
+
+
+def _compute_native_fog_features(X_dyn_window: np.ndarray, feature_order: Iterable[str]) -> np.ndarray:
+    idx = _dynamic_order_lookup(feature_order)
+    x_cur = X_dyn_window[:, -1, :]
+    feats: List[np.ndarray] = []
+
+    def has(*names: str) -> bool:
+        return all(normalize_var_coord(n) in idx for n in names)
+
+    def cur(name: str) -> np.ndarray:
+        return x_cur[:, idx[normalize_var_coord(name)]].astype(np.float32)
+
+    def seq(name: str) -> np.ndarray:
+        return X_dyn_window[:, :, idx[normalize_var_coord(name)]].astype(np.float32)
+
+    rh2m = cur("RH2M") if has("RH2M") else None
+    t2m = cur("T2M") if has("T2M") else None
+    wspd = cur("WSPD10") if has("WSPD10") else None
+    dpd = cur("DPD") if has("DPD") else None
+    rh925 = cur("RH_925") if has("RH_925") else None
+    zenith = cur("ZENITH") if has("ZENITH") else None
+    lcc = cur("LCC") if has("LCC") else None
+    sw_rad = cur("SW_RAD") if has("SW_RAD") else None
+    inversion = cur("INVERSION") if has("INVERSION") else None
+    t2m_c = (t2m - 273.15 if t2m is not None and np.nanmean(t2m) > 200 else t2m)
+
+    fog_terms: List[Tuple[float, np.ndarray]] = []
+    if rh2m is not None and dpd is not None:
+        rh_norm = np.clip(rh2m / 100.0, 0.0, 1.0)
+        dpd_weight = 1.0 / (1.0 + np.exp(dpd / 2.0))
+        feats.append((rh_norm * dpd_weight).reshape(-1, 1))
+        fog_terms.append((0.40, rh_norm))
+        fog_terms.append((0.25, dpd_weight))
+    elif dpd is not None:
+        dpd_weight = 1.0 / (1.0 + np.exp(dpd / 2.0))
+        feats.append(dpd_weight.reshape(-1, 1))
+        fog_terms.append((0.45, dpd_weight))
+    if wspd is not None:
+        wind_fav = np.exp(-0.5 * ((wspd - 3.5) / 2.5) ** 2)
+        feats.append(wind_fav.reshape(-1, 1))
+        fog_terms.append((0.20, wind_fav))
+    if inversion is not None and wspd is not None:
+        stability = np.tanh(inversion / (wspd ** 2 + 0.1) / 2.0)
+        feats.append(stability.reshape(-1, 1))
+        fog_terms.append((0.15, np.clip(stability, 0.0, 1.0)))
+    if zenith is not None:
+        is_night = (zenith > 90.0).astype(np.float32)
+        if lcc is not None and sw_rad is not None:
+            clear_sky = np.clip(1.0 - lcc / 0.3, 0.0, 1.0)
+            rad_intensity = 1.0 - np.clip(np.maximum(sw_rad, 0.0) / 800.0, 0.0, 1.0)
+            night_rad = is_night * clear_sky * rad_intensity
+        else:
+            night_rad = is_night
+        feats.append(night_rad.reshape(-1, 1))
+        fog_terms.append((0.15, night_rad))
+    if rh2m is not None and rh925 is not None:
+        feats.append(np.tanh((rh2m - rh925) / 50.0).reshape(-1, 1))
+    if fog_terms:
+        total_w = sum(w for w, _ in fog_terms)
+        fog_pot = sum(w * v for w, v in fog_terms) / max(total_w, 1e-6)
+        feats.append(fog_pot.reshape(-1, 1))
+
+    for name in ("RH2M", "T2M", "WSPD10", "DPD", "RH_925", "Q_1000", "Q_925"):
+        if has(name):
+            s = seq(name)
+            feats.append((s[:, -1] - s[:, -4]).reshape(-1, 1))
+            feats.append((s[:, -1] - s[:, -7]).reshape(-1, 1))
+            feats.append(np.std(s, axis=1).reshape(-1, 1))
+            feats.append((np.max(s, axis=1) - np.min(s, axis=1)).reshape(-1, 1))
+
+    if has("U10", "V10", "U_925", "V_925"):
+        u10, v10, u925, v925 = cur("U10"), cur("V10"), cur("U_925"), cur("V_925")
+        shear_mag = np.sqrt((u925 - u10) ** 2 + (v925 - v10) ** 2)
+        theta10 = np.arctan2(v10, u10)
+        theta925 = np.arctan2(v925, u925)
+        feats.append(np.tanh(shear_mag / 8.0).reshape(-1, 1))
+        feats.append((0.5 * (1.0 - np.cos(theta925 - theta10))).reshape(-1, 1))
+        if wspd is not None:
+            feats.append(np.tanh((wspd * (1.0 + shear_mag)) / 12.0).reshape(-1, 1))
+
+    if has("CAPE", "PRECIP"):
+        cape = np.maximum(cur("CAPE"), 0.0)
+        precip = np.maximum(cur("PRECIP"), 0.0)
+        convective_wet = (1.0 / (1.0 + np.exp(-(np.log1p(cape) - np.log(200.0)) * 1.6))) * (
+            1.0 / (1.0 + np.exp(-(np.log1p(precip) - np.log(0.1)) * 2.5))
+        )
+        feats.append(convective_wet.reshape(-1, 1))
+    if sw_rad is not None and wspd is not None and inversion is not None:
+        daytime_mixing = (1.0 / (1.0 + np.exp(-(np.maximum(sw_rad, 0.0) - 150.0) / 75.0))) * (
+            1.0 / (1.0 + np.exp(-(wspd - 4.0) / 1.5))
+        ) * (1.0 / (1.0 + np.exp(-(-inversion + 0.5) / 1.2)))
+        feats.append(daytime_mixing.reshape(-1, 1))
+    if has("Q_1000", "Q_925"):
+        feats.append(np.tanh((cur("Q_1000") - cur("Q_925")) * 1500.0).reshape(-1, 1))
+    if has("W_925", "W_1000"):
+        feats.append(np.tanh((cur("W_925") - cur("W_1000")) / 0.25).reshape(-1, 1))
+    if inversion is not None and t2m_c is not None:
+        feats.append(np.tanh((-inversion + np.maximum(t2m_c - 18.0, 0.0) * 0.25) / 3.0).reshape(-1, 1))
+    if rh2m is not None and t2m_c is not None:
+        feats.append((rh2m * np.exp(-t2m_c / 10.0)).reshape(-1, 1))
+    if rh2m is not None and lcc is not None:
+        feats.append((rh2m / (lcc * 100.0 + 1.0)).reshape(-1, 1))
+
+    if not feats:
+        feats.append(np.zeros((X_dyn_window.shape[0], 1), dtype=np.float32))
+    out = np.concatenate(feats, axis=1).astype(np.float32)
+    return np.nan_to_num(out, nan=0.0, posinf=10.0, neginf=-10.0)
+
+
+def compute_fog_features_pmst(
+    X_dyn_window: np.ndarray,
+    window_size: int = 12,
+    dyn_vars: int = 27,
+    feature_order: Optional[Iterable[str]] = None,
+) -> np.ndarray:
     """
     32-dim fog FE + caller appends 4 cyclical => 36 total extra (matches monthtail pm10 notebook).
     X_dyn_window: (N, window, dyn_vars) with dyn_vars=27 (24 met + zenith + pm10 + pm2p5); FE uses met+zenith only.
     """
+    if feature_order is not None:
+        return _compute_native_fog_features(X_dyn_window, feature_order)
     if dyn_vars == COMPACT_TOTAL_DYN:
         return _compute_compact_common_core_fog_features(X_dyn_window)
     _ = window_size, dyn_vars

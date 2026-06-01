@@ -37,6 +37,8 @@ TORCHRUN_EXTRA_ARGS="${TORCHRUN_EXTRA_ARGS:-}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 LOWVIS_RNN_EXTRA_ARGS="${LOWVIS_RNN_EXTRA_ARGS:-}"
 
+USER_LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-}"
+USER_LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-}"
 export LOWVIS_RNN_S1_STEPS="${LOWVIS_RNN_S1_STEPS:-15000}"
 export LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-12000}"
 export LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-40000}"
@@ -51,6 +53,7 @@ USER_OVERLAP_S1_DATA_DIR="${OVERLAP_S1_DATA_DIR:-}"
 OVERLAP_S1_DATA_DIR="${OVERLAP_S1_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap}"
 OVERLAP_S1_COMMON_CORE_DATA_DIR="${OVERLAP_S1_COMMON_CORE_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core}"
 OVERLAP_S1_COMPACT_COMMON_CORE_DATA_DIR="${OVERLAP_S1_COMPACT_COMMON_CORE_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_compact_common_core_no_rh2m}"
+OVERLAP_S1_SOURCE_FULL_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full}"
 OVERLAP_TIANJI_S2_DATA_DIR="${OVERLAP_TIANJI_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_baseline}"
 OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m}"
 OVERLAP_IFS_S2_DATA_DIR="${OVERLAP_IFS_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_baseline}"
@@ -92,6 +95,19 @@ case "${EXPERIMENT}" in
             LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25}"
             OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_COMPACT_COMMON_CORE_DATA_DIR}}"
             STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_COMPACT_COMMON_CORE_S2_DATA_DIR}}"
+        else
+            echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
+            exit 1
+        fi
+        ;;
+    s1_source_full|s1_full|s1_best_effort)
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s1"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_pm10_pm25}"
+            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_DATA_DIR}}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_SOURCE_FULL_S2_DATA_DIR}}"
         else
             echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
             exit 1
@@ -266,13 +282,17 @@ case "${EXPERIMENT}" in
         STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_ERA5_2025_SOURCE_FULL_S2_DATA_DIR}}"
         ;;
     *)
-        echo "Unknown EXPERIMENT=${EXPERIMENT} (use s1_overlap | s1_common_core | s1_compact_common_core | s2_tianji | s2_tianji_T2ND_rh2m | s2_ifs | s2_*_common_core | s2_*_compact_common_core | s2_*_source_full)"
+        echo "Unknown EXPERIMENT=${EXPERIMENT} (use s1_overlap | s1_common_core | s1_compact_common_core | s1_source_full | s2_tianji | s2_tianji_T2ND_rh2m | s2_ifs | s2_*_common_core | s2_*_compact_common_core | s2_*_source_full)"
         exit 1
         ;;
 esac
 
 if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     STATIC_RNN_PRETRAINED_CKPT="${OVERLAP_STATIC_RNN_PRETRAINED_CKPT:-}"
+    SOURCE_FULL_NATIVE_S2=0
+    if [[ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" && ( "${EXPERIMENT}" == *source_full* || "${STATIC_RNN_S2_DATA_DIR}" == *source_full* ) ]]; then
+        SOURCE_FULL_NATIVE_S2=1
+    fi
     if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
         if [[ "${EXPERIMENT}" == *compact_common_core* || "${STATIC_RNN_S2_DATA_DIR}" == *compact_common_core* ]]; then
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25_S1_best_score.pt"
@@ -281,11 +301,21 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
         else
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt"
         fi
-        if [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
+        if [ "${SOURCE_FULL_NATIVE_S2}" = "0" ] && [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
             STATIC_RNN_PRETRAINED_CKPT="${DEFAULT_STATIC_RNN_S1_CKPT}"
         fi
     fi
     if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
+        if [ "${SOURCE_FULL_NATIVE_S2}" = "1" ]; then
+            echo "INFO: source_full uses native per-source channels; no shared S1 checkpoint is loaded." >&2
+            echo "INFO: training source_full from scratch with PhaseA=0 unless step counts were explicitly set." >&2
+            if [ -z "${USER_LOWVIS_RNN_S2_A_STEPS}" ]; then
+                export LOWVIS_RNN_S2_A_STEPS=0
+            fi
+            if [ -z "${USER_LOWVIS_RNN_S2_B_STEPS}" ]; then
+                export LOWVIS_RNN_S2_B_STEPS=52000
+            fi
+        else
         echo "ERROR: static_rnn S2 overlap training must start from the overlap S1 best checkpoint." >&2
         echo "Expected: ${DEFAULT_STATIC_RNN_S1_CKPT}" >&2
         echo "Run S1 first with: sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
@@ -294,6 +324,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
         echo "For compact_common_core, build data with FEATURE_SET=compact_common_core and train EXPERIMENT=s1_compact_common_core first." >&2
         echo "Or set OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/*_S1_best_score.pt explicitly." >&2
         exit 1
+        fi
     fi
 
     PY_ARGS=(

@@ -362,7 +362,8 @@ def main():
         raise ValueError("Time series too short: nt={} window={}".format(nt, win))
 
     n_samples = n_wins * ns
-    dyn_vars_count = dyn_vars_for_feature_set(args.feature_set)
+    dynamic_order = dynamic_feature_order_for_feature_set(args.feature_set, feature_vars)
+    dyn_vars_count = dyn_vars_for_feature_set(args.feature_set, feature_vars)
     dyn_flat_dim = win * dyn_vars_count
 
     X_stat = build_static_features(lats, lons, data_veg, data_oro, UNIQUE_VEG_IDS)
@@ -395,7 +396,7 @@ def main():
     st_stat = os.path.join(staging_dir, "_staging_X_stat_flat.npy")
     st_fe = os.path.join(staging_dir, "_staging_fe_flat.npy")
     fog_fe_dim = compute_fog_features_pmst(
-        np.zeros((1, win, dyn_vars_count), dtype=np.float32), win, dyn_vars_count
+        np.zeros((1, win, dyn_vars_count), dtype=np.float32), win, dyn_vars_count, dynamic_order
     ).shape[1]
     fe_dim = fog_fe_dim + 4
 
@@ -454,7 +455,7 @@ def main():
             X_dyn_26 = append_pm10_channel(X_dyn_25, pm10_da, times_chunk, stations)
             del X_dyn_25
             X_chunk = append_pm25_channel(X_dyn_26, pm25_da, times_chunk, stations)
-            X_chunk = select_dynamic_layout(X_chunk, args.feature_set)
+            X_chunk = select_dynamic_layout(X_chunk, args.feature_set, feature_vars)
             del X_dyn_26
             gc.collect()
 
@@ -474,7 +475,7 @@ def main():
             row_hi = w1 * ns
             mm_dyn[row_lo:row_hi] = X_samples.reshape(n_loc, dyn_flat_dim)
 
-            fe_part = compute_fog_features_pmst(X_samples, win, dyn_vars_count)
+            fe_part = compute_fog_features_pmst(X_samples, win, dyn_vars_count, dynamic_order)
             cyc = cyclical_time_features(pd.DatetimeIndex(m_t[row_lo:row_hi]))
             mm_fe[row_lo:row_hi] = np.concatenate([fe_part, cyc], axis=1).astype(np.float32)
             del fe_part, cyc
@@ -519,7 +520,7 @@ def main():
                         pass
 
     cfg = {
-        "dataset": "tianji_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "tianji_overlap_pmst27_monthtail",
+        "dataset": f"tianji_overlap_{args.feature_set}_native_monthtail",
         "rh2m_source": args.rh2m_source_tag if rh2m_override_da is not None else "tianji_native",
         "rh2m_override_file": args.rh2m_override_file if rh2m_override_da is not None else "",
         "rh2m_override_var": args.rh2m_override_var if rh2m_override_da is not None else "",
@@ -531,9 +532,10 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
-        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
-        "dyn_layout": dynamic_layout_name(args.feature_set),
-        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
+        "zero_filled_pmst_features": [],
+        "excluded_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
+        "dynamic_feature_order": dynamic_order,
         "dyn_vars": int(dyn_vars_count),
         "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",
         "fe_dim": fe_dim,

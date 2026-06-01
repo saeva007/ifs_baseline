@@ -54,20 +54,13 @@ if [[ "${FEATURE_SET}" == compact_common_core* ]]; then
     PANGU_SOURCE_TAG="pangu2021_compact_common_core"
     ERA5_SOURCE_TAG="era5_2025_compact_common_core"
 elif [[ "${FEATURE_SET}" == "source_full" ]]; then
-    DEFAULT_S1_RUN_ID="exp_overlap_static_rnn_s1_pm10_pm25"
-    DEFAULT_SCALER_DYN=27
-    DEFAULT_EXTRA_DIM=36
-    DEFAULT_TIANJI_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"
-    DEFAULT_IFS_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"
-    DEFAULT_T2ND_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full"
-    DEFAULT_PANGU_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_source_full"
-    DEFAULT_ERA5_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full"
-    T2ND_SOURCE_TAG="T2ND_rh2m_source_full"
-    PANGU_SOURCE_TAG="pangu2021_source_full"
-    ERA5_SOURCE_TAG="era5_2025_source_full"
+    echo "ERROR: FEATURE_SET=source_full is not supported by the shared S1 zero-transfer launcher." >&2
+    echo "source_full uses native per-source channels, so a single shared S1 checkpoint/scaler is invalid." >&2
+    echo "Use per-source source_full S2 checkpoints trained from scratch, or build exact-layout S1 checkpoints per source." >&2
+    exit 1
 else
     DEFAULT_S1_RUN_ID="exp_overlap_static_rnn_s1_common_core_pm10_pm25"
-    DEFAULT_SCALER_DYN=27
+    DEFAULT_SCALER_DYN=19
     DEFAULT_EXTRA_DIM=36
     DEFAULT_TIANJI_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core"
     DEFAULT_IFS_DATA_DIR="${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"

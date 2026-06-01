@@ -32,12 +32,12 @@ Each data-build path has its own Slurm entry point. Keep
 
 The source-family experiment has two tiers:
 
-- `FEATURE_SET=common_core`: the fair comparison tier. It keeps the fixed
-  PMST-27 input layout but only fills source variables shared with Pangu:
+- `FEATURE_SET=common_core`: the fair comparison tier. It keeps only source
+  variables shared with Pangu:
   `RH2M,T2M,MSLP,U10,WSPD10,V10,WDIR10,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,DPD`.
-  Other PMST meteorological slots are zero-filled and recorded in
-  `dataset_build_config.json`. Keep this tier for fairness diagnostics, not
-  for the current best-effort all-variable main figure.
+  It no longer writes unused PMST slots as zero-valued channels. Keep this tier
+  for fairness diagnostics, not for the current best-effort all-variable main
+  figure.
 - `FEATURE_SET=source_full`: the best-effort all-variable tier. Each source
   fills all PMST slots it can physically provide; this tests operational
   potential under each source's native availability, not a clean
@@ -49,7 +49,7 @@ be less extreme than the raw-mode field.
 
 For the best-effort source-full experiment, the main decision rule is `argmax`.
 Do not use S1 zero-transfer, checkpoint thresholds, validation threshold search,
-or zero-filled unavailable slots as the main source-full evidence. Always audit
+or unavailable-variable placeholder channels as the main source-full evidence. Always audit
 `dataset_build_config.json` and interpret `available_pmst_features` as the true
 variable list for each source.
 
@@ -87,14 +87,9 @@ cd /public/home/putianshu/vis_mlp/ifs_baseline
 mkdir -p logs
 ```
 
-1. Build and train the full overlap S1 checkpoint if it is missing:
-
-```bash
-sbatch sub_s1_overlap_data.slurm
-sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-```
-
-2. Build source-full S2 datasets:
+1. Build source-full S2 datasets. Each source keeps only its native available
+PMST variables plus zenith, PM10, and PM2.5; missing variable slots are not
+zero-filled.
 
 ```bash
 sbatch --export=ALL,FEATURE_SET=source_full sub_tianji_overlap_data.slurm
@@ -105,7 +100,7 @@ sbatch --export=ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,
 sbatch --export=ALL,FEATURE_SET=source_full,RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,RH2M_SOURCE_TAG=T2ND_rh2m sub_tianji_overlap_data.slurm
 ```
 
-3. Train source-full S2 models:
+2. Train source-full S2 models:
 
 ```bash
 for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_pangu2021_source_full s2_era5_2025_source_full; do
@@ -113,13 +108,19 @@ for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_f
 done
 ```
 
-4. Evaluate Figure 1 with `--threshold_mode argmax` using
+Do not use `common_core`, `compact_common_core`, or historical `overlap_full`
+S1 checkpoints as source-full initializers. Source-full channel counts and FE
+dimensions can differ by source, so these runs default to scratch S2 training
+with `S2_PhaseA=0`. If a future transfer-learning variant is needed, build a
+separate S1 dataset and checkpoint for each exact source feature order.
+
+3. Evaluate Figure 1 with `--threshold_mode argmax` using
 `test_PMST_overlap_forecast_source_s2.py --independent_sources`, explicit
-source-full data/checkpoint/scaler paths, `--skip_ifs_forecast_baseline`, and
-an output directory such as
+source-full data/checkpoint paths, `AUTO` scaler entries when using
+`--extra_sources`, `--skip_ifs_forecast_baseline`, and an output directory such as
 `paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources`.
 
-5. Evaluate Figure 2 in two pieces: run
+4. Evaluate Figure 2 in two pieces: run
 `sub_static_rnn_overlap_softmax_ensemble.slurm` with source-full Tianji/IFS
 paths and `SOURCE_THRESHOLD_MODE=argmax,ENSEMBLE_THRESHOLD_MODE=argmax`, then
 run `test_PMST_overlap_forecast_source_s2.py --independent_sources` for only
@@ -188,12 +189,13 @@ the same direct main-trainer path and stable knobs as
 5 nodes x 4 DCU, `LOWVIS_RNN_BATCH_SIZE=512`, `LOWVIS_RNN_GRAD_ACCUM=2`,
 `LOWVIS_RNN_NUM_WORKERS=0`, and recall/CSI validation selection unless
 overridden. The trainer requires explicit `X_train/y_train` and `X_val/y_val`,
-and it fails if the row layout is not `27 dyn + 36 FE`. Use `MODEL_ARCH=pmst`
-only for legacy PMST audits.
+and it reads native `dyn_vars`, feature order, and FE dimensions from each
+dataset build config when present. Use `MODEL_ARCH=pmst` only for legacy PMST
+audits.
 
 `EXPERIMENT=s1_common_core` writes
 `exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt` and
-`robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn27_pm.pkl`.
+`robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn19_pm.pkl`.
 Use this pair for S1 zero-transfer tests against common-core forecast sources.
 
 ### 3. Rebuild Tianji-Input S2 Overlap Data
@@ -436,7 +438,7 @@ Default inputs are:
 - checkpoint:
   `ifs_baseline/checkpoints/exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt`
 - scaler:
-  `ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn27_pm.pkl`
+  `ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn19_pm.pkl`
 - output root:
   `paper_eval_results_pm10_pm25_journal/zero_transfer_s1_forecast_sources`
 

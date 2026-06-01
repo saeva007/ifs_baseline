@@ -488,6 +488,7 @@ def save_streamed_monthtail(
     test_last_days: int,
     window_chunk: int,
     feature_set: str,
+    feature_vars: List[str],
 ) -> Tuple[int, int, int]:
     """Write train/val/test arrays in time-major order without materializing all windows."""
     if step < 1:
@@ -515,9 +516,10 @@ def save_streamed_monthtail(
     tr_m, val_m, test_m = get_monthly_split_mask_last_days(valid_times, gap_hours, val_last_days, test_last_days)
     splits = {"train": valid_idxs[tr_m], "val": valid_idxs[val_m], "test": valid_idxs[test_m]}
 
-    dyn_vars_count = dyn_vars_for_feature_set(feature_set)
+    dynamic_order = dynamic_feature_order_for_feature_set(feature_set, feature_vars)
+    dyn_vars_count = dyn_vars_for_feature_set(feature_set, feature_vars)
     dummy_fe_dim = compute_fog_features_pmst(
-        np.zeros((1, window, dyn_vars_count), dtype=np.float32), window, dyn_vars_count
+        np.zeros((1, window, dyn_vars_count), dtype=np.float32), window, dyn_vars_count, dynamic_order
     ).shape[1]
     dyn_dim = window * dyn_vars_count
     stat_dim = X_stat.shape[1]
@@ -536,8 +538,8 @@ def save_streamed_monthtail(
             win_view = sliding_window_view(block, window_shape=window, axis=1)[:, ::step, :, :]
             win_view = win_view[:, : (w1 - w0), :, :]
             samples = np.ascontiguousarray(win_view.transpose(1, 0, 3, 2).reshape(-1, window, TOTAL_DYN))
-            samples = select_dynamic_layout(samples, feature_set)
-            fe_base = compute_fog_features_pmst(samples, window, dyn_vars_count)
+            samples = select_dynamic_layout(samples, feature_set, feature_vars)
+            fe_base = compute_fog_features_pmst(samples, window, dyn_vars_count, dynamic_order)
             chunk_times = np.repeat(sample_times[w0:w1].values, ns)
             time_fe = cyclical_time_features(pd.DatetimeIndex(chunk_times))
             global_start = w0 * ns
@@ -723,6 +725,7 @@ def main():
             args.test_last_days,
             max(1, args.window_chunk),
             args.feature_set,
+            feature_vars,
         )
     finally:
         try:
@@ -735,7 +738,7 @@ def main():
         print("[INFO] Temporary dynamic memmap cleaned.", flush=True)
 
     cfg = {
-        "dataset": "ifs_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "ifs_overlap_pmst27_monthtail",
+        "dataset": f"ifs_overlap_{args.feature_set}_native_monthtail",
         "ifs_source": source_tag,
         "ifs_interp_nc": args.ifs_interp_nc or None,
         "ifs_interp_glob": args.ifs_interp_glob or None,
@@ -747,14 +750,15 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available_from_map)],
-        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "zero_filled_pmst_features": [],
+        "excluded_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "ifs_map_gridded": {
             k: {"folder": v.folder, "var_name": v.var_name, "level_hpa": v.level_hpa}
             for k, v in IFS_MAP.items()
         },
-        "dyn_layout": dynamic_layout_name(args.feature_set),
-        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
-        "dyn_vars": int(dyn_vars_for_feature_set(args.feature_set)),
+        "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
+        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set, feature_vars),
+        "dyn_vars": int(dyn_vars_for_feature_set(args.feature_set, feature_vars)),
         "derived_overlap_vars": {
             "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
             "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",

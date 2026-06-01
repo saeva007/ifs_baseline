@@ -42,6 +42,7 @@ class SourceOutput:
     feature_dim: int
     extra_feat_dim: int
     dyn_vars_count: int
+    dynamic_feature_order: Optional[List[str]]
     temperature: float
     thresholds: Dict[str, float]
     threshold_source: str
@@ -149,38 +150,24 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_specs(args: argparse.Namespace) -> Dict[str, paired.SourceSpec]:
-    return {
+    specs = {
         "tianji": paired.SourceSpec(
             name="tianji",
             data_dir=args.tianji_data_dir or paired.default_tianji_data_dir(args.tianji_source_tag),
             ckpt_path=args.tianji_ckpt
             or paired.default_ckpt_path(args.tianji_source_tag, args.ckpt_dir, args.checkpoint_tag, args.model_arch),
-            scaler_path=args.tianji_scaler
-            or paired.default_scaler_path(
-                args.tianji_source_tag,
-                args.ckpt_dir,
-                args.window,
-                args.dyn_vars_count,
-                args.model_arch,
-                args.static_rnn_no_pm,
-            ),
+            scaler_path=args.tianji_scaler,
         ),
         "ifs": paired.SourceSpec(
             name="ifs",
             data_dir=args.ifs_data_dir,
             ckpt_path=args.ifs_ckpt
             or paired.default_ckpt_path("ifs", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
-            scaler_path=args.ifs_scaler
-            or paired.default_scaler_path(
-                "ifs",
-                args.ckpt_dir,
-                args.window,
-                args.dyn_vars_count,
-                args.model_arch,
-                args.static_rnn_no_pm,
-            ),
+            scaler_path=args.ifs_scaler,
         ),
     }
+    paired.fill_auto_scaler_paths(specs, args)
+    return specs
 
 
 def choose_thresholds(
@@ -227,11 +214,13 @@ def evaluate_source(
     print(f"[{source}] ckpt={spec.ckpt_path}", flush=True)
     print(f"[{source}] scaler={spec.scaler_path}", flush=True)
 
+    source_dyn_vars = paired.source_dyn_vars_count(spec.data_dir, args.dyn_vars_count)
+    _, _, dynamic_order = paired.dataset_layout_from_config(spec.data_dir)
     feature_dim, extra_dim = paired.infer_feature_layout(
-        spec.data_dir, "test", args.window, args.dyn_vars_count, args.expected_extra_dim
+        spec.data_dir, "test", args.window, source_dyn_vars, args.expected_extra_dim
     )
     val_feature_dim, val_extra_dim = paired.infer_feature_layout(
-        spec.data_dir, "val", args.window, args.dyn_vars_count, args.expected_extra_dim
+        spec.data_dir, "val", args.window, source_dyn_vars, args.expected_extra_dim
     )
     if val_feature_dim != feature_dim or val_extra_dim != extra_dim:
         raise ValueError(
@@ -247,10 +236,11 @@ def evaluate_source(
         spec.ckpt_path,
         device,
         args.window,
-        args.dyn_vars_count,
+        source_dyn_vars,
         extra_dim,
         args.allow_partial_load,
         args,
+        dynamic_order,
     )
 
     val_ds, val_meta = paired.make_dataset(
@@ -259,13 +249,14 @@ def evaluate_source(
         "val",
         scaler,
         args.window,
-        args.dyn_vars_count,
+        source_dyn_vars,
         extra_dim,
         args.limit_samples,
         args.model_arch,
         not args.static_rnn_no_fe,
         not args.static_rnn_no_pm,
         args,
+        dynamic_order,
     )
     test_ds, test_meta = paired.make_dataset(
         train_mod,
@@ -273,13 +264,14 @@ def evaluate_source(
         "test",
         scaler,
         args.window,
-        args.dyn_vars_count,
+        source_dyn_vars,
         extra_dim,
         args.limit_samples,
         args.model_arch,
         not args.static_rnn_no_fe,
         not args.static_rnn_no_pm,
         args,
+        dynamic_order,
     )
     val_loader = paired.make_loader(val_ds, args.batch_size, args.num_workers)
     test_loader = paired.make_loader(test_ds, args.batch_size, args.num_workers)
@@ -325,7 +317,8 @@ def evaluate_source(
         spec=spec,
         feature_dim=feature_dim,
         extra_feat_dim=extra_dim,
-        dyn_vars_count=args.dyn_vars_count,
+        dyn_vars_count=source_dyn_vars,
+        dynamic_feature_order=dynamic_order,
         temperature=float(temperature),
         thresholds=thresholds,
         threshold_source=threshold_source,

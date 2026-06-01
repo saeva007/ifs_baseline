@@ -421,11 +421,12 @@ def main() -> None:
     if n_wins <= 0:
         raise ValueError(f"Time series too short: nt={nt} window={win}")
     n_samples = n_wins * ns
-    dyn_vars_count = dyn_vars_for_feature_set(args.feature_set)
+    dynamic_order = dynamic_feature_order_for_feature_set(args.feature_set, feature_vars)
+    dyn_vars_count = dyn_vars_for_feature_set(args.feature_set, feature_vars)
     dyn_flat_dim = win * dyn_vars_count
     stat_dim = int(X_stat.shape[1])
     fog_fe_dim = compute_fog_features_pmst(
-        np.zeros((1, win, dyn_vars_count), dtype=np.float32), win, dyn_vars_count
+        np.zeros((1, win, dyn_vars_count), dtype=np.float32), win, dyn_vars_count, dynamic_order
     ).shape[1]
     fe_dim = fog_fe_dim + 4
 
@@ -475,7 +476,7 @@ def main() -> None:
             X_dyn_26 = append_pm10_channel(X_dyn_25, pm10_da, times_chunk, source_stations)
             del X_dyn_25
             X_chunk = append_pm25_channel(X_dyn_26, pm25_da, times_chunk, source_stations)
-            X_chunk = select_dynamic_layout(X_chunk, args.feature_set)
+            X_chunk = select_dynamic_layout(X_chunk, args.feature_set, feature_vars)
             del X_dyn_26
             gc.collect()
 
@@ -489,7 +490,7 @@ def main() -> None:
             row_hi = w1 * ns
             n_loc = row_hi - row_lo
             mm_dyn[row_lo:row_hi] = X_samples.reshape(n_loc, dyn_flat_dim)
-            fe_part = compute_fog_features_pmst(X_samples, win, dyn_vars_count)
+            fe_part = compute_fog_features_pmst(X_samples, win, dyn_vars_count, dynamic_order)
             cyc = cyclical_time_features(pd.DatetimeIndex(m_t[row_lo:row_hi]))
             mm_fe[row_lo:row_hi] = np.concatenate([fe_part, cyc], axis=1).astype(np.float32)
             mm_stat[row_lo:row_hi] = np.tile(X_stat, (w1 - w0, 1)).astype(np.float32)
@@ -530,7 +531,7 @@ def main() -> None:
                         pass
 
     cfg = {
-        "dataset": "station_source_overlap_compact_common_core_no_rh2m_monthtail" if args.feature_set.startswith("compact_common_core") else "station_source_overlap_pmst27_monthtail",
+        "dataset": f"station_source_overlap_{args.feature_set}_native_monthtail",
         "source_tag": args.source_tag,
         "source_kind": args.source_kind,
         "source_inputs": source_inputs,
@@ -540,9 +541,10 @@ def main() -> None:
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
-        "zero_filled_pmst_features": [] if args.feature_set.startswith("compact_common_core") else [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
-        "dyn_layout": dynamic_layout_name(args.feature_set),
-        "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set),
+        "zero_filled_pmst_features": [],
+        "excluded_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
+        "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
+        "dynamic_feature_order": dynamic_order,
         "dyn_vars": int(dyn_vars_count),
         "fe_dim": fe_dim,
         "fog_fe_dim": int(fog_fe_dim),

@@ -105,7 +105,7 @@ DEFAULT_STATIC_RNN_S1_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_RUN_ID}_S1_best_score.pt"
 )
 DEFAULT_STATIC_RNN_S1_SCALER = os.path.join(
-    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_RUN_ID}_s1_w12_dyn27_pm.pkl"
+    DEFAULT_CKPT_DIR, f"robust_scaler_{DEFAULT_STATIC_RNN_S1_RUN_ID}_s1_w12_dyn19_pm.pkl"
 )
 DEFAULT_STATIC_RNN_S1_COMPACT_CKPT = os.path.join(
     DEFAULT_CKPT_DIR, f"{DEFAULT_STATIC_RNN_S1_COMPACT_RUN_ID}_S1_best_score.pt"
@@ -251,6 +251,7 @@ class SourceEval:
     feature_dim: int
     extra_feat_dim: int
     dyn_vars_count: int
+    dynamic_feature_order: Optional[List[str]]
     temperature: float
     thresholds: Dict[str, float]
     threshold_source: str
@@ -478,6 +479,83 @@ def default_scaler_path(
     return os.path.join(ckpt_dir, f"robust_scaler_w{window}_dyn{dyn_vars_count}_overlap_baseline_{source}.pkl")
 
 
+def read_dataset_build_config(data_dir: str) -> Dict[str, object]:
+    cfg_path = os.path.join(str(data_dir), "dataset_build_config.json")
+    if not os.path.isfile(cfg_path):
+        return {}
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception as exc:
+        print(f"[layout] warning: failed to read {cfg_path}: {exc}", flush=True)
+        return {}
+
+
+def dataset_layout_from_config(data_dir: str) -> Tuple[Optional[int], Optional[int], Optional[List[str]]]:
+    cfg = read_dataset_build_config(data_dir)
+    dyn = cfg.get("dyn_vars")
+    fe = cfg.get("fe_dim")
+    order = cfg.get("dynamic_feature_order")
+    order_list = [str(v) for v in order] if isinstance(order, list) else None
+    dyn_i = int(dyn) if dyn is not None else None
+    fe_i = int(fe) if fe is not None else None
+    if dyn_i is not None and order_list is not None and len(order_list) != dyn_i:
+        raise ValueError(
+            f"{data_dir}: dataset_build_config dynamic_feature_order length "
+            f"{len(order_list)} != dyn_vars {dyn_i}"
+        )
+    return dyn_i, fe_i, order_list
+
+
+def source_dyn_vars_count(data_dir: str, fallback: int) -> int:
+    cfg_dyn, _, _ = dataset_layout_from_config(data_dir)
+    return int(cfg_dyn if cfg_dyn is not None else fallback)
+
+
+def checkpoint_run_id(ckpt_path: str, checkpoint_tag: str) -> str:
+    name = Path(ckpt_path).name
+    suffix = f"_{checkpoint_tag}.pt"
+    if name.endswith(suffix):
+        return name[: -len(suffix)]
+    if name.endswith(".pt"):
+        return name[:-3]
+    return Path(name).stem
+
+
+def default_scaler_path_for_spec(
+    spec: SourceSpec,
+    source: str,
+    args: argparse.Namespace,
+    dyn_vars_count: int,
+) -> str:
+    if args.model_arch == "static_rnn":
+        pm_tag = "nopm" if args.static_rnn_no_pm else "pm"
+        run_id = checkpoint_run_id(spec.ckpt_path, args.checkpoint_tag)
+        ckpt_parent = Path(spec.ckpt_path).expanduser().parent if spec.ckpt_path else Path(args.ckpt_dir)
+        scaler_dir = str(ckpt_parent if str(ckpt_parent) not in {"", "."} else Path(args.ckpt_dir))
+        return os.path.join(
+            scaler_dir,
+            f"robust_scaler_{run_id}_s2_w{args.window}_dyn{dyn_vars_count}_{pm_tag}.pkl",
+        )
+    return default_scaler_path(
+        source,
+        args.ckpt_dir,
+        args.window,
+        dyn_vars_count,
+        args.model_arch,
+        args.static_rnn_no_pm,
+    )
+
+
+def fill_auto_scaler_paths(specs: Dict[str, SourceSpec], args: argparse.Namespace) -> None:
+    for source, spec in specs.items():
+        if str(spec.scaler_path or "").strip().upper() not in {"", "AUTO"}:
+            continue
+        dyn_vars = source_dyn_vars_count(spec.data_dir, args.dyn_vars_count)
+        spec.scaler_path = default_scaler_path_for_spec(spec, source, args, dyn_vars)
+
+
 def parse_extra_source_specs(text: str) -> Dict[str, SourceSpec]:
     specs: Dict[str, SourceSpec] = {}
     for raw in str(text or "").split(";"):
@@ -499,7 +577,7 @@ def parse_extra_source_specs(text: str) -> Dict[str, SourceSpec]:
             name=tag,
             data_dir=resolve_under_root(parts[0]),
             ckpt_path=resolve_under_root(parts[1]),
-            scaler_path=resolve_under_root(parts[2]),
+            scaler_path="" if parts[2].upper() == "AUTO" else resolve_under_root(parts[2]),
         )
     return specs
 
@@ -540,7 +618,7 @@ def apply_shared_checkpoint_scaler(specs: Dict[str, SourceSpec], args: argparse.
     shared_ckpt = str(args.shared_ckpt or "").strip()
     shared_scaler = str(args.shared_scaler or "").strip()
     if args.zero_transfer_s1:
-        use_compact_s1 = int(args.dyn_vars_count) in {18, 19} or any(
+        use_compact_s1 = int(args.dyn_vars_count) == 18 or any(
             "compact_common_core" in str(spec.data_dir) for spec in specs.values()
         )
         shared_ckpt = shared_ckpt or (
@@ -696,6 +774,8 @@ def infer_feature_layout(
     if len(shape) != 2:
         raise ValueError(f"{x_path} must be 2D, got shape={shape}")
     feature_dim = int(shape[1])
+    cfg_dyn, cfg_fe, _ = dataset_layout_from_config(data_dir)
+    dyn_vars_count = int(cfg_dyn if cfg_dyn is not None else dyn_vars_count)
     base_dim = window * dyn_vars_count + 5 + 1
     extra_dim = feature_dim - base_dim
     if extra_dim <= 0:
@@ -703,7 +783,11 @@ def infer_feature_layout(
             f"Invalid feature layout for {x_path}: feature_dim={feature_dim}, "
             f"base_dim={base_dim}, extra_dim={extra_dim}"
         )
-    if expected_extra_dim > 0 and extra_dim != expected_extra_dim:
+    if cfg_fe is not None and int(extra_dim) != int(cfg_fe):
+        raise ValueError(
+            f"{data_dir} extra feature dim is {extra_dim}, but dataset_build_config fe_dim is {cfg_fe}."
+        )
+    if cfg_dyn is None and expected_extra_dim > 0 and extra_dim != expected_extra_dim:
         raise ValueError(
             f"{data_dir} extra feature dim is {extra_dim}, expected {expected_extra_dim}. "
             "This usually means a stale PM10-only or wrong-layout overlap dataset."
@@ -738,6 +822,24 @@ def ensure_static_rnn_dataset_args(args: argparse.Namespace) -> argparse.Namespa
     return args
 
 
+def make_static_layout(
+    train_mod,
+    window: int,
+    dyn_vars_count: int,
+    extra_feat_dim: int,
+    dynamic_feature_order: Optional[List[str]] = None,
+):
+    try:
+        return train_mod.Layout(
+            window_size=window,
+            dyn_vars=dyn_vars_count,
+            fe_dim=extra_feat_dim,
+            dynamic_feature_order=dynamic_feature_order,
+        )
+    except TypeError:
+        return train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
+
+
 def make_dataset(
     train_mod,
     data_dir: str,
@@ -751,6 +853,7 @@ def make_dataset(
     static_use_fe: bool,
     static_use_pm: bool,
     dataset_args: Optional[argparse.Namespace] = None,
+    dynamic_feature_order: Optional[List[str]] = None,
 ):
     x_path = os.path.join(data_dir, f"X_{split}.npy")
     y_path = os.path.join(data_dir, f"y_{split}.npy")
@@ -763,7 +866,7 @@ def make_dataset(
         indices = np.arange(min(limit_samples, len(y_cls)), dtype=np.int64)
 
     if model_arch == "static_rnn":
-        layout = train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
+        layout = make_static_layout(train_mod, window, dyn_vars_count, extra_feat_dim, dynamic_feature_order)
         ctor = inspect.signature(train_mod.LowVisDataset)
         kwargs = {"use_fe": static_use_fe, "use_pm": static_use_pm}
         if "args" in ctor.parameters:
@@ -816,10 +919,11 @@ def load_model(
     extra_feat_dim: int,
     allow_partial_load: bool,
     args: argparse.Namespace,
+    dynamic_feature_order: Optional[List[str]] = None,
 ) -> nn.Module:
     require_file(ckpt_path, "checkpoint")
     if args.model_arch == "static_rnn":
-        layout = train_mod.Layout(window_size=window, dyn_vars=dyn_vars_count, fe_dim=extra_feat_dim)
+        layout = make_static_layout(train_mod, window, dyn_vars_count, extra_feat_dim, dynamic_feature_order)
         model = train_mod.StaticRNNLowVisNet(
             layout=layout,
             encoder=args.static_rnn_encoder,
@@ -843,7 +947,9 @@ def load_model(
             dyn_vars_count=dyn_vars_count,
         ).to(device)
 
-    state = load_checkpoint_payload(ckpt_path, device)
+    payload = load_checkpoint_payload(ckpt_path, device)
+    metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+    state = payload
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if isinstance(state, dict) and "model_state_dict" in state:
@@ -855,6 +961,8 @@ def load_model(
     for k, v in state.items():
         clean_state[k[7:] if k.startswith("module.") else k] = v
 
+    if args.model_arch == "static_rnn" and hasattr(train_mod, "validate_pretrained_layout"):
+        train_mod.validate_pretrained_layout(model, clean_state, metadata, ckpt_path, "strict")
     result = model.load_state_dict(clean_state, strict=not allow_partial_load)
     if allow_partial_load:
         print(
@@ -1357,12 +1465,14 @@ def evaluate_one_source(
     print(f"[{source}] ckpt={spec.ckpt_path}", flush=True)
     print(f"[{source}] scaler={spec.scaler_path}", flush=True)
 
+    source_dyn_vars = source_dyn_vars_count(spec.data_dir, args.dyn_vars_count)
+    _, _, dynamic_order = dataset_layout_from_config(spec.data_dir)
     feature_dim, extra_dim = infer_feature_layout(
-        spec.data_dir, "test", args.window, args.dyn_vars_count, args.expected_extra_dim
+        spec.data_dir, "test", args.window, source_dyn_vars, args.expected_extra_dim
     )
     if not args.skip_validation_inference:
         val_feature_dim, val_extra_dim = infer_feature_layout(
-            spec.data_dir, "val", args.window, args.dyn_vars_count, args.expected_extra_dim
+            spec.data_dir, "val", args.window, source_dyn_vars, args.expected_extra_dim
         )
         if val_feature_dim != feature_dim or val_extra_dim != extra_dim:
             raise ValueError(
@@ -1378,10 +1488,11 @@ def evaluate_one_source(
         spec.ckpt_path,
         device,
         args.window,
-        args.dyn_vars_count,
+        source_dyn_vars,
         extra_dim,
         args.allow_partial_load,
         args,
+        dynamic_order,
     )
 
     test_ds, test_meta = make_dataset(
@@ -1390,13 +1501,14 @@ def evaluate_one_source(
         "test",
         scaler,
         args.window,
-        args.dyn_vars_count,
+        source_dyn_vars,
         extra_dim,
         args.limit_samples,
         args.model_arch,
         not args.static_rnn_no_fe,
         not args.static_rnn_no_pm,
         args,
+        dynamic_order,
     )
     test_loader = make_loader(test_ds, args.batch_size, args.num_workers)
 
@@ -1429,13 +1541,14 @@ def evaluate_one_source(
             "val",
             scaler,
             args.window,
-            args.dyn_vars_count,
+            source_dyn_vars,
             extra_dim,
             args.limit_samples,
             args.model_arch,
             not args.static_rnn_no_fe,
             not args.static_rnn_no_pm,
             args,
+            dynamic_order,
         )
         val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
         print(f"[{source}] running validation inference: N={len(val_ds)}", flush=True)
@@ -1508,7 +1621,8 @@ def evaluate_one_source(
         spec=spec,
         feature_dim=feature_dim,
         extra_feat_dim=extra_dim,
-        dyn_vars_count=args.dyn_vars_count,
+        dyn_vars_count=source_dyn_vars,
+        dynamic_feature_order=dynamic_order,
         temperature=float(temperature),
         thresholds=thresholds,
         threshold_source=threshold_source,
@@ -2238,7 +2352,13 @@ def predict_static_rows_for_swap(
         raise NotImplementedError("Feature replacement currently supports --model_arch static_rnn.")
     if source_eval.model is None or source_eval.scaler is None:
         raise RuntimeError("SourceEval must retain model and scaler for feature replacement.")
-    layout = train_mod.Layout(window_size=args.window, dyn_vars=args.dyn_vars_count, fe_dim=source_eval.extra_feat_dim)
+    layout = make_static_layout(
+        train_mod,
+        args.window,
+        source_eval.dyn_vars_count,
+        source_eval.extra_feat_dim,
+        source_eval.dynamic_feature_order,
+    )
     log_mask = train_mod.build_dyn_log_mask(layout)
     out: List[np.ndarray] = []
     model = source_eval.model
@@ -2346,10 +2466,6 @@ def run_feature_replacement_experiment(
     device: torch.device,
     out_dir: Path,
 ) -> pd.DataFrame:
-    lookup = dynamic_feature_lookup(args.dyn_vars_count)
-    features = choose_replacement_features(args, lookup)
-    if not features:
-        return pd.DataFrame()
     if args.model_arch != "static_rnn":
         print("[feature-swap] skipped: currently implemented only for static_rnn.", flush=True)
         return pd.DataFrame()
@@ -2358,6 +2474,16 @@ def run_feature_replacement_experiment(
     donor_source = "tianji"
     base_eval = evals[base_source]
     donor_eval = evals[donor_source]
+    if (
+        base_eval.dyn_vars_count != donor_eval.dyn_vars_count
+        or (base_eval.dynamic_feature_order or []) != (donor_eval.dynamic_feature_order or [])
+    ):
+        print("[feature-swap] skipped: source layouts differ.", flush=True)
+        return pd.DataFrame()
+    lookup = dynamic_feature_lookup(base_eval.dyn_vars_count)
+    features = choose_replacement_features(args, lookup)
+    if not features:
+        return pd.DataFrame()
     base_available = populated_overlap_features(base_eval.spec.data_dir)
     donor_available = populated_overlap_features(donor_eval.spec.data_dir)
     if base_available and donor_available:
@@ -2385,7 +2511,7 @@ def run_feature_replacement_experiment(
 
     for feature in features:
         col_idx = int(lookup[feature])
-        cols = [t * int(args.dyn_vars_count) + col_idx for t in range(int(args.window))]
+        cols = [t * int(base_eval.dyn_vars_count) + col_idx for t in range(int(args.window))]
         swapped = base_rows.copy()
         swapped[:, cols] = donor_rows[:, cols]
         probs = predict_static_rows_for_swap(swapped, base_eval, train_mod, args, device)
@@ -2405,7 +2531,7 @@ def run_feature_replacement_experiment(
         all_cols: List[int] = []
         for feature in features:
             col_idx = int(lookup[feature])
-            all_cols.extend([t * int(args.dyn_vars_count) + col_idx for t in range(int(args.window))])
+            all_cols.extend([t * int(base_eval.dyn_vars_count) + col_idx for t in range(int(args.window))])
         swapped = base_rows.copy()
         swapped[:, all_cols] = donor_rows[:, all_cols]
         probs = predict_static_rows_for_swap(swapped, base_eval, train_mod, args, device)
@@ -2462,6 +2588,7 @@ def write_independent_source_outputs(
             "mist_threshold": eval_obj.thresholds.get("mist"),
             "threshold_source": eval_obj.threshold_source,
             "feature_dim": eval_obj.feature_dim,
+            "dyn_vars_count": eval_obj.dyn_vars_count,
             "extra_feat_dim": eval_obj.extra_feat_dim,
             "model_arch": args.model_arch,
             "checkpoint": eval_obj.spec.ckpt_path,
@@ -2479,6 +2606,8 @@ def write_independent_source_outputs(
                     "fog_threshold": eval_obj.thresholds.get("fog"),
                     "mist_threshold": eval_obj.thresholds.get("mist"),
                     "threshold_source": eval_obj.threshold_source,
+                    "dyn_vars_count": eval_obj.dyn_vars_count,
+                    "extra_feat_dim": eval_obj.extra_feat_dim,
                     "model_arch": args.model_arch,
                     "checkpoint": eval_obj.spec.ckpt_path,
                     "scaler": eval_obj.spec.scaler_path,
@@ -2646,34 +2775,19 @@ def main() -> None:
             data_dir=args.tianji_data_dir or default_tianji_data_dir(args.tianji_source_tag),
             ckpt_path=args.tianji_ckpt
             or default_ckpt_path(args.tianji_source_tag, args.ckpt_dir, args.checkpoint_tag, args.model_arch),
-            scaler_path=args.tianji_scaler
-            or default_scaler_path(
-                args.tianji_source_tag,
-                args.ckpt_dir,
-                args.window,
-                args.dyn_vars_count,
-                args.model_arch,
-                args.static_rnn_no_pm,
-            ),
+            scaler_path=args.tianji_scaler,
         ),
         "ifs": SourceSpec(
             name="ifs",
             data_dir=args.ifs_data_dir,
             ckpt_path=args.ifs_ckpt or default_ckpt_path("ifs", args.ckpt_dir, args.checkpoint_tag, args.model_arch),
-            scaler_path=args.ifs_scaler
-            or default_scaler_path(
-                "ifs",
-                args.ckpt_dir,
-                args.window,
-                args.dyn_vars_count,
-                args.model_arch,
-                args.static_rnn_no_pm,
-            ),
+            scaler_path=args.ifs_scaler,
         ),
     }
     specs.update(parse_extra_source_specs(args.extra_sources))
     specs = filter_source_specs(specs, args.source_subset)
     apply_shared_checkpoint_scaler(specs, args)
+    fill_auto_scaler_paths(specs, args)
     if not args.independent_sources and not {"tianji", "ifs"}.issubset(specs):
         raise ValueError(
             "Paired mode requires both 'tianji' and 'ifs'. "

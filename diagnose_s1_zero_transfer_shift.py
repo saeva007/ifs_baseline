@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Diagnose S1 zero-transfer source shift without torch.")
     p.add_argument(
         "--s1_dir",
-        default="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap",
+        default="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core",
     )
     p.add_argument(
         "--source_dir",
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--source_name", default="era5_2025_common_core")
     p.add_argument(
         "--scaler",
-        default="/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn27_pm.pkl",
+        default="/public/home/putianshu/vis_mlp/ifs_baseline/checkpoints/robust_scaler_exp_overlap_static_rnn_s1_common_core_pm10_pm25_s1_w12_dyn19_pm.pkl",
     )
     p.add_argument(
         "--out_dir",
