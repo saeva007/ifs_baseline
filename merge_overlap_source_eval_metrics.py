@@ -116,10 +116,14 @@ def dedupe_sources(df: pd.DataFrame) -> pd.DataFrame:
         return df
     preferred = [
         "tianji",
+        "T2ND_rh2m_source_full",
         "T2ND_rh2m_common_core",
         "ifs",
+        "pangu2021_source_full",
+        "era5_2025_source_full",
         "era5_2025_common_core",
         "pangu2021_common_core",
+        "ensemble_mean_softmax",
         "ifs_diagnostic",
     ]
     df = df.copy()
@@ -148,9 +152,13 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_labels = {
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
+        "T2ND_rh2m_source_full": "T2ND RH2M source-full",
         "T2ND_rh2m_common_core": "T2ND RH2M",
+        "pangu2021_source_full": "Pangu-2021 source-full",
         "pangu2021_common_core": "Pangu-2021",
+        "era5_2025_source_full": "ERA5-2025 source-full",
         "era5_2025_common_core": "ERA5-2025",
+        "ensemble_mean_softmax": "Tianji+IFS mean softmax",
         "ifs_diagnostic": "IFS diagnostic VIS",
     }
     for _, row in overall_df.iterrows():
@@ -161,9 +169,13 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_colors = {
         "tianji": "#2E5A87",
         "ifs": "#6C6C6C",
+        "T2ND_rh2m_source_full": "#1B9E77",
         "T2ND_rh2m_common_core": "#1B9E77",
+        "pangu2021_source_full": "#8E6BBE",
         "pangu2021_common_core": "#8E6BBE",
+        "era5_2025_source_full": "#D95F02",
         "era5_2025_common_core": "#D95F02",
+        "ensemble_mean_softmax": "#4C78A8",
         "ifs_diagnostic": "#E69F00",
     }
     fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
@@ -349,6 +361,30 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         return [str(p) for p in out_paths]
 
     written: List[str] = []
+    has_source_full = bool(
+        available_set
+        & {"T2ND_rh2m_source_full", "pangu2021_source_full", "era5_2025_source_full"}
+    ) or any("source_full" in str(row.get("data_dir", "")) for row in row_by_source.values())
+    if has_source_full:
+        written.extend(
+            _draw_group(
+                [
+                    "tianji",
+                    "T2ND_rh2m_source_full",
+                    "ifs",
+                    "pangu2021_source_full",
+                    "era5_2025_source_full",
+                ],
+                "fig_forecast_source_key_metrics_source_full",
+            )
+        )
+    if available_set & {"pangu2021_source_full", "ensemble_mean_softmax"}:
+        written.extend(
+            _draw_group(
+                ["pangu2021_source_full", "ifs_diagnostic", "ensemble_mean_softmax"],
+                "fig_forecast_source_key_metrics_pangu_ifs_ensemble",
+            )
+        )
     written.extend(
         _draw_group(
             ["tianji", "T2ND_rh2m_common_core", "ifs", "era5_2025_common_core", "ifs_diagnostic"],

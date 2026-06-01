@@ -122,6 +122,9 @@ SOURCE_LABELS = {
     "tianji_compact_common_core": "Tianji compact no-RH2M-trained",
     "T2ND_rh2m_compact_common_core": "Tianji T2ND compact no-RH2M-trained",
     "ifs": "IFS-trained/IFS-input model",
+    "T2ND_rh2m_source_full": "Tianji T2ND RH2M source-full-trained",
+    "pangu2021_source_full": "Pangu-2021 source-full-trained",
+    "era5_2025_source_full": "ERA5-2025 source-full-trained",
     "ifs_compact_common_core": "IFS compact no-RH2M-trained",
     "pangu2021_common_core": "Pangu-2021-trained",
     "pangu2021_compact_common_core": "Pangu-2021 compact no-RH2M-trained",
@@ -132,6 +135,9 @@ SOURCE_LABELS = {
 ZERO_TRANSFER_SOURCE_LABELS = {
     "tianji": "S1 zero-transfer / Tianji",
     "ifs": "S1 zero-transfer / IFS",
+    "T2ND_rh2m_source_full": "S1 zero-transfer / T2ND RH2M source-full",
+    "pangu2021_source_full": "S1 zero-transfer / Pangu-2021 source-full",
+    "era5_2025_source_full": "S1 zero-transfer / ERA5-2025 source-full",
     "T2ND_rh2m_common_core": "S1 zero-transfer / T2ND RH2M",
     "tianji_compact_common_core": "S1 compact zero-transfer / Tianji",
     "ifs_compact_common_core": "S1 compact zero-transfer / IFS",
@@ -1807,12 +1813,15 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_labels = {
         "tianji": "Tianji-trained",
         "ifs": "IFS-trained",
+        "T2ND_rh2m_source_full": "T2ND RH2M source-full",
         "T2ND_rh2m_common_core": "T2ND RH2M",
         "tianji_compact_common_core": "Tianji compact",
         "ifs_compact_common_core": "IFS compact",
         "T2ND_rh2m_compact_common_core": "T2ND RH2M compact",
+        "pangu2021_source_full": "Pangu-2021 source-full",
         "pangu2021_common_core": "Pangu-2021",
         "pangu2021_compact_common_core": "Pangu-2021 compact",
+        "era5_2025_source_full": "ERA5-2025 source-full",
         "era5_2025_common_core": "ERA5-2025",
         "era5_2025_compact_common_core": "ERA5-2025 compact",
         "ifs_diagnostic": "IFS diagnostic VIS",
@@ -1825,12 +1834,15 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     source_colors = {
         "tianji": "#2E5A87",
         "ifs": "#6C6C6C",
+        "T2ND_rh2m_source_full": "#1B9E77",
         "T2ND_rh2m_common_core": "#1B9E77",
         "tianji_compact_common_core": "#2E5A87",
         "ifs_compact_common_core": "#6C6C6C",
         "T2ND_rh2m_compact_common_core": "#1B9E77",
+        "pangu2021_source_full": "#8E6BBE",
         "pangu2021_common_core": "#8E6BBE",
         "pangu2021_compact_common_core": "#8E6BBE",
+        "era5_2025_source_full": "#D95F02",
         "era5_2025_common_core": "#D95F02",
         "era5_2025_compact_common_core": "#D95F02",
         "ifs_diagnostic": "#E69F00",
@@ -2017,6 +2029,22 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         return [str(p) for p in out_paths]
 
     written: List[str] = []
+    if any("source_full" in src for src in available_sources) or any(
+        "source_full" in str(row.get("data_dir", "")) for row in row_by_source.values()
+    ):
+        written.extend(
+            _draw_group(
+                [
+                    "tianji",
+                    "T2ND_rh2m_source_full",
+                    "ifs",
+                    "pangu2021_source_full",
+                    "era5_2025_source_full",
+                    "ifs_diagnostic",
+                ],
+                "fig_forecast_source_key_metrics_source_full",
+            )
+        )
     written.extend(
         _draw_group(
             ["tianji", "T2ND_rh2m_common_core", "ifs", "era5_2025_common_core", "ifs_diagnostic"],
@@ -2045,9 +2073,12 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     if not written:
         fallback_order = [
             "tianji",
+            "T2ND_rh2m_source_full",
             "T2ND_rh2m_common_core",
             "T2ND_rh2m_compact_common_core",
             "ifs",
+            "pangu2021_source_full",
+            "era5_2025_source_full",
             "era5_2025_common_core",
             "era5_2025_compact_common_core",
             "pangu2021_common_core",

@@ -32,18 +32,100 @@ Each data-build path has its own Slurm entry point. Keep
 
 The source-family experiment has two tiers:
 
-- `FEATURE_SET=common_core`: the main fair comparison. It keeps the fixed
+- `FEATURE_SET=common_core`: the fair comparison tier. It keeps the fixed
   PMST-27 input layout but only fills source variables shared with Pangu:
   `RH2M,T2M,MSLP,U10,WSPD10,V10,WDIR10,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,DPD`.
   Other PMST meteorological slots are zero-filled and recorded in
-  `dataset_build_config.json`.
-- `FEATURE_SET=source_full`: supplementary upper-bound runs. Each source fills
-  all PMST slots it can physically provide; this tests operational potential,
-  not a clean data-source-only comparison.
+  `dataset_build_config.json`. Keep this tier for fairness diagnostics, not
+  for the current best-effort all-variable main figure.
+- `FEATURE_SET=source_full`: the best-effort all-variable tier. Each source
+  fills all PMST slots it can physically provide; this tests operational
+  potential under each source's native availability, not a clean
+  data-source-only attribution.
 
 Keep Tianji product RH2M and T2ND raw RH2M as separate sources. T2ND is included
 in the main `common_core` comparison because the current Tianji product RH2M can
 be less extreme than the raw-mode field.
+
+For the best-effort source-full experiment, the main decision rule is `argmax`.
+Do not use S1 zero-transfer, checkpoint thresholds, validation threshold search,
+or zero-filled unavailable slots as the main source-full evidence. Always audit
+`dataset_build_config.json` and interpret `available_pmst_features` as the true
+variable list for each source.
+
+Source-full variable availability:
+
+| Source | Available PMST meteorological variables in source-full |
+|---|---|
+| Tianji product | `RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,CAPE,LCC,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD,INVERSION` |
+| T2ND RH2M + Tianji | Same as Tianji product, with `RH2M` replaced by the T2ND station-interpolated field |
+| IFS | `RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,LCC,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD`; no current `CAPE,T_925,INVERSION` |
+| ERA5-2025 | `RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,CAPE,LCC,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD,INVERSION` |
+| Pangu-2021 | `RH2M,T2M,MSLP,U10,WSPD10,V10,WDIR10,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,DPD,INVERSION`; no current `PRECIP,SW_RAD,CAPE,LCC,W_925,W_1000` |
+
+The current Pangu exporter derives `RH2M` from 1000 hPa humidity. If the paper
+requires strict 2 m RH only, label this explicitly or rebuild the Pangu
+source-full data without that proxy before using it as a main RH2M claim.
+Pangu-2021 uses `CMA_visibility_2021_2023_GeoCoords_1.nc` by default, while the
+Tianji, IFS, T2ND, and ERA5-2025 paths use 2025 labels. Treat the all-source
+source-full figure as best-effort performance, not a strict same-year
+source-only attribution. For a strict same-year figure, first obtain source data
+for the same target year.
+
+PM10/PM2.5 inputs must also match the source year and stations. Before training
+Pangu-2021 or any non-2025 source, confirm `PM10_FILE/PM10_DIR` and
+`PM25_FILE/PM25_DIR` have valid matches within the 90 min tolerance. Do not use
+runs whose logs show missing PM files or all-unmatched PM channels as
+"all-variable" evidence.
+
+## Best-Effort Source-Full Order
+
+Run from the remote overlap repository:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+mkdir -p logs
+```
+
+1. Build and train the full overlap S1 checkpoint if it is missing:
+
+```bash
+sbatch sub_s1_overlap_data.slurm
+sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+```
+
+2. Build source-full S2 datasets:
+
+```bash
+sbatch --export=ALL,FEATURE_SET=source_full sub_tianji_overlap_data.slurm
+sbatch --export=ALL,FEATURE_SET=source_full sub_ifs_data.slurm
+sbatch sub_pangu_station_idw.slurm
+sbatch --export=ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2021,YEAR=2021,FEATURE_SET=source_full sub_station_source_overlap_data.slurm
+sbatch --export=ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=source_full sub_station_source_overlap_data.slurm
+sbatch --export=ALL,FEATURE_SET=source_full,RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,RH2M_SOURCE_TAG=T2ND_rh2m sub_tianji_overlap_data.slurm
+```
+
+3. Train source-full S2 models:
+
+```bash
+for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_pangu2021_source_full s2_era5_2025_source_full; do
+  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+done
+```
+
+4. Evaluate Figure 1 with `--threshold_mode argmax` using
+`test_PMST_overlap_forecast_source_s2.py --independent_sources`, explicit
+source-full data/checkpoint/scaler paths, `--skip_ifs_forecast_baseline`, and
+an output directory such as
+`paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources`.
+
+5. Evaluate Figure 2 in two pieces: run
+`sub_static_rnn_overlap_softmax_ensemble.slurm` with source-full Tianji/IFS
+paths and `SOURCE_THRESHOLD_MODE=argmax,ENSEMBLE_THRESHOLD_MODE=argmax`, then
+run `test_PMST_overlap_forecast_source_s2.py --independent_sources` for only
+`pangu2021_source_full` without `--skip_ifs_forecast_baseline`. Merge the two
+output directories with `merge_overlap_source_eval_metrics.py`; it will write
+`fig_forecast_source_key_metrics_pangu_ifs_ensemble.*`.
 
 ## Required Order
 
@@ -232,9 +314,8 @@ FEATURE_SET=common_core \
 sub_station_source_overlap_data.slurm
 ```
 
-For supplementary upper-bound datasets, repeat the same commands with
-`FEATURE_SET=source_full` and keep their outputs separate from the main
-common-core table.
+For the best-effort all-variable experiment, use the source-full build order
+above and keep its outputs separate from the common-core fairness table.
 
 ### 5. Train Tianji-Input S2
 
