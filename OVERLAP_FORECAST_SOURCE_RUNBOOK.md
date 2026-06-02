@@ -100,27 +100,43 @@ sbatch --export=ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,
 sbatch --export=ALL,FEATURE_SET=source_full,RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,RH2M_SOURCE_TAG=T2ND_rh2m sub_tianji_overlap_data.slurm
 ```
 
-2. Train source-full S2 models:
+2. Build and train source-full S1 layouts. Tianji, T2ND RH2M, and ERA5 share
+the dyn27 S1 layout; IFS uses dyn24; historical Pangu-2021 uses dyn21.
+If you use the current Pangu-2025 ONNX/station product instead, train its
+separate dyn19 profile and do not mix it with Pangu-2021.
 
 ```bash
-for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_pangu2021_source_full s2_era5_2025_source_full; do
-  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-done
+sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji sub_s1_overlap_data.slurm
+sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs sub_s1_overlap_data.slurm
+sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu sub_s1_overlap_data.slurm
+sbatch --export=ALL,EXPERIMENT=s1_source_full_tianji,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s1_source_full_ifs,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s1_source_full_pangu,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
 ```
 
 Do not use `common_core`, `compact_common_core`, or historical `overlap_full`
 S1 checkpoints as source-full initializers. Source-full channel counts and FE
-dimensions can differ by source, so these runs default to scratch S2 training
-with `S2_PhaseA=0`. If a future transfer-learning variant is needed, build a
-separate S1 dataset and checkpoint for each exact source feature order.
+dimensions can differ by source, so source-full S2 runs require the matching
+source-full S1 checkpoint. Current Pangu-2025 uses the separate
+`SOURCE_FULL_PROFILE=pangu2025` / `EXPERIMENT=s1_source_full_pangu2025` dyn19 S1.
 
-3. Evaluate Figure 1 with `--threshold_mode argmax` using
+3. Train source-full S2 models:
+
+```bash
+sbatch --export=ALL,EXPERIMENT=s2_tianji_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_pangu2021_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_era5_2025_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+```
+
+4. Evaluate Figure 1 with `--threshold_mode argmax` using
 `test_PMST_overlap_forecast_source_s2.py --independent_sources`, explicit
 source-full data/checkpoint paths, `AUTO` scaler entries when using
 `--extra_sources`, `--skip_ifs_forecast_baseline`, and an output directory such as
 `paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources`.
 
-4. Evaluate Figure 2 in two pieces: run
+5. Evaluate Figure 2 in two pieces: run
 `sub_static_rnn_overlap_softmax_ensemble.slurm` with source-full Tianji/IFS
 paths and `SOURCE_THRESHOLD_MODE=argmax,ENSEMBLE_THRESHOLD_MODE=argmax`, then
 run `test_PMST_overlap_forecast_source_s2.py --independent_sources` for only
@@ -346,9 +362,11 @@ done
 For supplementary upper-bound runs:
 
 ```bash
-for exp in s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_pangu2021_source_full s2_era5_2025_source_full; do
-  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-done
+sbatch --export=ALL,EXPERIMENT=s2_tianji_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_pangu2021_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,EXPERIMENT=s2_era5_2025_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
 ```
 
 ### 6. Train IFS-Input S2

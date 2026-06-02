@@ -56,7 +56,7 @@ if [[ "${FEATURE_SET}" == compact_common_core* ]]; then
 elif [[ "${FEATURE_SET}" == "source_full" ]]; then
     echo "ERROR: FEATURE_SET=source_full is not supported by the shared S1 zero-transfer launcher." >&2
     echo "source_full uses native per-source channels, so a single shared S1 checkpoint/scaler is invalid." >&2
-    echo "Use per-source source_full S2 checkpoints trained from scratch, or build exact-layout S1 checkpoints per source." >&2
+    echo "Use per-source source_full S1->S2 checkpoints with exact-layout S1 checkpoints per source/profile." >&2
     exit 1
 else
     DEFAULT_S1_RUN_ID="exp_overlap_static_rnn_s1_common_core_pm10_pm25"

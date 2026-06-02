@@ -40,6 +40,18 @@ DEFAULT_S1_COMPACT_COMMON_CORE_DIR = os.path.join(
 DEFAULT_S1_SOURCE_FULL_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full"
 )
+DEFAULT_S1_SOURCE_FULL_TIANJI_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_tianji"
+)
+DEFAULT_S1_SOURCE_FULL_IFS_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_ifs"
+)
+DEFAULT_S1_SOURCE_FULL_PANGU_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_pangu"
+)
+DEFAULT_S1_SOURCE_FULL_PANGU2025_DIR = os.path.join(
+    IFS_BASELINE_ROOT, "ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_pangu2025"
+)
 DEFAULT_TIANJI_DIR = os.path.join(
     IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_baseline"
 )
@@ -57,22 +69,29 @@ DEFAULT_S2_DIRS = {
     "T2ND_rh2m_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core"),
     "ifs_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_common_core"),
     "pangu2021_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core"),
+    "pangu2025_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2025_12h_pm10_pm25_common_core"),
     "era5_2025_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core"),
     "tianji_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core_no_rh2m"),
     "T2ND_rh2m_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core_no_rh2m"),
     "ifs_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core_no_rh2m"),
     "pangu2021_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core_no_rh2m"),
+    "pangu2025_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2025_12h_pm10_pm25_compact_common_core_no_rh2m"),
     "era5_2025_compact_common_core": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core_no_rh2m"),
     "tianji_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_source_full"),
     "T2ND_rh2m_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full"),
     "ifs_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_source_full"),
     "pangu2021_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2021_12h_pm10_pm25_source_full"),
+    "pangu2025_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_pangu2025_12h_pm10_pm25_source_full"),
     "era5_2025_source_full": os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full"),
 }
 DEFAULT_S1_RUN_ID = "exp_overlap_static_rnn_s1_pm10_pm25"
 DEFAULT_S1_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_common_core_pm10_pm25"
 DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID = "exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25"
 DEFAULT_S1_SOURCE_FULL_RUN_ID = "exp_overlap_static_rnn_s1_source_full_pm10_pm25"
+DEFAULT_S1_SOURCE_FULL_TIANJI_RUN_ID = "exp_overlap_static_rnn_s1_source_full_tianji_dyn27_pm10_pm25"
+DEFAULT_S1_SOURCE_FULL_IFS_RUN_ID = "exp_overlap_static_rnn_s1_source_full_ifs_dyn24_pm10_pm25"
+DEFAULT_S1_SOURCE_FULL_PANGU_RUN_ID = "exp_overlap_static_rnn_s1_source_full_pangu_dyn21_pm10_pm25"
+DEFAULT_S1_SOURCE_FULL_PANGU2025_RUN_ID = "exp_overlap_static_rnn_s1_source_full_pangu2025_dyn19_pm10_pm25"
 DEFAULT_OVERLAP_S2_A_STEPS = "12000"
 DEFAULT_OVERLAP_S2_B_STEPS = "40000"
 DEFAULT_OVERLAP_S2_PATIENCE = "18"
@@ -138,6 +157,14 @@ def resolve_run_id(args: argparse.Namespace) -> str:
         if "compact_common_core" in str(args.s1_data_dir):
             return DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID
         if "source_full" in str(args.s1_data_dir):
+            if "pangu2025" in str(args.s1_data_dir):
+                return DEFAULT_S1_SOURCE_FULL_PANGU2025_RUN_ID
+            if "pangu" in str(args.s1_data_dir):
+                return DEFAULT_S1_SOURCE_FULL_PANGU_RUN_ID
+            if "ifs" in str(args.s1_data_dir):
+                return DEFAULT_S1_SOURCE_FULL_IFS_RUN_ID
+            if "tianji" in str(args.s1_data_dir):
+                return DEFAULT_S1_SOURCE_FULL_TIANJI_RUN_ID
             return DEFAULT_S1_SOURCE_FULL_RUN_ID
         if "common_core" in str(args.s1_data_dir):
             return DEFAULT_S1_COMMON_CORE_RUN_ID
@@ -145,6 +172,17 @@ def resolve_run_id(args: argparse.Namespace) -> str:
     if args.mode == "both":
         return f"exp_overlap_static_rnn_both_{args.data_source}_pm10_pm25"
     return default_s2_run_id(args.data_source)
+
+
+def source_full_s1_run_id_for_s2(s2_dir: str, data_source: str) -> str:
+    text = f"{s2_dir} {data_source}".lower()
+    if "pangu2025" in text:
+        return DEFAULT_S1_SOURCE_FULL_PANGU2025_RUN_ID
+    if "pangu" in text:
+        return DEFAULT_S1_SOURCE_FULL_PANGU_RUN_ID
+    if "ifs" in text:
+        return DEFAULT_S1_SOURCE_FULL_IFS_RUN_ID
+    return DEFAULT_S1_SOURCE_FULL_TIANJI_RUN_ID
 
 
 def resolve_pretrained_ckpt(args: argparse.Namespace) -> str:
@@ -156,13 +194,13 @@ def resolve_pretrained_ckpt(args: argparse.Namespace) -> str:
     if "compact_common_core" in str(s2_dir):
         run_id = DEFAULT_S1_COMPACT_COMMON_CORE_RUN_ID
     elif "source_full" in str(s2_dir):
-        return ""
+        run_id = source_full_s1_run_id_for_s2(s2_dir, args.data_source)
     elif "common_core" in str(s2_dir):
         run_id = DEFAULT_S1_COMMON_CORE_RUN_ID
     else:
         run_id = DEFAULT_S1_RUN_ID
     default_path = os.path.join(args.ckpt_dir, f"{run_id}_S1_best_score.pt")
-    return default_path if os.path.isfile(default_path) else ""
+    return default_path if ("source_full" in str(s2_dir) or os.path.isfile(default_path)) else ""
 
 
 def resolve_static_script(args: argparse.Namespace) -> Path:
@@ -186,16 +224,15 @@ def passthrough_has_option(passthrough: List[str], option: str) -> bool:
 def add_overlap_s2_training_defaults(args: argparse.Namespace, passthrough: List[str]) -> List[str]:
     if args.mode not in {"s2", "both"}:
         return passthrough
-    source_full_scratch = "source_full" in resolve_s2_data_dir(args) and not args.pretrained_ckpt
     out = list(passthrough)
     defaults = [
         (
             "--s2-phase-a-steps",
-            os.environ.get("LOWVIS_RNN_S2_A_STEPS", "0" if source_full_scratch else DEFAULT_OVERLAP_S2_A_STEPS),
+            os.environ.get("LOWVIS_RNN_S2_A_STEPS", DEFAULT_OVERLAP_S2_A_STEPS),
         ),
         (
             "--s2-phase-b-steps",
-            os.environ.get("LOWVIS_RNN_S2_B_STEPS", "52000" if source_full_scratch else DEFAULT_OVERLAP_S2_B_STEPS),
+            os.environ.get("LOWVIS_RNN_S2_B_STEPS", DEFAULT_OVERLAP_S2_B_STEPS),
         ),
         (
             "--patience",

@@ -124,10 +124,13 @@ SOURCE_LABELS = {
     "ifs": "IFS-trained/IFS-input model",
     "T2ND_rh2m_source_full": "Tianji T2ND RH2M source-full-trained",
     "pangu2021_source_full": "Pangu-2021 source-full-trained",
+    "pangu2025_source_full": "Pangu-2025 source-full-trained",
     "era5_2025_source_full": "ERA5-2025 source-full-trained",
     "ifs_compact_common_core": "IFS compact no-RH2M-trained",
     "pangu2021_common_core": "Pangu-2021-trained",
+    "pangu2025_common_core": "Pangu-2025-trained",
     "pangu2021_compact_common_core": "Pangu-2021 compact no-RH2M-trained",
+    "pangu2025_compact_common_core": "Pangu-2025 compact no-RH2M-trained",
     "era5_2025_common_core": "ERA5-2025-trained",
     "era5_2025_compact_common_core": "ERA5-2025 compact no-RH2M-trained",
     "ifs_diagnostic": "IFS diagnostic visibility",
@@ -137,13 +140,16 @@ ZERO_TRANSFER_SOURCE_LABELS = {
     "ifs": "S1 zero-transfer / IFS",
     "T2ND_rh2m_source_full": "S1 zero-transfer / T2ND RH2M source-full",
     "pangu2021_source_full": "S1 zero-transfer / Pangu-2021 source-full",
+    "pangu2025_source_full": "S1 zero-transfer / Pangu-2025 source-full",
     "era5_2025_source_full": "S1 zero-transfer / ERA5-2025 source-full",
     "T2ND_rh2m_common_core": "S1 zero-transfer / T2ND RH2M",
     "tianji_compact_common_core": "S1 compact zero-transfer / Tianji",
     "ifs_compact_common_core": "S1 compact zero-transfer / IFS",
     "T2ND_rh2m_compact_common_core": "S1 compact zero-transfer / T2ND RH2M",
     "pangu2021_common_core": "S1 zero-transfer / Pangu-2021",
+    "pangu2025_common_core": "S1 zero-transfer / Pangu-2025",
     "pangu2021_compact_common_core": "S1 compact zero-transfer / Pangu-2021",
+    "pangu2025_compact_common_core": "S1 compact zero-transfer / Pangu-2025",
     "era5_2025_common_core": "S1 zero-transfer / ERA5-2025",
     "era5_2025_compact_common_core": "S1 compact zero-transfer / ERA5-2025",
 }
@@ -588,11 +594,13 @@ def split_source_tags(value: str) -> List[str]:
         "ifs_common_core": "ifs",
         "T2ND_rh2m": "T2ND_rh2m_common_core",
         "pangu2021": "pangu2021_common_core",
+        "pangu2025": "pangu2025_common_core",
         "era5_2025": "era5_2025_common_core",
         "tianji_compact": "tianji",
         "ifs_compact": "ifs",
         "T2ND_rh2m_compact": "T2ND_rh2m_compact_common_core",
         "pangu2021_compact": "pangu2021_compact_common_core",
+        "pangu2025_compact": "pangu2025_compact_common_core",
         "era5_2025_compact": "era5_2025_compact_common_core",
     }
     tags: List[str] = []
@@ -1933,8 +1941,11 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "ifs_compact_common_core": "IFS compact",
         "T2ND_rh2m_compact_common_core": "T2ND RH2M compact",
         "pangu2021_source_full": "Pangu-2021 source-full",
+        "pangu2025_source_full": "Pangu-2025 source-full",
         "pangu2021_common_core": "Pangu-2021",
+        "pangu2025_common_core": "Pangu-2025",
         "pangu2021_compact_common_core": "Pangu-2021 compact",
+        "pangu2025_compact_common_core": "Pangu-2025 compact",
         "era5_2025_source_full": "ERA5-2025 source-full",
         "era5_2025_common_core": "ERA5-2025",
         "era5_2025_compact_common_core": "ERA5-2025 compact",
@@ -1954,8 +1965,11 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "ifs_compact_common_core": "#6C6C6C",
         "T2ND_rh2m_compact_common_core": "#1B9E77",
         "pangu2021_source_full": "#8E6BBE",
+        "pangu2025_source_full": "#8E6BBE",
         "pangu2021_common_core": "#8E6BBE",
+        "pangu2025_common_core": "#8E6BBE",
         "pangu2021_compact_common_core": "#8E6BBE",
+        "pangu2025_compact_common_core": "#8E6BBE",
         "era5_2025_source_full": "#D95F02",
         "era5_2025_common_core": "#D95F02",
         "era5_2025_compact_common_core": "#D95F02",
@@ -2153,6 +2167,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                     "T2ND_rh2m_source_full",
                     "ifs",
                     "pangu2021_source_full",
+                    "pangu2025_source_full",
                     "era5_2025_source_full",
                     "ifs_diagnostic",
                 ],
@@ -2184,6 +2199,12 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "fig_forecast_source_key_metrics_tianji_pangu",
         )
     )
+    written.extend(
+        _draw_group(
+            ["tianji", "pangu2025_source_full", "pangu2025_common_core", "pangu2025_compact_common_core"],
+            "fig_forecast_source_key_metrics_tianji_pangu2025",
+        )
+    )
     if not written:
         fallback_order = [
             "tianji",
@@ -2192,11 +2213,14 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "T2ND_rh2m_compact_common_core",
             "ifs",
             "pangu2021_source_full",
+            "pangu2025_source_full",
             "era5_2025_source_full",
             "era5_2025_common_core",
             "era5_2025_compact_common_core",
             "pangu2021_common_core",
+            "pangu2025_common_core",
             "pangu2021_compact_common_core",
+            "pangu2025_compact_common_core",
             "ifs_diagnostic",
         ]
         fallback_order.extend([s for s in available_sources if s not in set(fallback_order)])

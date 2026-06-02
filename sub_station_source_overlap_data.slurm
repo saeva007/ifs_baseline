@@ -55,8 +55,11 @@ STAGING_DIR="${STAGING_DIR:-}"
 KEEP_STAGING="${KEEP_STAGING:-0}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 
+if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
+    YEAR="${BASH_REMATCH[1]}"
+fi
 if [[ -z "${SOURCE_FILE}" && "${SOURCE_KIND}" == "station_nc" && "${SOURCE_TAG}" == pangu* ]]; then
-    SOURCE_FILE="/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2021_lead24h.nc"
+    SOURCE_FILE="/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_${YEAR}_lead24h.nc"
 fi
 if [[ -z "${TARGET_FILE}" ]]; then
     if [[ "${YEAR}" == "2025" ]]; then

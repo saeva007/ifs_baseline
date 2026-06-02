@@ -167,7 +167,7 @@ def main() -> None:
                     "lon": ("station_id", station_lons.astype(np.float32)),
                 },
                 attrs={
-                    "source": "Pangu WeatherBench2 China lead24h",
+                    "source": f"Pangu China lead files for year {int(args.year)}",
                     "interpolation": f"IDW k={int(args.k)} in latitude/longitude degrees",
                     "source_file": fp,
                 },

@@ -54,6 +54,10 @@ OVERLAP_S1_DATA_DIR="${OVERLAP_S1_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_a
 OVERLAP_S1_COMMON_CORE_DATA_DIR="${OVERLAP_S1_COMMON_CORE_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core}"
 OVERLAP_S1_COMPACT_COMMON_CORE_DATA_DIR="${OVERLAP_S1_COMPACT_COMMON_CORE_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_compact_common_core_no_rh2m}"
 OVERLAP_S1_SOURCE_FULL_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full}"
+OVERLAP_S1_SOURCE_FULL_TIANJI_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_tianji}"
+OVERLAP_S1_SOURCE_FULL_IFS_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_IFS_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_ifs}"
+OVERLAP_S1_SOURCE_FULL_PANGU_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_PANGU_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_pangu}"
+OVERLAP_S1_SOURCE_FULL_PANGU2025_DATA_DIR="${OVERLAP_S1_SOURCE_FULL_PANGU2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full_pangu2025}"
 OVERLAP_TIANJI_S2_DATA_DIR="${OVERLAP_TIANJI_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_baseline}"
 OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m}"
 OVERLAP_IFS_S2_DATA_DIR="${OVERLAP_IFS_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_baseline}"
@@ -61,16 +65,19 @@ OVERLAP_TIANJI_COMMON_CORE_S2_DATA_DIR="${OVERLAP_TIANJI_COMMON_CORE_S2_DATA_DIR
 OVERLAP_TIANJI_T2ND_RH2M_COMMON_CORE_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_common_core}"
 OVERLAP_IFS_COMMON_CORE_S2_DATA_DIR="${OVERLAP_IFS_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_common_core}"
 OVERLAP_PANGU2021_COMMON_CORE_S2_DATA_DIR="${OVERLAP_PANGU2021_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_common_core}"
+OVERLAP_PANGU2025_COMMON_CORE_S2_DATA_DIR="${OVERLAP_PANGU2025_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_common_core}"
 OVERLAP_ERA5_2025_COMMON_CORE_S2_DATA_DIR="${OVERLAP_ERA5_2025_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_common_core}"
 OVERLAP_TIANJI_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_TIANJI_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_compact_common_core_no_rh2m}"
 OVERLAP_TIANJI_T2ND_RH2M_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_compact_common_core_no_rh2m}"
 OVERLAP_IFS_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_IFS_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_compact_common_core_no_rh2m}"
 OVERLAP_PANGU2021_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_PANGU2021_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_compact_common_core_no_rh2m}"
+OVERLAP_PANGU2025_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_PANGU2025_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_compact_common_core_no_rh2m}"
 OVERLAP_ERA5_2025_COMPACT_COMMON_CORE_S2_DATA_DIR="${OVERLAP_ERA5_2025_COMPACT_COMMON_CORE_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_compact_common_core_no_rh2m}"
 OVERLAP_TIANJI_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_TIANJI_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full}"
 OVERLAP_TIANJI_T2ND_RH2M_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_TIANJI_T2ND_RH2M_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full}"
 OVERLAP_IFS_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_IFS_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_source_full}"
 OVERLAP_PANGU2021_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_PANGU2021_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2021_12h_pm10_pm25_source_full}"
+OVERLAP_PANGU2025_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_PANGU2025_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_source_full}"
 OVERLAP_ERA5_2025_SOURCE_FULL_S2_DATA_DIR="${OVERLAP_ERA5_2025_SOURCE_FULL_S2_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full}"
 
 case "${EXPERIMENT}" in
@@ -100,14 +107,53 @@ case "${EXPERIMENT}" in
             exit 1
         fi
         ;;
-    s1_source_full|s1_full|s1_best_effort)
+    s1_source_full|s1_full|s1_best_effort|s1_source_full_tianji|s1_source_full_dyn27|s1_source_full_era5|s1_source_full_T2ND_rh2m)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
             TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
             LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
             LOWVIS_RNN_MODE_EFFECTIVE="s1"
-            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_pm10_pm25}"
-            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_DATA_DIR}}"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_tianji_dyn27_pm10_pm25}"
+            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_TIANJI_DATA_DIR}}"
             STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_TIANJI_SOURCE_FULL_S2_DATA_DIR}}"
+        else
+            echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
+            exit 1
+        fi
+        ;;
+    s1_source_full_ifs|s1_source_full_dyn24)
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s1"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_ifs_dyn24_pm10_pm25}"
+            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_IFS_DATA_DIR}}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_IFS_SOURCE_FULL_S2_DATA_DIR}}"
+        else
+            echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
+            exit 1
+        fi
+        ;;
+    s1_source_full_pangu|s1_source_full_pangu2021|s1_source_full_dyn21)
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s1"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_pangu_dyn21_pm10_pm25}"
+            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_PANGU_DATA_DIR}}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2021_SOURCE_FULL_S2_DATA_DIR}}"
+        else
+            echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
+            exit 1
+        fi
+        ;;
+    s1_source_full_pangu2025|s1_source_full_dyn19)
+        if [ "${MODEL_ARCH}" = "static_rnn" ]; then
+            TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+            LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+            LOWVIS_RNN_MODE_EFFECTIVE="s1"
+            LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s1_source_full_pangu2025_dyn19_pm10_pm25}"
+            OVERLAP_S1_DATA_DIR="${USER_OVERLAP_S1_DATA_DIR:-${OVERLAP_S1_SOURCE_FULL_PANGU2025_DATA_DIR}}"
+            STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2025_SOURCE_FULL_S2_DATA_DIR}}"
         else
             echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2
             exit 1
@@ -193,6 +239,14 @@ case "${EXPERIMENT}" in
         LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2021_common_core_pm10_pm25}"
         STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2021_COMMON_CORE_S2_DATA_DIR}}"
         ;;
+    s2_pangu2025_common_core|s2_pangu2025)
+        if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
+        TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+        LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+        LOWVIS_RNN_MODE_EFFECTIVE="s2"
+        LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2025_common_core_pm10_pm25}"
+        STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2025_COMMON_CORE_S2_DATA_DIR}}"
+        ;;
     s2_era5_2025_common_core|s2_era5_common_core|s2_era5_2025)
         if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
         TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
@@ -232,6 +286,14 @@ case "${EXPERIMENT}" in
         LOWVIS_RNN_MODE_EFFECTIVE="s2"
         LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2021_compact_common_core_no_rh2m_pm10_pm25}"
         STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2021_COMPACT_COMMON_CORE_S2_DATA_DIR}}"
+        ;;
+    s2_pangu2025_compact_common_core|s2_pangu2025_compact_common_core_no_rh2m|s2_pangu2025_compact)
+        if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
+        TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+        LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+        LOWVIS_RNN_MODE_EFFECTIVE="s2"
+        LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2025_compact_common_core_no_rh2m_pm10_pm25}"
+        STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2025_COMPACT_COMMON_CORE_S2_DATA_DIR}}"
         ;;
     s2_era5_2025_compact_common_core|s2_era5_2025_compact_common_core_no_rh2m|s2_era5_compact_common_core|s2_era5_compact_common_core_no_rh2m|s2_era5_2025_compact)
         if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
@@ -273,6 +335,14 @@ case "${EXPERIMENT}" in
         LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2021_source_full_pm10_pm25}"
         STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2021_SOURCE_FULL_S2_DATA_DIR}}"
         ;;
+    s2_pangu2025_source_full|s2_pangu2025_full)
+        if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
+        TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
+        LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
+        LOWVIS_RNN_MODE_EFFECTIVE="s2"
+        LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_pangu2025_source_full_pm10_pm25}"
+        STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_PANGU2025_SOURCE_FULL_S2_DATA_DIR}}"
+        ;;
     s2_era5_2025_source_full|s2_era5_source_full|s2_era5_2025_full)
         if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
         TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
@@ -289,42 +359,53 @@ esac
 
 if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     STATIC_RNN_PRETRAINED_CKPT="${OVERLAP_STATIC_RNN_PRETRAINED_CKPT:-}"
-    SOURCE_FULL_NATIVE_S2=0
+    SOURCE_FULL_S2=0
     if [[ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" && ( "${EXPERIMENT}" == *source_full* || "${STATIC_RNN_S2_DATA_DIR}" == *source_full* ) ]]; then
-        SOURCE_FULL_NATIVE_S2=1
+        SOURCE_FULL_S2=1
     fi
     if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
         if [[ "${EXPERIMENT}" == *compact_common_core* || "${STATIC_RNN_S2_DATA_DIR}" == *compact_common_core* ]]; then
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25_S1_best_score.pt"
+        elif [[ "${SOURCE_FULL_S2}" = "1" ]]; then
+            if [[ "${EXPERIMENT}" == *pangu2025* || "${STATIC_RNN_S2_DATA_DIR}" == *pangu2025* ]]; then
+                DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_pangu2025_dyn19_pm10_pm25_S1_best_score.pt"
+            elif [[ "${EXPERIMENT}" == *pangu* || "${STATIC_RNN_S2_DATA_DIR}" == *pangu* ]]; then
+                DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_pangu_dyn21_pm10_pm25_S1_best_score.pt"
+            elif [[ "${EXPERIMENT}" == *ifs* || "${STATIC_RNN_S2_DATA_DIR}" == *ifs* ]]; then
+                DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_ifs_dyn24_pm10_pm25_S1_best_score.pt"
+            else
+                DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_tianji_dyn27_pm10_pm25_S1_best_score.pt"
+            fi
         elif [[ "${EXPERIMENT}" == *common_core* || "${STATIC_RNN_S2_DATA_DIR}" == *common_core* ]]; then
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt"
         else
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt"
         fi
-        if [ "${SOURCE_FULL_NATIVE_S2}" = "0" ] && [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
+        if [ -f "${DEFAULT_STATIC_RNN_S1_CKPT}" ]; then
             STATIC_RNN_PRETRAINED_CKPT="${DEFAULT_STATIC_RNN_S1_CKPT}"
         fi
     fi
     if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
-        if [ "${SOURCE_FULL_NATIVE_S2}" = "1" ]; then
-            echo "INFO: source_full uses native per-source channels; no shared S1 checkpoint is loaded." >&2
-            echo "INFO: training source_full from scratch with PhaseA=0 unless step counts were explicitly set." >&2
-            if [ -z "${USER_LOWVIS_RNN_S2_A_STEPS}" ]; then
-                export LOWVIS_RNN_S2_A_STEPS=0
-            fi
-            if [ -z "${USER_LOWVIS_RNN_S2_B_STEPS}" ]; then
-                export LOWVIS_RNN_S2_B_STEPS=52000
-            fi
-        else
         echo "ERROR: static_rnn S2 overlap training must start from the overlap S1 best checkpoint." >&2
         echo "Expected: ${DEFAULT_STATIC_RNN_S1_CKPT}" >&2
-        echo "Run S1 first with: sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+        if [ "${SOURCE_FULL_S2}" = "1" ]; then
+            echo "For source_full S2, build and train the matching S1 layout first:" >&2
+            echo "  sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji sub_s1_overlap_data.slurm" >&2
+            echo "  sbatch --export=ALL,EXPERIMENT=s1_source_full_tianji,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+            echo "  sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs sub_s1_overlap_data.slurm" >&2
+            echo "  sbatch --export=ALL,EXPERIMENT=s1_source_full_ifs,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+            echo "  sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu sub_s1_overlap_data.slurm" >&2
+            echo "  sbatch --export=ALL,EXPERIMENT=s1_source_full_pangu,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+            echo "  sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu2025 sub_s1_overlap_data.slurm" >&2
+            echo "  sbatch --export=ALL,EXPERIMENT=s1_source_full_pangu2025,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+        else
+            echo "Run S1 first with: sbatch --export=ALL,EXPERIMENT=s1_overlap,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
+        fi
         echo "Before common_core S1 training, build data with: sbatch --export=ALL,FEATURE_SET=common_core sub_s1_overlap_data.slurm" >&2
         echo "For common_core S2, run: sbatch --export=ALL,EXPERIMENT=s1_common_core,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm" >&2
         echo "For compact_common_core, build data with FEATURE_SET=compact_common_core and train EXPERIMENT=s1_compact_common_core first." >&2
         echo "Or set OVERLAP_STATIC_RNN_PRETRAINED_CKPT=/path/to/*_S1_best_score.pt explicitly." >&2
         exit 1
-        fi
     fi
 
     PY_ARGS=(

@@ -6,11 +6,11 @@
 派生固定变量子集版本。
 `overlap_full` 供与 IFS/Tianji overlap 槽位对齐；`common_core` 供 Pangu 兼容的五源公平比较。
 `compact_common_core` 写出真实较小输入，并移除 Pangu 中由 1000 hPa 湿度近似的 RH2M。
+`source_full` 可通过 `--source_full_profile` 派生与某个预报源变量数一致的 S1。
 
-做法：对每条样本的动态张量 (12,27)，只保留 Tianji/IFS 共同可填充的气象槽位（含 RH2M、
-Q_1000、DP_1000、RH_925 等，并由 U/V 或温湿度派生风速、风向、露点差等），
-普通 27-dyn 子集会将其余 24 维气象槽置 0；compact 子集会直接切成较小 dyn；按新 dyn 重算雾 FE，
-后 4 维时间周期特征从源行原样保留（与样本标签时刻一致）。静态+植被列不变。
+做法：对每条样本的动态张量 (12,27)，按目标变量顺序切出真实输入通道；不再为缺失变量写 0
+占位槽。按新 dyn 重算雾 FE，后 4 维时间周期特征从源行原样保留（与样本标签时刻一致）。
+静态+植被列不变。
 
 注意：当前 overlap S1 训练脚本要求显式 X_train/y_train 与 X_val/y_val；
 默认写出两份 split 以保留源数据的验证边界。论文实验不要使用 --merge_train_val。
@@ -50,6 +50,7 @@ from pmst_overlap_common import (
     resolve_pmst_feature_set,
     scatter_overlap_fields,
     select_dynamic_layout,
+    source_full_profile_features,
 )
 
 WINDOW = 12
@@ -60,8 +61,7 @@ SOURCE_FE_DIM = 36
 SOURCE_EXPECTED_ROW = SOURCE_BASE_DYN + STATIC_VEG + SOURCE_FE_DIM
 
 
-def _output_dims(feature_set: str) -> tuple[int, int, int, int]:
-    feature_vars = resolve_pmst_feature_set(feature_set, PMST_SOURCE_FIELDS)
+def _output_dims(feature_set: str, feature_vars: list[str]) -> tuple[int, int, int, int]:
     dynamic_order = dynamic_feature_order_for_feature_set(feature_set, feature_vars)
     dyn_vars = dyn_vars_for_feature_set(feature_set, feature_vars)
     dyn_dim = WINDOW * dyn_vars
@@ -71,6 +71,27 @@ def _output_dims(feature_set: str) -> tuple[int, int, int, int]:
     fe_dim = fog_fe_dim + 4
     row_dim = dyn_dim + STATIC_VEG + fe_dim
     return dyn_vars, dyn_dim, fog_fe_dim, row_dim
+
+
+def _parse_feature_names(text: str) -> list[str]:
+    names = [part.strip() for part in str(text or "").replace(";", ",").split(",") if part.strip()]
+    if not names:
+        return []
+    allowed = set(PMST_SOURCE_FIELDS)
+    bad = [name for name in names if name not in allowed]
+    if bad:
+        raise ValueError(f"Unknown --feature_names entries: {bad}")
+    return names
+
+
+def resolve_s1_feature_vars(args: argparse.Namespace) -> list[str]:
+    explicit = _parse_feature_names(args.feature_names)
+    if explicit:
+        return explicit
+    if args.feature_set == "source_full":
+        args.source_full_profile = args.source_full_profile or "tianji"
+        return source_full_profile_features(args.source_full_profile)
+    return resolve_pmst_feature_set(args.feature_set, PMST_SOURCE_FIELDS)
 
 
 def _transform_chunk(dyn: np.ndarray, feature_vars: list[str], feature_set: str) -> tuple[np.ndarray, np.ndarray]:
@@ -94,7 +115,7 @@ def transform_file(src_path: str, dst_path: str, chunk: int, feature_vars: list[
     if len(X.shape) != 2 or X.shape[1] != SOURCE_EXPECTED_ROW:
         raise ValueError(f"{src_path}: expected shape [N,{SOURCE_EXPECTED_ROW}], got {X.shape}")
     n = X.shape[0]
-    dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(feature_set)
+    dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(feature_set, feature_vars)
     out = np.lib.format.open_memmap(dst_path, mode="w+", dtype=np.float32, shape=(n, row_dim))
     for i in range(0, n, chunk):
         sl = slice(i, min(i + chunk, n))
@@ -146,6 +167,16 @@ def main():
             "common_core keeps only the Pangu-compatible fair-comparison slots."
         ),
     )
+    ap.add_argument(
+        "--source_full_profile",
+        default=os.environ.get("SOURCE_FULL_PROFILE", ""),
+        help="For --feature_set source_full, choose the source layout to mimic; default is tianji/dyn27.",
+    )
+    ap.add_argument(
+        "--feature_names",
+        default=os.environ.get("S1_FEATURE_NAMES", ""),
+        help="Optional comma-separated PMST feature names overriding --source_full_profile.",
+    )
     ap.add_argument("--chunk_rows", type=int, default=4096)
     ap.add_argument(
         "--merge_train_val",
@@ -155,8 +186,8 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
-    feature_vars = resolve_pmst_feature_set(args.feature_set, PMST_SOURCE_FIELDS)
-    dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(args.feature_set)
+    feature_vars = resolve_s1_feature_vars(args)
+    dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(args.feature_set, feature_vars)
 
     if args.merge_train_val:
         xt = os.path.join(args.source_dir, "X_train.npy")
@@ -224,6 +255,7 @@ def main():
         "dataset": f"s1_pm10_{args.feature_set}_derived_from_source",
         "source_dir": args.source_dir,
         "feature_set": args.feature_set,
+        "source_full_profile": args.source_full_profile if args.feature_set == "source_full" else "",
         "row_layout": f"{dyn_dim} dyn + {STATIC_VEG} static/veg + {fog_fe_dim + 4} FE",
         "source_row_requirement": "12*27 dyn + 5 static + 1 veg + 36 FE",
         "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set, feature_vars),

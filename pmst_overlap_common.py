@@ -122,6 +122,26 @@ COMPACT_COMMON_CORE_DYN_INDICES: List[int] = [
 COMPACT_TOTAL_DYN = len(COMPACT_COMMON_CORE_DYN_FEATURES)
 COMPACT_INDEX: Dict[str, int] = {name: i for i, name in enumerate(COMPACT_COMMON_CORE_DYN_FEATURES)}
 PMST_SOURCE_FIELDS: List[str] = list(dict.fromkeys([*FINAL_FEATURE_ORDER, *OVERLAP_AUXILIARY_FIELDS]))
+PANGU2021_SOURCE_FULL_PMST_FEATURES: List[str] = [
+    name
+    for name in FINAL_FEATURE_ORDER
+    if name not in {"PRECIP", "SW_RAD", "CAPE", "LCC", "W_925", "W_1000"}
+]
+PANGU2025_SOURCE_FULL_PMST_FEATURES: List[str] = [
+    name
+    for name in FINAL_FEATURE_ORDER
+    if name not in {"RH2M", "PRECIP", "SW_RAD", "CAPE", "LCC", "W_925", "W_1000", "DPD"}
+]
+SOURCE_FULL_PROFILE_PMST_FEATURES: Dict[str, List[str]] = {
+    "tianji": list(FINAL_FEATURE_ORDER),
+    "t2nd_rh2m": list(FINAL_FEATURE_ORDER),
+    "era5": list(FINAL_FEATURE_ORDER),
+    "era5_2025": list(FINAL_FEATURE_ORDER),
+    "ifs": list(OVERLAP_CANONICAL),
+    "pangu": list(PANGU2021_SOURCE_FULL_PMST_FEATURES),
+    "pangu2021": list(PANGU2021_SOURCE_FULL_PMST_FEATURES),
+    "pangu2025": list(PANGU2025_SOURCE_FULL_PMST_FEATURES),
+}
 FEATURE_SET_CHOICES: Tuple[str, ...] = (
     "common_core",
     "compact_common_core",
@@ -129,6 +149,16 @@ FEATURE_SET_CHOICES: Tuple[str, ...] = (
     "overlap_full",
     "source_full",
 )
+
+
+def source_full_profile_features(profile: str) -> List[str]:
+    key = str(profile or "").strip().lower().replace("-", "_")
+    if not key:
+        return list(FINAL_FEATURE_ORDER)
+    if key not in SOURCE_FULL_PROFILE_PMST_FEATURES:
+        choices = ",".join(sorted(SOURCE_FULL_PROFILE_PMST_FEATURES))
+        raise ValueError(f"Unknown source_full_profile={profile!r}; expected one of {choices}")
+    return list(SOURCE_FULL_PROFILE_PMST_FEATURES[key])
 
 CANONICAL_VAR_ALIASES: Dict[str, str] = {
     "D2M": "D2M",

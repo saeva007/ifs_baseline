@@ -34,9 +34,15 @@ SCRIPT_PATH="/public/home/putianshu/vis_mlp/ifs_baseline/build_s1_pm10_overlap_f
 SOURCE_DIR="${SOURCE_DIR:-}"
 OUT_DIR="${OUT_DIR:-}"
 FEATURE_SET="${FEATURE_SET:-overlap_full}"
+SOURCE_FULL_PROFILE="${SOURCE_FULL_PROFILE:-}"
+if [[ "${FEATURE_SET}" == "source_full" && -z "${SOURCE_FULL_PROFILE}" ]]; then
+    SOURCE_FULL_PROFILE="tianji"
+fi
 FEATURE_SUFFIX="${FEATURE_SET}"
 if [[ "${FEATURE_SET}" == compact_common_core* ]]; then
     FEATURE_SUFFIX="compact_common_core_no_rh2m"
+elif [[ "${FEATURE_SET}" == "source_full" && -n "${SOURCE_FULL_PROFILE}" ]]; then
+    FEATURE_SUFFIX="source_full_${SOURCE_FULL_PROFILE}"
 fi
 CHUNK_ROWS="${CHUNK_ROWS:-}"
 MERGE_TRAIN_VAL="${MERGE_TRAIN_VAL:-0}"
@@ -48,7 +54,7 @@ if [[ -z "${OUT_DIR}" ]]; then
     elif [[ "${FEATURE_SET}" == compact_common_core* ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_${FEATURE_SUFFIX}"
     elif [[ "${FEATURE_SET}" == "source_full" ]]; then
-        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_source_full"
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_${FEATURE_SUFFIX}"
     else
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_overlap"
     fi
@@ -66,6 +72,9 @@ PY_ARGS=()
 PY_ARGS+=(--feature_set "${FEATURE_SET}")
 PY_ARGS+=(--source_dir "${SOURCE_DIR}")
 PY_ARGS+=(--out_dir "${OUT_DIR}")
+if [[ -n "${SOURCE_FULL_PROFILE}" ]]; then
+    PY_ARGS+=(--source_full_profile "${SOURCE_FULL_PROFILE}")
+fi
 if [[ -n "${CHUNK_ROWS}" ]]; then
     PY_ARGS+=(--chunk_rows "${CHUNK_ROWS}")
 fi
