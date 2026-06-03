@@ -100,7 +100,7 @@ sbatch --export=ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,
 sbatch --export=ALL,FEATURE_SET=source_full,RH2M_OVERRIDE_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/tianji_rh2m_station/T2ND_rh2m_station_2025.nc,RH2M_SOURCE_TAG=T2ND_rh2m sub_tianji_overlap_data.slurm
 ```
 
-2. Build and train source-full S1 layouts. Tianji, T2ND RH2M, and ERA5 share
+2. Build source-full S1 layouts. Tianji, T2ND RH2M, and ERA5 share
 the dyn27 S1 layout; IFS uses dyn24; historical Pangu-2021 uses dyn21.
 If you use the current Pangu-2025 ONNX/station product instead, train its
 separate dyn19 profile and do not mix it with Pangu-2021.
@@ -108,10 +108,7 @@ separate dyn19 profile and do not mix it with Pangu-2021.
 ```bash
 sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji sub_s1_overlap_data.slurm
 sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs sub_s1_overlap_data.slurm
-sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu sub_s1_overlap_data.slurm
-sbatch --export=ALL,EXPERIMENT=s1_source_full_tianji,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s1_source_full_ifs,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s1_source_full_pangu,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+sbatch --export=ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu2025 sub_s1_overlap_data.slurm
 ```
 
 Do not use `common_core`, `compact_common_core`, or historical `overlap_full`
@@ -120,15 +117,28 @@ dimensions can differ by source, so source-full S2 runs require the matching
 source-full S1 checkpoint. Current Pangu-2025 uses the separate
 `SOURCE_FULL_PROFILE=pangu2025` / `EXPERIMENT=s1_source_full_pangu2025` dyn19 S1.
 
-3. Train source-full S2 models:
+3. After the S1 and S2 data-build jobs have completed, train source-full S1
+checkpoints and queue matching S2 models with dependencies:
 
 ```bash
-sbatch --export=ALL,EXPERIMENT=s2_tianji_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_pangu2021_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_era5_2025_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+OVERLAP_CHAIN=source_full bash submit_ifs_overlap_training_chain.sh
 ```
+
+This submits Tianji/dyn27, IFS/dyn24, and Pangu-2025/dyn19 S1 training jobs,
+then queues each S2 job with `afterok` on its matching S1. Tianji, T2ND RH2M,
+and ERA5 use the Tianji/dyn27 S1 checkpoint; IFS and Pangu-2025 use their own
+layouts.
+
+To run the best-effort set without Pangu first:
+
+```bash
+S2_EXPERIMENTS="s2_tianji_source_full s2_tianji_T2ND_rh2m_source_full s2_ifs_source_full s2_era5_2025_source_full" \
+OVERLAP_CHAIN=source_full \
+bash submit_ifs_overlap_training_chain.sh
+```
+
+The submitter will only create the Tianji/dyn27 and IFS/dyn24 S1 jobs needed by
+those S2 runs.
 
 4. Evaluate Figure 1 with `--threshold_mode argmax` using
 `test_PMST_overlap_forecast_source_s2.py --independent_sources`, explicit
@@ -197,6 +207,12 @@ instead of reusing the overlap-full S1 checkpoint:
 ```bash
 sbatch --export=ALL,EXPERIMENT=s1_common_core sub_ifs_overlap_baseline.slurm
 ```
+
+If the common-core S2 datasets are already built and you want to queue S1 and
+all common-core S2 jobs together, use
+`OVERLAP_CHAIN=common_core bash submit_ifs_overlap_training_chain.sh` instead.
+The submitter runs `EXPERIMENT=s1_common_core` first and queues the five
+common-core S2 jobs with `afterok:<s1_jobid>`.
 
 The default `MODEL_ARCH=static_rnn` trains
 `exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt`. The Slurm launcher uses
@@ -354,20 +370,22 @@ Its default Static-RNN output names are
 For the common-core source-family comparison:
 
 ```bash
-for exp in s2_tianji_common_core s2_tianji_T2ND_rh2m_common_core s2_ifs_common_core s2_pangu2021_common_core s2_era5_2025_common_core; do
-  sbatch --export=ALL,EXPERIMENT=${exp},MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-done
+OVERLAP_CHAIN=common_core bash submit_ifs_overlap_training_chain.sh
 ```
+
+Run this one-shot queue only after the common-core S2 datasets are present. If
+the common-core S1 checkpoint already exists and you do not want to retrain it,
+submit the S2 experiments directly.
 
 For supplementary upper-bound runs:
 
 ```bash
-sbatch --export=ALL,EXPERIMENT=s2_tianji_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_tianji_T2ND_rh2m_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_pangu2021_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
-sbatch --export=ALL,EXPERIMENT=s2_era5_2025_source_full,MODEL_ARCH=static_rnn sub_ifs_overlap_baseline.slurm
+OVERLAP_CHAIN=source_full bash submit_ifs_overlap_training_chain.sh
 ```
+
+Run this after the source-full S1 and S2 data directories have been built. The
+submitter trains the matching S1 layouts and queues each S2 on the correct S1
+checkpoint.
 
 ### 6. Train IFS-Input S2
 
