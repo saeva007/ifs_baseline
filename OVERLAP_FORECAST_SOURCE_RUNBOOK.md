@@ -401,6 +401,13 @@ log for `Copying X_train.npy to /dev/shm` or a cache hit. If `/dev/shm` also
 reports insufficient space, use another large node-local cache directory
 instead of repeatedly resubmitting the same NFS-backed job.
 
+The replacement S1 also defaults `LOWVIS_RNN_CLEAN_LOCAL_CACHE=1`. After Slurm
+allocates its exclusive nodes, the launcher deletes only user-owned
+`X_train/X_val/y_train/y_val` cache files and fallback markers directly under
+`/tmp` on those nodes. It does not remove the whole `/tmp` directory or files
+owned by other users. The dependent S2 keeps the fresh cache and does not clean
+again.
+
 ### 6. Train IFS-Input S2
 
 ```bash

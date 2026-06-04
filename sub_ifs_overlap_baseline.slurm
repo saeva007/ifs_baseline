@@ -37,6 +37,7 @@ TORCHRUN_EXTRA_ARGS="${TORCHRUN_EXTRA_ARGS:-}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 LOWVIS_RNN_EXTRA_ARGS="${LOWVIS_RNN_EXTRA_ARGS:-}"
 export LOWVIS_RNN_LOCAL_CACHE_DIR="${LOWVIS_RNN_LOCAL_CACHE_DIR:-/tmp}"
+export LOWVIS_RNN_CLEAN_LOCAL_CACHE="${LOWVIS_RNN_CLEAN_LOCAL_CACHE:-0}"
 
 USER_LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-}"
 USER_LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-}"
@@ -535,11 +536,30 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     echo "BATCH/ACCUM     : ${LOWVIS_RNN_BATCH_SIZE}/${LOWVIS_RNN_GRAD_ACCUM}"
     echo "NUM_WORKERS     : ${LOWVIS_RNN_NUM_WORKERS}"
     echo "LOCAL_CACHE_DIR : ${LOWVIS_RNN_LOCAL_CACHE_DIR}"
+    echo "CLEAN_LOCAL_CACHE: ${LOWVIS_RNN_CLEAN_LOCAL_CACHE}"
 fi
 
 # ==========================================
-# 4. Clean /dev/shm
+# 4. Clean optional stale /tmp data cache and /dev/shm
 # ==========================================
+if [ "${LOWVIS_RNN_CLEAN_LOCAL_CACHE}" = "1" ]; then
+    echo "Cleaning user-owned stale Static-RNN cache files from /tmp on allocated nodes..."
+    srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
+         /bin/bash -c '
+             echo "[$(hostname)] /tmp before cleanup:"
+             df -h /tmp | tail -1
+             find /tmp -maxdepth 1 -user "$USER" -type f \
+                 \( -name "X_train_*.npy" -o -name "X_val_*.npy" \
+                    -o -name "y_train_*.npy" -o -name "y_val_*.npy" \
+                    -o -name "X_train_*.npy.tmp" -o -name "X_val_*.npy.tmp" \
+                    -o -name "y_train_*.npy.tmp" -o -name "y_val_*.npy.tmp" \
+                    -o -name "*.nfs_fallback" \) \
+                 -print -delete 2>/dev/null || true
+             echo "[$(hostname)] /tmp after cleanup:"
+             df -h /tmp | tail -1
+         '
+fi
+
 srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
      /bin/bash -c "rm -rf /dev/shm/torch_* /dev/shm/*X_train* /dev/shm/*y_train* /dev/shm/*static_rnn_lowvis* /dev/shm/*lowvis_rnn* 2>/dev/null; echo \"\$(hostname) SHM Cleaned\""
 

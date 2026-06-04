@@ -17,6 +17,7 @@ mkdir -p logs
 
 OLD_S1_JOBID="${OLD_S1_JOBID:-}"
 LOCAL_CACHE_DIR="${LOWVIS_RNN_LOCAL_CACHE_DIR:-/dev/shm}"
+CLEAN_LOCAL_CACHE="${LOWVIS_RNN_CLEAN_LOCAL_CACHE:-1}"
 SBATCH_SCRIPT="${SBATCH_SCRIPT:-sub_ifs_overlap_baseline.slurm}"
 
 if [ -z "${OLD_S1_JOBID}" ]; then
@@ -61,14 +62,14 @@ fi
 echo "Submitting replacement IFS source-full S1 with LOCAL_CACHE_DIR=${LOCAL_CACHE_DIR}"
 NEW_S1_JOB="$(
     sbatch --parsable \
-        --export=ALL,EXPERIMENT=s1_source_full_ifs,MODEL_ARCH=static_rnn,LOWVIS_RNN_LOCAL_CACHE_DIR=${LOCAL_CACHE_DIR} \
+        --export=ALL,EXPERIMENT=s1_source_full_ifs,MODEL_ARCH=static_rnn,LOWVIS_RNN_LOCAL_CACHE_DIR=${LOCAL_CACHE_DIR},LOWVIS_RNN_CLEAN_LOCAL_CACHE=${CLEAN_LOCAL_CACHE} \
         "${SBATCH_SCRIPT}"
 )"
 
 NEW_S2_JOB="$(
     sbatch --parsable \
         --dependency=afterok:${NEW_S1_JOB} \
-        --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn,LOWVIS_RNN_LOCAL_CACHE_DIR=${LOCAL_CACHE_DIR} \
+        --export=ALL,EXPERIMENT=s2_ifs_source_full,MODEL_ARCH=static_rnn,LOWVIS_RNN_LOCAL_CACHE_DIR=${LOCAL_CACHE_DIR},LOWVIS_RNN_CLEAN_LOCAL_CACHE=0 \
         "${SBATCH_SCRIPT}"
 )"
 
