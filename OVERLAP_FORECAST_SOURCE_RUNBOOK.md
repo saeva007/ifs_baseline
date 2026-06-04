@@ -387,6 +387,20 @@ Run this after the source-full S1 and S2 data directories have been built. The
 submitter trains the matching S1 layouts and queues each S2 on the correct S1
 checkpoint.
 
+If `s1_source_full_ifs` logs
+`[Data-Copy] Insufficient space on /tmp, using NFS.`, cancel and replace only
+that IFS chain. Its old dependent `s2_ifs_source_full` must also be cancelled;
+the Tianji/T2ND/ERA5 chains are independent and can remain queued/running:
+
+```bash
+OLD_S1_JOBID=<slow_ifs_s1_job_id> bash resubmit_source_full_ifs_chain.sh
+```
+
+The replacement defaults `LOWVIS_RNN_LOCAL_CACHE_DIR=/dev/shm`. Check the new
+log for `Copying X_train.npy to /dev/shm` or a cache hit. If `/dev/shm` also
+reports insufficient space, use another large node-local cache directory
+instead of repeatedly resubmitting the same NFS-backed job.
+
 ### 6. Train IFS-Input S2
 
 ```bash
