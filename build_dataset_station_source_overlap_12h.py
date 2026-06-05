@@ -402,8 +402,8 @@ def main() -> None:
         flush=True,
     )
 
-    data_veg = xr.open_dataset(args.veg_file, engine="h5netcdf")
-    data_oro = xr.open_dataset(args.oro_file, engine="h5netcdf")
+    data_veg = _open_dataset(args.veg_file)
+    data_oro = _open_dataset(args.oro_file)
     X_stat = build_static_features(lats, lons, data_veg, data_oro, UNIQUE_VEG_IDS)
     data_veg.close()
     data_oro.close()

@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH -J pangu_station_idw
-#SBATCH -p kshcexclu04
+#SBATCH --partition=cpu_parallel
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
 #SBATCH -t 24:00:00
-#SBATCH -D /public/home/putianshu/vis_mlp/ifs_baseline
-#SBATCH -o /public/home/putianshu/vis_mlp/ifs_baseline/logs/%j_%x.out
-#SBATCH -e /public/home/putianshu/vis_mlp/ifs_baseline/logs/%j_%x.err
+#SBATCH -D /data2/share/chenxi/PuTS/mlp/ifs_baseline
+#SBATCH -o /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.out
+#SBATCH -e /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.err
 #SBATCH --exclusive
 
 set -euo pipefail
@@ -16,12 +16,12 @@ set -euo pipefail
 echo "Pangu station interpolation started at: $(date)"
 echo "Node: $(hostname)"
 
+source /lustre/chenxi/yliang/miniforge3/bin/activate
 module purge
+module load compiler/dtk/23.10
 module load compiler/devtoolset/7.3.1
-export CONDA_NO_PLUGINS=true
-export CONDA_SOLVER=classic
-source /public/home/putianshu/miniconda3/bin/activate
-conda activate torch
+module load mpi/hpcx/2.7.4/gcc-7.3.1
+source /lustre/chenxi/yliang/work/cast3/env.sh
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
@@ -29,16 +29,17 @@ export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 
-cd /public/home/putianshu/vis_mlp/ifs_baseline
+WORK_DIR="${WORK_DIR:-/data2/share/chenxi/PuTS/mlp}"
+cd "${WORK_DIR}/ifs_baseline"
 mkdir -p logs
 
-SCRIPT_PATH="${SCRIPT_PATH:-/public/home/putianshu/vis_mlp/ifs_baseline/interpolate_pangu_to_stations.py}"
-INPUT_DIR="${INPUT_DIR:-/public/home/putianshu/vis_mlp/pangu_2021_china_monthly}"
+SCRIPT_PATH="${SCRIPT_PATH:-${WORK_DIR}/ifs_baseline/interpolate_pangu_to_stations.py}"
+INPUT_DIR="${INPUT_DIR:-${WORK_DIR}/pangu_2025_china_chunks}"
 INPUT_GLOB="${INPUT_GLOB:-}"
 INPUT_FILES="${INPUT_FILES:-}"
-TARGET_FILE="${TARGET_FILE:-/public/home/putianshu/vis_mlp/CMA_visibility_2021_2023_GeoCoords_1.nc}"
-YEAR="${YEAR:-2021}"
-OUT_FILE="${OUT_FILE:-/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2021_lead24h.nc}"
+TARGET_FILE="${TARGET_FILE:-${WORK_DIR}/tianji_auto_station/merged_final_all_vars.nc}"
+YEAR="${YEAR:-2025}"
+OUT_FILE="${OUT_FILE:-${WORK_DIR}/ifs_baseline/pangu_station/pangu_station_2025_lead24h.nc}"
 K="${K:-4}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 

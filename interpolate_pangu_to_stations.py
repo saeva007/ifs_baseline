@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,24 @@ def _open_dataset(path: str) -> xr.Dataset:
         return xr.open_dataset(path, engine="h5netcdf")
     except Exception:
         return xr.open_dataset(path)
+
+
+def _choose_netcdf_engine() -> str:
+    for module_name, engine_name in (("h5netcdf", "h5netcdf"), ("netCDF4", "netcdf4"), ("scipy", "scipy")):
+        if importlib.util.find_spec(module_name) is not None:
+            return engine_name
+    raise RuntimeError("No NetCDF writer is available. Install one of h5netcdf, netCDF4, or scipy.")
+
+
+def _encoding(ds: xr.Dataset, compress_level: int, engine: str) -> Dict[str, Dict[str, object]]:
+    encoding: Dict[str, Dict[str, object]] = {}
+    for name in ds.data_vars:
+        encoding[name] = {}
+        if engine in {"h5netcdf", "netcdf4"}:
+            encoding[name]["dtype"] = "float32"
+        if engine in {"h5netcdf", "netcdf4"} and int(compress_level) > 0:
+            encoding[name].update({"zlib": True, "complevel": int(compress_level), "shuffle": True})
+    return encoding
 
 
 def _coord_name(obj, candidates: Sequence[str]) -> str:
@@ -190,14 +209,10 @@ def main() -> None:
     )
     out_path = Path(args.out_file)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    encoding = {}
-    if int(args.compress_level) > 0:
-        encoding = {
-            name: {"zlib": True, "complevel": int(args.compress_level), "shuffle": True, "dtype": "float32"}
-            for name in out.data_vars
-        }
-    print(f"[pangu-idw] writing {out_path}", flush=True)
-    out.to_netcdf(out_path, engine="h5netcdf", encoding=encoding)
+    engine = _choose_netcdf_engine()
+    encoding = _encoding(out, args.compress_level, engine)
+    print(f"[pangu-idw] writing {out_path} engine={engine}", flush=True)
+    out.to_netcdf(out_path, engine=engine, encoding=encoding)
     print(f"[OK] {out_path}", flush=True)
 
 
