@@ -361,24 +361,25 @@ esac
 
 if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     STATIC_RNN_PRETRAINED_CKPT="${OVERLAP_STATIC_RNN_PRETRAINED_CKPT:-}"
+    STATIC_RNN_S2_DATASET_NAME="${STATIC_RNN_S2_DATA_DIR##*/}"
     SOURCE_FULL_S2=0
-    if [[ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" && ( "${EXPERIMENT}" == *source_full* || "${STATIC_RNN_S2_DATA_DIR}" == *source_full* ) ]]; then
+    if [[ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" && ( "${EXPERIMENT}" == *source_full* || "${STATIC_RNN_S2_DATASET_NAME}" == *source_full* ) ]]; then
         SOURCE_FULL_S2=1
     fi
     if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s2" ] && [ -z "${STATIC_RNN_PRETRAINED_CKPT}" ]; then
-        if [[ "${EXPERIMENT}" == *compact_common_core* || "${STATIC_RNN_S2_DATA_DIR}" == *compact_common_core* ]]; then
+        if [[ "${EXPERIMENT}" == *compact_common_core* || "${STATIC_RNN_S2_DATASET_NAME}" == *compact_common_core* ]]; then
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_compact_common_core_no_rh2m_pm10_pm25_S1_best_score.pt"
         elif [[ "${SOURCE_FULL_S2}" = "1" ]]; then
-            if [[ "${EXPERIMENT}" == *pangu2025* || "${STATIC_RNN_S2_DATA_DIR}" == *pangu2025* ]]; then
+            if [[ "${EXPERIMENT}" == *pangu2025* || "${STATIC_RNN_S2_DATASET_NAME}" == *pangu2025* ]]; then
                 DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_pangu2025_dyn19_pm10_pm25_S1_best_score.pt"
-            elif [[ "${EXPERIMENT}" == *pangu* || "${STATIC_RNN_S2_DATA_DIR}" == *pangu* ]]; then
+            elif [[ "${EXPERIMENT}" == *pangu* || "${STATIC_RNN_S2_DATASET_NAME}" == *pangu* ]]; then
                 DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_pangu_dyn21_pm10_pm25_S1_best_score.pt"
-            elif [[ "${EXPERIMENT}" == *ifs* || "${STATIC_RNN_S2_DATA_DIR}" == *ifs* ]]; then
+            elif [[ "${EXPERIMENT}" == *ifs* || "${STATIC_RNN_S2_DATASET_NAME}" == *ifs* ]]; then
                 DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_ifs_dyn24_pm10_pm25_S1_best_score.pt"
             else
                 DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_source_full_tianji_dyn27_pm10_pm25_S1_best_score.pt"
             fi
-        elif [[ "${EXPERIMENT}" == *common_core* || "${STATIC_RNN_S2_DATA_DIR}" == *common_core* ]]; then
+        elif [[ "${EXPERIMENT}" == *common_core* || "${STATIC_RNN_S2_DATASET_NAME}" == *common_core* ]]; then
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_common_core_pm10_pm25_S1_best_score.pt"
         else
             DEFAULT_STATIC_RNN_S1_CKPT="${OVERLAP_CKPT_DIR}/exp_overlap_static_rnn_s1_pm10_pm25_S1_best_score.pt"
