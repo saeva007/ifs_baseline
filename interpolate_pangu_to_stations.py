@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Interpolate Pangu China gridded monthly files to CMA stations."""
+"""Interpolate Pangu China gridded files to CMA station locations.
+
+The default station source follows ``era5_interp_test.py``:
+``China_national_station_info_without_polar.csv`` with ``id/lat/lon`` columns.
+"""
 
 from __future__ import annotations
 
@@ -18,10 +22,11 @@ import xarray as xr
 from scipy.spatial import cKDTree
 
 
-VIS_MLP_ROOT = "/public/home/putianshu/vis_mlp"
-PANGU_DIR_DEFAULT = os.path.join(VIS_MLP_ROOT, "pangu_2021_china_monthly")
-TARGET_FILE_DEFAULT = os.path.join(VIS_MLP_ROOT, "CMA_visibility_2021_2023_GeoCoords_1.nc")
-OUT_FILE_DEFAULT = os.path.join(VIS_MLP_ROOT, "ifs_baseline", "pangu_station", "pangu_station_2021_lead24h.nc")
+WORK_DIR_DEFAULT = "/data2/share/chenxi/PuTS/mlp"
+PANGU_DIR_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_2025_china_chunks_lead12_23h")
+STATION_FILE_DEFAULT = "/public/home/chenxi/PuTS/vis_mlp/China_national_station_info_without_polar.csv"
+TARGET_FILE_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "tianji_auto_station", "merged_final_all_vars.nc")
+OUT_FILE_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_station", "pangu_station_2025_lead12_23h.nc")
 
 
 def _open_dataset(path: str) -> xr.Dataset:
@@ -60,7 +65,30 @@ def _coord_name(obj, candidates: Sequence[str]) -> str:
     raise KeyError(f"Cannot infer coordinate from {candidates}; available={list(obj.coords) + list(obj.dims)}")
 
 
-def _load_stations(target_file: str, year: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _load_stations_from_csv(station_file: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not os.path.exists(station_file):
+        raise FileNotFoundError(f"Station CSV does not exist: {station_file}")
+    df = pd.read_csv(station_file)
+    required = {"id", "lat", "lon"}
+    missing = required - set(df.columns)
+    if missing:
+        raise KeyError(f"Station CSV must contain columns {sorted(required)}; missing={sorted(missing)}")
+    df = df[(df["lon"] >= 65) & (df["lon"] <= 145) & (df["lat"] >= 10) & (df["lat"] <= 60)].copy()
+    finite = np.isfinite(df["lat"].to_numpy(dtype=np.float64)) & np.isfinite(df["lon"].to_numpy(dtype=np.float64))
+    if not finite.all():
+        n_bad = int((~finite).sum())
+        print(f"[WARN] drop {n_bad} stations with non-finite lat/lon from {station_file}", flush=True)
+        df = df.loc[finite].copy()
+    if len(df) == 0:
+        raise ValueError(f"No usable station rows found in {station_file}.")
+    return (
+        df["id"].to_numpy(),
+        df["lat"].to_numpy(dtype=np.float64),
+        df["lon"].to_numpy(dtype=np.float64),
+    )
+
+
+def _load_stations_from_netcdf(target_file: str, year: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     ds = _open_dataset(target_file)
     try:
         station_name = _coord_name(ds, ("station_id", "num_station", "station", "id"))
@@ -87,6 +115,14 @@ def _load_stations(target_file: str, year: int) -> Tuple[np.ndarray, np.ndarray,
         return station_ids, lats, lons
     finally:
         ds.close()
+
+
+def _load_stations(station_file: str, target_file: str, year: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if station_file:
+        print(f"[station] CSV={station_file}", flush=True)
+        return _load_stations_from_csv(station_file)
+    print(f"[station] NetCDF={target_file}", flush=True)
+    return _load_stations_from_netcdf(target_file, year)
 
 
 def _grid_points(ds: xr.Dataset) -> Tuple[str, str, np.ndarray, np.ndarray, np.ndarray]:
@@ -147,12 +183,17 @@ def _input_files(args: argparse.Namespace) -> List[str]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Interpolate Pangu China monthly NetCDF files to station_id axis.")
+    ap = argparse.ArgumentParser(description="Interpolate Pangu China NetCDF files to station_id axis.")
     ap.add_argument("--input_dir", default=PANGU_DIR_DEFAULT)
     ap.add_argument("--input_glob", default="")
     ap.add_argument("--input_files", default="")
+    ap.add_argument(
+        "--station_file",
+        default=STATION_FILE_DEFAULT,
+        help="CSV station table with id/lat/lon columns. If empty, --target_file is used as station source.",
+    )
     ap.add_argument("--target_file", default=TARGET_FILE_DEFAULT)
-    ap.add_argument("--year", type=int, default=2021)
+    ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--out_file", default=OUT_FILE_DEFAULT)
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--eps", type=float, default=1.0e-6)
@@ -160,7 +201,8 @@ def main() -> None:
     args = ap.parse_args()
 
     files = _input_files(args)
-    station_ids, station_lats, station_lons = _load_stations(args.target_file, args.year)
+    station_ids, station_lats, station_lons = _load_stations(args.station_file, args.target_file, args.year)
+    print(f"[station] n={len(station_ids)}", flush=True)
     out_datasets = []
     sources = []
     for fp in files:

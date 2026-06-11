@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
 #SBATCH -t 24:00:00
-#SBATCH -D /data2/share/chenxi/PuTS/mlp/ifs_baseline
-#SBATCH -o /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.out
-#SBATCH -e /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.err
+#SBATCH -D /data2/share/chenxi/PuTS/mlp
+#SBATCH -o /data2/share/chenxi/PuTS/mlp/logs/%j_%x.out
+#SBATCH -e /data2/share/chenxi/PuTS/mlp/logs/%j_%x.err
 #SBATCH --exclusive
 
 set -euo pipefail
@@ -30,20 +30,29 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 
 WORK_DIR="${WORK_DIR:-/data2/share/chenxi/PuTS/mlp}"
-cd "${WORK_DIR}/ifs_baseline"
+cd "${WORK_DIR}"
 mkdir -p logs
 
-SCRIPT_PATH="${SCRIPT_PATH:-${WORK_DIR}/ifs_baseline/interpolate_pangu_to_stations.py}"
-INPUT_DIR="${INPUT_DIR:-${WORK_DIR}/pangu_2025_china_chunks}"
+SCRIPT_PATH="${SCRIPT_PATH:-${WORK_DIR}/interpolate_pangu_to_stations.py}"
+INPUT_DIR="${INPUT_DIR:-${WORK_DIR}/pangu_2025_china_chunks_lead12_23h}"
 INPUT_GLOB="${INPUT_GLOB:-}"
 INPUT_FILES="${INPUT_FILES:-}"
+STATION_FILE="${STATION_FILE:-/public/home/chenxi/PuTS/vis_mlp/China_national_station_info_without_polar.csv}"
 TARGET_FILE="${TARGET_FILE:-${WORK_DIR}/tianji_auto_station/merged_final_all_vars.nc}"
 YEAR="${YEAR:-2025}"
-OUT_FILE="${OUT_FILE:-${WORK_DIR}/ifs_baseline/pangu_station/pangu_station_2025_lead24h.nc}"
+OUT_FILE="${OUT_FILE:-${WORK_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc}"
 K="${K:-4}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
-CMD=(python "${SCRIPT_PATH}" --input_dir "${INPUT_DIR}" --target_file "${TARGET_FILE}" --year "${YEAR}" --out_file "${OUT_FILE}" --k "${K}")
+CMD=(
+    python "${SCRIPT_PATH}"
+    --input_dir "${INPUT_DIR}"
+    --station_file "${STATION_FILE}"
+    --target_file "${TARGET_FILE}"
+    --year "${YEAR}"
+    --out_file "${OUT_FILE}"
+    --k "${K}"
+)
 if [[ -n "${INPUT_GLOB}" ]]; then
     CMD+=(--input_glob "${INPUT_GLOB}")
 fi
