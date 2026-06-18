@@ -80,7 +80,7 @@ case "${EVAL_SCENARIO}" in
         SOURCE_SUBSET="${SOURCE_SUBSET:-tianji,ifs,T2ND_rh2m_source_full,pangu2025_source_full,era5_2025_source_full}"
         EXTRA_SOURCES="${EXTRA_SOURCES:-${T2ND_SPEC}; ${PANGU2025_SPEC}; ${ERA5_2025_SPEC}}"
         OUT_DIR="${OUT_DIR:-${OUT_ROOT}/figure1_all_sources}"
-        SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-1}"
+        SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-0}"
         ;;
     figure2_pangu|figure2_pangu_ifs_empirical|pangu_ifs_empirical|pangu2025)
         SOURCE_SUBSET="${SOURCE_SUBSET:-pangu2025_source_full}"

@@ -122,10 +122,10 @@ SOURCE_LABELS = {
     "tianji_compact_common_core": "Tianji compact no-RH2M-trained",
     "T2ND_rh2m_compact_common_core": "Tianji T2ND compact no-RH2M-trained",
     "ifs": "IFS-trained/IFS-input model",
-    "T2ND_rh2m_source_full": "Tianji T2ND RH2M source-full-trained",
-    "pangu2021_source_full": "Pangu-2021 source-full-trained",
-    "pangu2025_source_full": "Pangu-2025 source-full-trained",
-    "era5_2025_source_full": "ERA5-2025 source-full-trained",
+    "T2ND_rh2m_source_full": "Tianji T2ND",
+    "pangu2021_source_full": "Pangu-2021",
+    "pangu2025_source_full": "Pangu",
+    "era5_2025_source_full": "ERA5",
     "ifs_compact_common_core": "IFS compact no-RH2M-trained",
     "pangu2021_common_core": "Pangu-2021-trained",
     "pangu2025_common_core": "Pangu-2025-trained",
@@ -133,7 +133,7 @@ SOURCE_LABELS = {
     "pangu2025_compact_common_core": "Pangu-2025 compact no-RH2M-trained",
     "era5_2025_common_core": "ERA5-2025-trained",
     "era5_2025_compact_common_core": "ERA5-2025 compact no-RH2M-trained",
-    "ifs_diagnostic": "IFS diagnostic visibility",
+    "ifs_diagnostic": "IFS empirical VIS",
 }
 ZERO_TRANSFER_SOURCE_LABELS = {
     "tianji": "S1 zero-transfer / Tianji",
@@ -1933,49 +1933,49 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
     row_by_source = {str(row["source"]): row for _, row in overall_df.iterrows()}
     source_labels = {
-        "tianji": "Tianji-trained",
+        "tianji": "Tianji",
         "ifs": "IFS-trained",
-        "T2ND_rh2m_source_full": "T2ND RH2M source-full",
-        "T2ND_rh2m_common_core": "T2ND RH2M",
+        "T2ND_rh2m_source_full": "Tianji T2ND",
+        "T2ND_rh2m_common_core": "Tianji T2ND",
         "tianji_compact_common_core": "Tianji compact",
         "ifs_compact_common_core": "IFS compact",
-        "T2ND_rh2m_compact_common_core": "T2ND RH2M compact",
-        "pangu2021_source_full": "Pangu-2021 source-full",
-        "pangu2025_source_full": "Pangu-2025 source-full",
+        "T2ND_rh2m_compact_common_core": "Tianji T2ND compact",
+        "pangu2021_source_full": "Pangu-2021",
+        "pangu2025_source_full": "Pangu",
         "pangu2021_common_core": "Pangu-2021",
         "pangu2025_common_core": "Pangu-2025",
         "pangu2021_compact_common_core": "Pangu-2021 compact",
         "pangu2025_compact_common_core": "Pangu-2025 compact",
-        "era5_2025_source_full": "ERA5-2025 source-full",
-        "era5_2025_common_core": "ERA5-2025",
+        "era5_2025_source_full": "ERA5",
+        "era5_2025_common_core": "ERA5",
         "era5_2025_compact_common_core": "ERA5-2025 compact",
-        "ifs_diagnostic": "IFS diagnostic VIS",
+        "ifs_diagnostic": "IFS empirical VIS",
     }
     for _, row in overall_df.iterrows():
         src = str(row.get("source", ""))
         label = str(row.get("source_label", "") or "").strip()
-        if src and label and label != src:
+        if src and src not in source_labels and label and label != src:
             source_labels[src] = label
     source_colors = {
-        "tianji": "#2E5A87",
-        "ifs": "#6C6C6C",
-        "T2ND_rh2m_source_full": "#1B9E77",
-        "T2ND_rh2m_common_core": "#1B9E77",
-        "tianji_compact_common_core": "#2E5A87",
-        "ifs_compact_common_core": "#6C6C6C",
-        "T2ND_rh2m_compact_common_core": "#1B9E77",
-        "pangu2021_source_full": "#8E6BBE",
-        "pangu2025_source_full": "#8E6BBE",
-        "pangu2021_common_core": "#8E6BBE",
-        "pangu2025_common_core": "#8E6BBE",
-        "pangu2021_compact_common_core": "#8E6BBE",
-        "pangu2025_compact_common_core": "#8E6BBE",
-        "era5_2025_source_full": "#D95F02",
-        "era5_2025_common_core": "#D95F02",
-        "era5_2025_compact_common_core": "#D95F02",
-        "ifs_diagnostic": "#E69F00",
+        "tianji": "#4C78A8",
+        "T2ND_rh2m_source_full": "#72B7B2",
+        "T2ND_rh2m_common_core": "#72B7B2",
+        "T2ND_rh2m_compact_common_core": "#72B7B2",
+        "ifs": "#7A7A7A",
+        "ifs_compact_common_core": "#7A7A7A",
+        "era5_2025_source_full": "#E69F00",
+        "era5_2025_common_core": "#E69F00",
+        "era5_2025_compact_common_core": "#E69F00",
+        "pangu2021_source_full": "#8E77B8",
+        "pangu2025_source_full": "#8E77B8",
+        "pangu2021_common_core": "#8E77B8",
+        "pangu2025_common_core": "#8E77B8",
+        "pangu2021_compact_common_core": "#8E77B8",
+        "pangu2025_compact_common_core": "#8E77B8",
+        "tianji_compact_common_core": "#4C78A8",
+        "ifs_diagnostic": "#2F2F2F",
     }
-    fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
+    fallback_colors = ["#4C78A8", "#72B7B2", "#7A7A7A", "#E69F00", "#8E77B8", "#2F2F2F"]
 
     panels = [
         (
@@ -2010,21 +2010,26 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
     plt.rcParams.update(
         {
-            "font.family": "DejaVu Serif",
-            "font.size": 9,
-            "axes.labelsize": 10,
-            "axes.titlesize": 11,
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
+            "font.size": 7.5,
+            "axes.labelsize": 8,
+            "axes.titlesize": 8.5,
             "xtick.labelsize": 8,
             "ytick.labelsize": 8,
-            "legend.fontsize": 8,
+            "legend.fontsize": 7.5,
             "figure.dpi": 150,
-            "savefig.dpi": 300,
+            "savefig.dpi": 600,
             "savefig.bbox": "tight",
             "axes.grid": True,
-            "grid.alpha": 0.25,
+            "grid.alpha": 0.18,
             "axes.axisbelow": True,
+            "svg.fonttype": "none",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.linewidth": 0.75,
         }
     )
 
@@ -2087,9 +2092,9 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                     width * 0.92,
                     label=source_labels.get(source, source) if ax_idx == 0 else None,
                     color=source_colors.get(source, fallback_colors[src_idx % len(fallback_colors)]),
-                    edgecolor="white",
-                    linewidth=0.45,
-                    alpha=0.96,
+                    edgecolor="#FFFFFF",
+                    linewidth=0.35,
+                    alpha=0.95,
                 )
                 for bar, val, ok in zip(bars, vals, finite_flags):
                     if ok:
@@ -2151,7 +2156,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             out_dir / f"{stem}.svg",
         ]
         for path in out_paths:
-            fig.savefig(path, dpi=300, bbox_inches="tight")
+            fig.savefig(path, dpi=600, bbox_inches="tight")
             print(f"  [Fig] Saved -> {path}", flush=True)
         plt.close(fig)
         return [str(p) for p in out_paths]
@@ -2166,9 +2171,8 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                     "tianji",
                     "T2ND_rh2m_source_full",
                     "ifs",
-                    "pangu2021_source_full",
-                    "pangu2025_source_full",
                     "era5_2025_source_full",
+                    "pangu2025_source_full",
                     "ifs_diagnostic",
                 ],
                 "fig_forecast_source_key_metrics_source_full",
