@@ -119,7 +119,9 @@ def dedupe_sources(df: pd.DataFrame) -> pd.DataFrame:
         "T2ND_rh2m_source_full",
         "T2ND_rh2m_common_core",
         "ifs",
+        "tianji_t2nd_ifs_mean_softmax",
         "pangu2021_source_full",
+        "pangu2025_source_full",
         "era5_2025_source_full",
         "era5_2025_common_core",
         "pangu2021_common_core",
@@ -155,9 +157,11 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "T2ND_rh2m_source_full": "T2ND RH2M source-full",
         "T2ND_rh2m_common_core": "T2ND RH2M",
         "pangu2021_source_full": "Pangu-2021 source-full",
+        "pangu2025_source_full": "Pangu source-full",
         "pangu2021_common_core": "Pangu-2021",
         "era5_2025_source_full": "ERA5-2025 source-full",
         "era5_2025_common_core": "ERA5-2025",
+        "tianji_t2nd_ifs_mean_softmax": "Tianji+T2ND+IFS mean",
         "ensemble_mean_softmax": "Tianji+IFS mean softmax",
         "ifs_diagnostic": "IFS diagnostic VIS",
     }
@@ -172,9 +176,11 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "T2ND_rh2m_source_full": "#1B9E77",
         "T2ND_rh2m_common_core": "#1B9E77",
         "pangu2021_source_full": "#8E6BBE",
+        "pangu2025_source_full": "#8E6BBE",
         "pangu2021_common_core": "#8E6BBE",
         "era5_2025_source_full": "#D95F02",
         "era5_2025_common_core": "#D95F02",
+        "tianji_t2nd_ifs_mean_softmax": "#B279A2",
         "ensemble_mean_softmax": "#4C78A8",
         "ifs_diagnostic": "#E69F00",
     }
@@ -363,7 +369,13 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
     written: List[str] = []
     has_source_full = bool(
         available_set
-        & {"T2ND_rh2m_source_full", "pangu2021_source_full", "era5_2025_source_full"}
+        & {
+            "T2ND_rh2m_source_full",
+            "pangu2021_source_full",
+            "pangu2025_source_full",
+            "era5_2025_source_full",
+            "tianji_t2nd_ifs_mean_softmax",
+        }
     ) or any("source_full" in str(row.get("data_dir", "")) for row in row_by_source.values())
     if has_source_full:
         written.extend(
@@ -372,8 +384,10 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                     "tianji",
                     "T2ND_rh2m_source_full",
                     "ifs",
-                    "pangu2021_source_full",
+                    "tianji_t2nd_ifs_mean_softmax",
                     "era5_2025_source_full",
+                    "pangu2025_source_full",
+                    "pangu2021_source_full",
                 ],
                 "fig_forecast_source_key_metrics_source_full",
             )
@@ -402,6 +416,9 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "tianji",
             "T2ND_rh2m_common_core",
             "ifs",
+            "tianji_t2nd_ifs_mean_softmax",
+            "pangu2025_source_full",
+            "pangu2021_source_full",
             "era5_2025_common_core",
             "pangu2021_common_core",
             "ifs_diagnostic",

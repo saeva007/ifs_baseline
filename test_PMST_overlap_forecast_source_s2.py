@@ -115,6 +115,8 @@ DEFAULT_STATIC_RNN_S1_COMPACT_SCALER = os.path.join(
 )
 
 CLASS_NAMES = {0: "fog_0_500m", 1: "mist_500_1000m", 2: "clear_ge_1000m"}
+BEST_EFFORT_ENSEMBLE_SOURCE = "tianji_t2nd_ifs_mean_softmax"
+BEST_EFFORT_ENSEMBLE_MEMBERS = ("tianji", "T2ND_rh2m_source_full", "ifs")
 SOURCE_LABELS = {
     "tianji": "Tianji-trained/Tianji-input model",
     "T2ND_rh2m": "Tianji-trained/T2ND-rh2m-input model",
@@ -133,6 +135,7 @@ SOURCE_LABELS = {
     "pangu2025_compact_common_core": "Pangu-2025 compact no-RH2M-trained",
     "era5_2025_common_core": "ERA5-2025-trained",
     "era5_2025_compact_common_core": "ERA5-2025 compact no-RH2M-trained",
+    BEST_EFFORT_ENSEMBLE_SOURCE: "Tianji+T2ND+IFS mean",
     "ifs_diagnostic": "IFS empirical VIS",
 }
 ZERO_TRANSFER_SOURCE_LABELS = {
@@ -1462,6 +1465,65 @@ def validate_paired_labels(tianji: SourceEval, ifs: SourceEval, idx_t: np.ndarra
         )
 
 
+def align_sources_to_reference(
+    evals: Dict[str, SourceEval],
+    source_order: Sequence[str],
+    strict_meta: bool,
+) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
+    if not source_order:
+        raise ValueError("source_order is empty.")
+    ref_source = str(source_order[0])
+    if ref_source not in evals:
+        raise KeyError(f"Reference source is missing: {ref_source}")
+    ref_eval = evals[ref_source]
+    ref_rows = np.arange(len(ref_eval.test_targets), dtype=np.int64)
+    common_ref_rows: Set[int] = set(int(v) for v in ref_rows)
+    source_row_maps: Dict[str, Dict[int, int]] = {
+        ref_source: {int(v): int(v) for v in ref_rows}
+    }
+
+    for source in source_order[1:]:
+        source = str(source)
+        if source not in evals:
+            raise KeyError(f"Ensemble member is missing: {source}")
+        idx_ref, idx_src, _ = align_test_outputs(ref_eval, evals[source], strict_meta)
+        validate_paired_labels(ref_eval, evals[source], idx_ref, idx_src)
+        row_map = {int(r): int(s) for r, s in zip(idx_ref, idx_src)}
+        common_ref_rows.intersection_update(row_map.keys())
+        source_row_maps[source] = row_map
+
+    ordered_ref_rows = np.asarray([int(v) for v in ref_rows if int(v) in common_ref_rows], dtype=np.int64)
+    if ordered_ref_rows.size == 0:
+        raise RuntimeError(f"No common test rows across ensemble members: {', '.join(source_order)}")
+
+    aligned: Dict[str, np.ndarray] = {}
+    for source in source_order:
+        row_map = source_row_maps[str(source)]
+        aligned[str(source)] = np.asarray([row_map[int(v)] for v in ordered_ref_rows], dtype=np.int64)
+
+    if ref_eval.test_meta is not None:
+        meta_common = ref_eval.test_meta.iloc[ordered_ref_rows].reset_index(drop=True).copy()
+    else:
+        meta_common = pd.DataFrame({"row": np.arange(len(ordered_ref_rows), dtype=np.int64)})
+    return aligned, meta_common
+
+
+def mean_probability_arrays(prob_arrays: Sequence[np.ndarray]) -> np.ndarray:
+    arrays = [np.asarray(p, dtype=np.float64) for p in prob_arrays]
+    if not arrays:
+        raise ValueError("No probability arrays were provided for averaging.")
+    first_shape = arrays[0].shape
+    for arr in arrays[1:]:
+        if arr.shape != first_shape:
+            raise ValueError(f"Cannot average probability arrays with shapes {first_shape} and {arr.shape}")
+    probs = np.mean(np.stack(arrays, axis=0), axis=0)
+    row_sums = probs.sum(axis=1, keepdims=True)
+    if not np.all(np.isfinite(probs)) or np.any(row_sums <= 0):
+        raise ValueError("Mean probabilities contain non-finite values or non-positive row sums.")
+    probs = probs / row_sums
+    return probs.astype(np.float32)
+
+
 def evaluate_one_source(
     source: str,
     spec: SourceSpec,
@@ -1949,6 +2011,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "era5_2025_source_full": "ERA5",
         "era5_2025_common_core": "ERA5",
         "era5_2025_compact_common_core": "ERA5-2025 compact",
+        BEST_EFFORT_ENSEMBLE_SOURCE: "Tianji+T2ND+IFS mean",
         "ifs_diagnostic": "IFS empirical VIS",
     }
     for _, row in overall_df.iterrows():
@@ -1973,6 +2036,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "pangu2021_compact_common_core": "#8E77B8",
         "pangu2025_compact_common_core": "#8E77B8",
         "tianji_compact_common_core": "#4C78A8",
+        BEST_EFFORT_ENSEMBLE_SOURCE: "#B279A2",
         "ifs_diagnostic": "#2F2F2F",
     }
     fallback_colors = ["#4C78A8", "#72B7B2", "#7A7A7A", "#E69F00", "#8E77B8", "#2F2F2F"]
@@ -2171,6 +2235,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                     "tianji",
                     "T2ND_rh2m_source_full",
                     "ifs",
+                    BEST_EFFORT_ENSEMBLE_SOURCE,
                     "era5_2025_source_full",
                     "pangu2025_source_full",
                     "ifs_diagnostic",
@@ -2216,6 +2281,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "T2ND_rh2m_common_core",
             "T2ND_rh2m_compact_common_core",
             "ifs",
+            BEST_EFFORT_ENSEMBLE_SOURCE,
             "pangu2021_source_full",
             "pangu2025_source_full",
             "era5_2025_source_full",
@@ -2604,6 +2670,15 @@ def write_independent_source_outputs(
         "reference_source": "",
         "matched_rows": 0,
     }
+    ensemble_info: Dict[str, object] = {
+        "enabled": False,
+        "source": BEST_EFFORT_ENSEMBLE_SOURCE,
+        "members": list(BEST_EFFORT_ENSEMBLE_MEMBERS),
+        "decision": "mean post-softmax probabilities, then argmax",
+        "matched_rows": 0,
+        "status": "missing_members",
+        "missing_members": [m for m in BEST_EFFORT_ENSEMBLE_MEMBERS if m not in evals],
+    }
     for source, eval_obj in evals.items():
         test_metrics = compute_metrics(
             eval_obj.test_targets,
@@ -2654,6 +2729,75 @@ def write_independent_source_outputs(
             sample["p_clear"] = eval_obj.test_probs[:, 2]
             sample["correct"] = eval_obj.test_preds == eval_obj.test_targets
             sample.to_csv(out_dir / f"per_sample_{source}.csv", index=False)
+
+    if all(source in evals for source in BEST_EFFORT_ENSEMBLE_MEMBERS):
+        try:
+            idx_by_source, meta_common = align_sources_to_reference(
+                evals,
+                BEST_EFFORT_ENSEMBLE_MEMBERS,
+                args.strict_meta,
+            )
+            ref_source = BEST_EFFORT_ENSEMBLE_MEMBERS[0]
+            ref_idx = idx_by_source[ref_source]
+            ensemble_probs = mean_probability_arrays(
+                [
+                    evals[source].test_probs[idx_by_source[source]]
+                    for source in BEST_EFFORT_ENSEMBLE_MEMBERS
+                ]
+            )
+            ensemble_preds = predict_from_probs(ensemble_probs, "argmax", 0.5, 0.5)
+            ensemble_targets = evals[ref_source].test_targets[ref_idx]
+            ensemble_raw_vis = evals[ref_source].test_raw_vis[ref_idx]
+            ensemble_metrics = compute_metrics(ensemble_targets, ensemble_preds, probs=ensemble_probs)
+            overall_rows.append(
+                rows_from_metrics(
+                    BEST_EFFORT_ENSEMBLE_SOURCE,
+                    ensemble_metrics,
+                    {
+                        "temperature": math.nan,
+                        "fog_threshold": math.nan,
+                        "mist_threshold": math.nan,
+                        "threshold_source": "argmax_mean_softmax",
+                        "feature_dim": math.nan,
+                        "dyn_vars_count": math.nan,
+                        "extra_feat_dim": math.nan,
+                        "model_arch": args.model_arch,
+                        "checkpoint": ";".join(evals[source].spec.ckpt_path for source in BEST_EFFORT_ENSEMBLE_MEMBERS),
+                        "scaler": ";".join(evals[source].spec.scaler_path for source in BEST_EFFORT_ENSEMBLE_MEMBERS),
+                        "data_dir": ";".join(evals[source].spec.data_dir for source in BEST_EFFORT_ENSEMBLE_MEMBERS),
+                        "evaluation_mode": "independent_source_mean_softmax_ensemble",
+                        "ensemble_members": ",".join(BEST_EFFORT_ENSEMBLE_MEMBERS),
+                        "matched_rows": int(len(ensemble_targets)),
+                        "reference_source": ref_source,
+                    },
+                )
+            )
+            ensemble_info.update(
+                {
+                    "enabled": True,
+                    "matched_rows": int(len(ensemble_targets)),
+                    "status": "computed",
+                    "missing_members": [],
+                }
+            )
+            if not args.no_per_sample_csv:
+                sample = meta_common.reset_index(drop=True).copy()
+                sample["y_cls"] = ensemble_targets
+                sample["vis_raw_m"] = ensemble_raw_vis
+                sample["pred"] = ensemble_preds
+                sample["p_fog"] = ensemble_probs[:, 0]
+                sample["p_mist"] = ensemble_probs[:, 1]
+                sample["p_clear"] = ensemble_probs[:, 2]
+                sample["correct"] = ensemble_preds == ensemble_targets
+                sample.to_csv(out_dir / f"per_sample_{BEST_EFFORT_ENSEMBLE_SOURCE}.csv", index=False)
+            print(
+                f"[ensemble] {BEST_EFFORT_ENSEMBLE_SOURCE}: "
+                f"members={','.join(BEST_EFFORT_ENSEMBLE_MEMBERS)}, rows={len(ensemble_targets)}",
+                flush=True,
+            )
+        except Exception as exc:
+            ensemble_info.update({"status": "failed", "error": str(exc)})
+            print(f"[WARN] best-effort mean-softmax ensemble skipped: {exc}", flush=True)
 
     if not args.skip_ifs_forecast_baseline:
         ref_order = [
@@ -2746,6 +2890,7 @@ def write_independent_source_outputs(
             for source, eval_obj in evals.items()
         },
         "ifs_diagnostic": ifs_diagnostic_info,
+        "best_effort_mean_softmax_ensemble": ensemble_info,
         "class_definition": {
             "0": "0 <= visibility < 500 m",
             "1": "500 <= visibility < 1000 m",
