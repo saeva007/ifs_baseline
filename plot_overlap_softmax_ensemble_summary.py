@@ -29,14 +29,14 @@ DEFAULT_LOCAL_OUT_DIR = r"C:\vis_code\static_rnn_eval_results_r13\overlap_softma
 
 KEY_METRICS: List[Tuple[str, str]] = [
     ("accuracy", "Accuracy"),
-    ("fog_pod", "Fog recall"),
-    ("fog_precision", "Fog precision"),
-    ("fog_csi", "Fog CSI"),
-    ("low_vis_recall", "Low-vis recall"),
-    ("low_vis_precision", "Low-vis precision"),
-    ("low_vis_fpr", "Low-vis FPR"),
-    ("mist_csi", "Mist CSI"),
-    ("mist_precision", "Mist precision"),
+    ("fog_pod", "Ultra-low recall"),
+    ("fog_precision", "Ultra-low precision"),
+    ("fog_csi", "Ultra-low CSI"),
+    ("low_vis_recall", "Low-vis event recall"),
+    ("low_vis_precision", "Low-vis event precision"),
+    ("low_vis_fpr", "Low-vis event FPR"),
+    ("mist_csi", "Moderate-low CSI"),
+    ("mist_precision", "Moderate-low precision"),
 ]
 
 LOWER_IS_BETTER = {"fog_far", "mist_far", "low_vis_fpr", "multiclass_brier", "low_vis_brier", "ece_low_vis", "ece_multiclass"}
@@ -237,8 +237,8 @@ def plot_precision_recall_panel(ax, df: pd.DataFrame) -> None:
     method_labels = {"tianji": "Tianji", "ifs": "IFS", ENSEMBLE_SOURCE: "Ensemble"}
     colors = {"tianji": "#2E5A87", "ifs": "#777777", ENSEMBLE_SOURCE: "#2F7D50"}
     endpoints = [
-        ("Fog", "fog_pod", "fog_precision", "o", -0.25),
-        ("Low-vis", "low_vis_recall", "low_vis_precision", "s", 0.25),
+        ("Ultra-low", "fog_pod", "fog_precision", "o", -0.25),
+        ("Low-vis event", "low_vis_recall", "low_vis_precision", "s", 0.25),
     ]
     for label, recall_metric, precision_metric, marker, label_jitter in endpoints:
         xs = [metric_value(df, m, recall_metric) * 100.0 for m in method_order]

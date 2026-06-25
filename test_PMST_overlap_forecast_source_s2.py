@@ -1916,7 +1916,7 @@ def write_report(
 
 
 def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str]:
-    """Publication-style split figures for Fog/Mist/low-vis key metrics."""
+    """Publication-style split figures for Ultra-low/Moderate-low/low-vis event metrics."""
     try:
         import matplotlib
 
@@ -1979,7 +1979,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
     panels = [
         (
-            "Fog (0-500 m)",
+            "Ultra-low (<500 m)",
             [
                 ("fog_precision", "Precision"),
                 ("fog_pod", "Recall"),
@@ -1988,7 +1988,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             ],
         ),
         (
-            "Mist (500-1000 m)",
+            "Moderate-low (500-1000 m)",
             [
                 ("mist_precision", "Precision"),
                 ("mist_pod", "Recall"),
@@ -1997,7 +1997,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             ],
         ),
         (
-            "Low visibility (<1000 m)",
+            "Low-vis event (<1000 m)",
             [
                 ("low_vis_precision", "Precision"),
                 ("low_vis_recall", "Recall"),
@@ -2127,7 +2127,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             )
             if ax_idx == 0:
                 ax.set_ylabel("Score")
-            if title.startswith("Low visibility"):
+            if title.startswith("Low-vis event"):
                 ax.text(
                     0.98,
                     0.96,
