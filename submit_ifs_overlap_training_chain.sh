@@ -4,6 +4,7 @@
 #
 # Examples:
 #   OVERLAP_CHAIN=common_core bash submit_ifs_overlap_training_chain.sh
+#   OVERLAP_CHAIN=q_core_no_rh2m bash submit_ifs_overlap_training_chain.sh
 #   OVERLAP_CHAIN=source_full bash submit_ifs_overlap_training_chain.sh
 #   OVERLAP_CHAIN=overlap_full bash submit_ifs_overlap_training_chain.sh
 
@@ -60,6 +61,16 @@ case "${OVERLAP_CHAIN}" in
         s1_job="$(submit_s1 s1_compact_common_core)"
         echo "compact_common_core S1: job ${s1_job}"
         s2_list="${S2_EXPERIMENTS:-s2_tianji_compact_common_core s2_ifs_compact_common_core s2_pangu2021_compact_common_core s2_era5_2025_compact_common_core}"
+        for exp in ${s2_list}; do
+            s2_job="$(submit_s2_after "${s1_job}" "${exp}")"
+            echo "${exp}: afterok:${s1_job} -> job ${s2_job}"
+        done
+        ;;
+
+    q_core_no_rh2m|q_core|q1000_core)
+        s1_job="$(submit_s1 s1_q_core_no_rh2m)"
+        echo "q_core_no_rh2m S1: job ${s1_job}"
+        s2_list="${S2_EXPERIMENTS:-s2_tianji_q_core_no_rh2m s2_tianji_T2ND_rh2m_q_core_no_rh2m s2_ifs_q_core_no_rh2m s2_pangu2025_q_core_no_rh2m s2_era5_2025_q_core_no_rh2m}"
         for exp in ${s2_list}; do
             s2_job="$(submit_s2_after "${s1_job}" "${exp}")"
             echo "${exp}: afterok:${s1_job} -> job ${s2_job}"
@@ -141,7 +152,7 @@ case "${OVERLAP_CHAIN}" in
 
     *)
         echo "ERROR: unknown OVERLAP_CHAIN=${OVERLAP_CHAIN}" >&2
-        echo "Use one of: common_core, compact_common_core, overlap_full, source_full" >&2
+        echo "Use one of: common_core, compact_common_core, q_core_no_rh2m, overlap_full, source_full" >&2
         exit 2
         ;;
 esac

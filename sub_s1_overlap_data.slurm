@@ -53,6 +53,8 @@ if [[ -z "${OUT_DIR}" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_common_core"
     elif [[ "${FEATURE_SET}" == compact_common_core* ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_${FEATURE_SUFFIX}"
+    elif [[ "${FEATURE_SET}" == "q_core_no_rh2m" ]]; then
+        OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_${FEATURE_SUFFIX}"
     elif [[ "${FEATURE_SET}" == "source_full" ]]; then
         OUT_DIR="/public/home/putianshu/vis_mlp/ifs_baseline/ml_dataset_pmst_v5_aligned_12h_pm10_pm25_${FEATURE_SUFFIX}"
     else

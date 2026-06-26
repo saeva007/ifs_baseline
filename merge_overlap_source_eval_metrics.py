@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -256,6 +256,179 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             upper = min(upper, 0.95)
         return min(1.0, upper)
 
+    def _metric_value(row: pd.Series, metric: str) -> float:
+        candidates = [metric]
+        if metric == "low_vis_recall":
+            candidates.append("low_vis_pod")
+        elif metric == "low_vis_fpr":
+            candidates.append("false_positive_rate")
+        for candidate in candidates:
+            try:
+                value = float(row.get(candidate, np.nan))
+            except Exception:
+                value = math.nan
+            if np.isfinite(value):
+                return value
+        return math.nan
+
+    def _short_source_label(source: str) -> str:
+        short_labels = {
+            "tianji": "Tianji",
+            "ifs": "IFS",
+            "T2ND_rh2m_source_full": "T2ND RH2M",
+            "T2ND_rh2m_common_core": "T2ND RH2M",
+            "pangu2021_source_full": "Pangu-2021",
+            "pangu2025_source_full": "Pangu",
+            "pangu2021_common_core": "Pangu-2021",
+            "era5_2025_source_full": "ERA5",
+            "era5_2025_common_core": "ERA5",
+            "tianji_t2nd_ifs_mean_softmax": "NWP mean",
+            "ensemble_mean_softmax": "Mean softmax",
+            "ifs_diagnostic": "IFS diagnostic",
+        }
+        return short_labels.get(source, source_labels.get(source, source))
+
+    def _source_marker(source: str) -> str:
+        if "pangu" in source.lower():
+            return "D"
+        if "mean" in source.lower() or "ensemble" in source.lower():
+            return "s"
+        if source == "ifs_diagnostic":
+            return "X"
+        return "o"
+
+    def _scatter_label_offset(source: str, idx: int) -> Tuple[int, int]:
+        offsets = {
+            "tianji": (-10, -13),
+            "ifs": (7, -9),
+            "T2ND_rh2m_source_full": (7, 7),
+            "T2ND_rh2m_common_core": (7, 7),
+            "era5_2025_source_full": (7, 7),
+            "era5_2025_common_core": (7, 7),
+            "pangu2021_source_full": (7, 7),
+            "pangu2025_source_full": (7, -10),
+            "pangu2021_common_core": (7, 7),
+            "tianji_t2nd_ifs_mean_softmax": (7, 10),
+            "ensemble_mean_softmax": (7, 10),
+            "ifs_diagnostic": (7, -10),
+        }
+        if source in offsets:
+            return offsets[source]
+        return (7, 5 + 5 * (idx % 3))
+
+    def _draw_source_full_summary(source_order: List[str], stem: str) -> List[str]:
+        source_order = [src for src in source_order if src in available_set and src in row_by_source]
+        if not source_order:
+            return []
+
+        ranked_sources = sorted(
+            source_order,
+            key=lambda src: _metric_value(row_by_source[src], "low_vis_csi"),
+            reverse=True,
+        )
+        ranked_sources = [src for src in ranked_sources if np.isfinite(_metric_value(row_by_source[src], "low_vis_csi"))]
+        if not ranked_sources:
+            return []
+
+        n_sources = len(ranked_sources)
+        fig_h = max(4.4, 2.6 + 0.34 * n_sources)
+        fig, axes = plt.subplots(1, 2, figsize=(12.2, fig_h), gridspec_kw={"width_ratios": [1.12, 1.0]})
+        fig.subplots_adjust(left=0.14, right=0.985, bottom=0.16, top=0.84, wspace=0.30)
+
+        y = np.arange(n_sources)
+        vals = np.asarray([_metric_value(row_by_source[src], "low_vis_csi") for src in ranked_sources], dtype=float)
+        colors = [source_colors.get(src, fallback_colors[idx % len(fallback_colors)]) for idx, src in enumerate(ranked_sources)]
+        axes[0].barh(y, vals, color=colors, edgecolor="white", linewidth=0.55, height=0.68)
+        axes[0].set_yticks(y)
+        axes[0].set_yticklabels([_short_source_label(src) for src in ranked_sources])
+        axes[0].invert_yaxis()
+        axes[0].set_xlabel("Low-vis event CSI")
+        axes[0].set_title("(a) Core source ranking", loc="left", fontweight="bold")
+        x_max = _adaptive_score_ylim(vals)
+        axes[0].set_xlim(0, x_max)
+        axes[0].grid(axis="x", alpha=0.24)
+        axes[0].grid(axis="y", visible=False)
+        for yi, value in zip(y, vals):
+            axes[0].text(min(value + x_max * 0.018, x_max * 0.985), yi, f"{value:.2f}", va="center", ha="left", fontsize=8)
+
+        scatter_sources = [
+            src
+            for src in source_order
+            if np.isfinite(_metric_value(row_by_source[src], "low_vis_recall"))
+            and np.isfinite(_metric_value(row_by_source[src], "low_vis_fpr"))
+        ]
+        ax = axes[1]
+        for idx, source in enumerate(scatter_sources):
+            row = row_by_source[source]
+            x_val = _metric_value(row, "low_vis_fpr")
+            y_val = _metric_value(row, "low_vis_recall")
+            color = source_colors.get(source, fallback_colors[idx % len(fallback_colors)])
+            label_dx, label_dy = _scatter_label_offset(source, idx)
+            ax.scatter(
+                x_val,
+                y_val,
+                s=74,
+                marker=_source_marker(source),
+                color=color,
+                edgecolor="white",
+                linewidth=0.75,
+                zorder=3,
+            )
+            ax.annotate(
+                _short_source_label(source),
+                (x_val, y_val),
+                xytext=(label_dx, label_dy),
+                textcoords="offset points",
+                ha="right" if label_dx < 0 else "left",
+                fontsize=7.4,
+                color="#202124",
+            )
+        ax.set_xlabel("Low-vis event FPR")
+        ax.set_ylabel("Low-vis event recall")
+        ax.set_title("(b) Recall-FPR trade-off", loc="left", fontweight="bold")
+        if scatter_sources:
+            x_vals = np.asarray([_metric_value(row_by_source[src], "low_vis_fpr") for src in scatter_sources], dtype=float)
+            y_vals = np.asarray([_metric_value(row_by_source[src], "low_vis_recall") for src in scatter_sources], dtype=float)
+            ax.set_xlim(0, min(1.0, max(0.06, float(np.nanmax(x_vals)) * 1.18)))
+            y_min = max(0.0, float(np.nanmin(y_vals)) - 0.08)
+            y_max = min(1.0, float(np.nanmax(y_vals)) + 0.08)
+            if y_max - y_min < 0.18:
+                pad = (0.18 - (y_max - y_min)) / 2.0
+                y_min = max(0.0, y_min - pad)
+                y_max = min(1.0, y_max + pad)
+            ax.set_ylim(y_min, y_max)
+        ax.grid(alpha=0.26)
+        for spine in ("top", "right"):
+            axes[0].spines[spine].set_visible(False)
+            ax.spines[spine].set_visible(False)
+
+        fig.suptitle(
+            "Best-effort source-full: numerical-weather training data outperform Pangu AI-model data",
+            fontsize=12,
+            fontweight="bold",
+            y=0.965,
+        )
+        fig.text(
+            0.14,
+            0.04,
+            "Panel (a) uses CSI as the primary rare-event score; panel (b) checks whether recall gains require higher false alarms.",
+            ha="left",
+            va="bottom",
+            fontsize=8.2,
+            color="#555555",
+        )
+
+        out_paths = [
+            out_dir / f"{stem}.png",
+            out_dir / f"{stem}.pdf",
+            out_dir / f"{stem}.svg",
+        ]
+        for path in out_paths:
+            fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+            print(f"  [Fig] Saved -> {path}", flush=True)
+        plt.close(fig)
+        return [str(p) for p in out_paths]
+
     def _draw_group(source_order: List[str], stem: str) -> List[str]:
         source_order = [src for src in source_order if src in available_set and src in row_by_source]
         if not source_order:
@@ -378,20 +551,19 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         }
     ) or any("source_full" in str(row.get("data_dir", "")) for row in row_by_source.values())
     if has_source_full:
-        written.extend(
-            _draw_group(
-                [
-                    "tianji",
-                    "T2ND_rh2m_source_full",
-                    "ifs",
-                    "tianji_t2nd_ifs_mean_softmax",
-                    "era5_2025_source_full",
-                    "pangu2025_source_full",
-                    "pangu2021_source_full",
-                ],
-                "fig_forecast_source_key_metrics_source_full",
-            )
-        )
+        source_full_order = [
+            "tianji",
+            "T2ND_rh2m_source_full",
+            "ifs",
+            "tianji_t2nd_ifs_mean_softmax",
+            "era5_2025_source_full",
+            "pangu2025_source_full",
+            "pangu2021_source_full",
+        ]
+        source_full_written = _draw_source_full_summary(source_full_order, "fig_forecast_source_key_metrics_source_full")
+        if not source_full_written:
+            source_full_written = _draw_group(source_full_order, "fig_forecast_source_key_metrics_source_full")
+        written.extend(source_full_written)
     if available_set & {"pangu2021_source_full", "ensemble_mean_softmax"}:
         written.extend(
             _draw_group(
