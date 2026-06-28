@@ -38,7 +38,7 @@ OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q1000_mechanism
 EVAL_DIR="${EVAL_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources}"
 REFERENCE_SOURCE="${REFERENCE_SOURCE:-era5_2025_source_full}"
 PANGU_TAG="${PANGU_TAG:-pangu2025_source_full}"
-NUMERICAL_TAGS="${NUMERICAL_TAGS:-tianji,T2ND_rh2m_source_full,ifs,era5_2025_source_full}"
+NUMERICAL_TAGS="${NUMERICAL_TAGS:-tianji,ifs,era5_2025_source_full}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 MIN_PAIRS="${MIN_PAIRS:-100}"
@@ -47,7 +47,6 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 case "${FEATURE_SET}" in
     source_full)
         TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full}"
-        T2ND_DATA_DIR="${T2ND_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full}"
         IFS_DATA_DIR="${IFS_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_source_full}"
         ERA5_2025_DATA_DIR="${ERA5_2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full}"
         PANGU2025_DATA_DIR="${PANGU2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_source_full}"
@@ -55,13 +54,12 @@ case "${FEATURE_SET}" in
     q_core_no_rh2m|q_core|q1000_core)
         FEATURE_SET="q_core_no_rh2m"
         TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_q_core_no_rh2m}"
-        T2ND_DATA_DIR="${T2ND_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_q_core_no_rh2m}"
         IFS_DATA_DIR="${IFS_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_ifs_12h_pm10_pm25_q_core_no_rh2m}"
         ERA5_2025_DATA_DIR="${ERA5_2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_q_core_no_rh2m}"
         PANGU2025_DATA_DIR="${PANGU2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_q_core_no_rh2m}"
         REFERENCE_SOURCE="${REFERENCE_SOURCE:-era5_2025_source_full}"
         PANGU_TAG="${PANGU_TAG:-pangu2025_source_full}"
-        NUMERICAL_TAGS="${NUMERICAL_TAGS:-tianji,T2ND_rh2m_source_full,ifs,era5_2025_source_full}"
+        NUMERICAL_TAGS="${NUMERICAL_TAGS:-tianji,ifs,era5_2025_source_full}"
         ;;
     *)
         echo "ERROR: unsupported FEATURE_SET=${FEATURE_SET}; use source_full or q_core_no_rh2m." >&2
@@ -69,7 +67,7 @@ case "${FEATURE_SET}" in
         ;;
 esac
 
-SOURCES_DEFAULT="tianji=${TIANJI_DATA_DIR}|Tianji ${FEATURE_SET}|numerical;T2ND_rh2m_source_full=${T2ND_DATA_DIR}|T2ND RH2M ${FEATURE_SET}|numerical;ifs=${IFS_DATA_DIR}|IFS ${FEATURE_SET}|numerical;era5_2025_source_full=${ERA5_2025_DATA_DIR}|ERA5 reference analysis ${FEATURE_SET}|reference;pangu2025_source_full=${PANGU2025_DATA_DIR}|Pangu-2025 ${FEATURE_SET}|ai"
+SOURCES_DEFAULT="tianji=${TIANJI_DATA_DIR}|Tianji ${FEATURE_SET}|numerical;ifs=${IFS_DATA_DIR}|IFS ${FEATURE_SET}|numerical;era5_2025_source_full=${ERA5_2025_DATA_DIR}|ERA5 reference analysis ${FEATURE_SET}|reference;pangu2025_source_full=${PANGU2025_DATA_DIR}|Pangu-2025 ${FEATURE_SET}|ai"
 SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"

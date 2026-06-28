@@ -32,18 +32,24 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 SCRIPT_PATH="${SCRIPT_PATH:-${BASE}/paper_eval/analyze_multi_source_rh2m_quality.py}"
 FEATURE_SET="${FEATURE_SET:-common_core}"
-FEATURES="${FEATURES:-RH2M,Q_1000,DP_1000,RH_925,PRECIP}"
 OBS_ROOT="${OBS_ROOT:-${BASE}/auto_station}"
-OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/key_variable_multi_source_quality_${FEATURE_SET}}"
+OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/rh2m_observation_quality_${FEATURE_SET}}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
+BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
-SOURCES_DEFAULT="tianji=${BASE}/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${FEATURE_SET}|Tianji product|2025;T2ND=${BASE}/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_${FEATURE_SET}|T2ND raw RH2M|2025;ifs=${BASE}/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_${FEATURE_SET}|IFS|2025;era5_2025=${BASE}/ifs_baseline/ml_dataset_overlap_era5_2025_12h_pm10_pm25_${FEATURE_SET}|ERA5 2025|2025;pangu2021=${BASE}/ifs_baseline/ml_dataset_overlap_pangu2021_12h_pm10_pm25_${FEATURE_SET}|Pangu RH2M proxy|2021|RH2M proxy from 1000 hPa humidity"
+SOURCES_DEFAULT="tianji=${BASE}/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_${FEATURE_SET}|Tianji product|2025;T2ND=${BASE}/ifs_baseline/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_${FEATURE_SET}|Tianji T2ND RH2M|2025;ifs=${BASE}/ifs_baseline/ml_dataset_overlap_ifs_12h_pm10_pm25_${FEATURE_SET}|IFS|2025;era5_2025=${BASE}/ifs_baseline/ml_dataset_overlap_era5_2025_12h_pm10_pm25_${FEATURE_SET}|ERA5 analysis|2025"
 SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 
 mkdir -p "${BASE}/ifs_baseline/logs"
 
-CMD=(python "${SCRIPT_PATH}" --sources "${SOURCES}" --obs_root "${OBS_ROOT}" --out_dir "${OUT_DIR}" --features "${FEATURES}")
+CMD=(
+    python "${SCRIPT_PATH}"
+    --sources "${SOURCES}"
+    --obs_root "${OBS_ROOT}"
+    --out_dir "${OUT_DIR}"
+    --bootstrap_iters "${BOOTSTRAP_ITERS}"
+)
 if [[ -n "${LIMIT_SAMPLES}" ]]; then
     CMD+=(--limit_samples "${LIMIT_SAMPLES}")
 fi
