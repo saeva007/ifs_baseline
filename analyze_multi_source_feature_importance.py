@@ -26,12 +26,47 @@ import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent
-VIS_EVAL_DIR = ROOT / "vis_eval"
-for path in (SCRIPT_DIR, VIS_EVAL_DIR, ROOT):
+EVAL_DIR_CANDIDATES = [ROOT / "paper_eval", ROOT / "vis_eval"]
+FEATURE_CATALOG_CANDIDATES = [path / "feature_catalog_pm10_pm25.py" for path in EVAL_DIR_CANDIDATES]
+for path in (SCRIPT_DIR, *EVAL_DIR_CANDIDATES, ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from feature_catalog_pm10_pm25 import permutation_groups
+try:
+    from feature_catalog_pm10_pm25 import permutation_groups
+
+    FEATURE_CATALOG_PATH = str(Path(sys.modules["feature_catalog_pm10_pm25"].__file__).resolve())
+    HAS_FEATURE_CATALOG = True
+except ModuleNotFoundError:
+    FEATURE_CATALOG_PATH = ""
+    HAS_FEATURE_CATALOG = False
+
+    def permutation_groups(
+        window_size: int,
+        dyn_vars_count: int,
+        extra_feat_dim: int,
+        dynamic_feature_order: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, object]]:
+        """Dynamic-only fallback when the paper-eval feature catalog is absent."""
+        del extra_feat_dim
+        if not dynamic_feature_order or len(dynamic_feature_order) != int(dyn_vars_count):
+            checked = ", ".join(str(path) for path in FEATURE_CATALOG_CANDIDATES)
+            raise FileNotFoundError(
+                "feature_catalog_pm10_pm25.py was not found and dataset_build_config.json "
+                f"does not provide a valid dynamic_feature_order. Checked: {checked}"
+            )
+        groups: List[Dict[str, object]] = []
+        for feature_idx, feature in enumerate(dynamic_feature_order):
+            columns = [t * int(dyn_vars_count) + feature_idx for t in range(int(window_size))]
+            groups.append(
+                {
+                    "feature": str(feature),
+                    "block": "dynamic_12h",
+                    "columns": columns,
+                    "n_columns": len(columns),
+                }
+            )
+        return groups
 
 
 PACKAGE_DEFINITIONS = {
@@ -712,6 +747,20 @@ def write_method_note(out_dir: Path, cli: argparse.Namespace, labels: Dict[str, 
 
 def main() -> None:
     cli = parse_args()
+    if cli.group_scope == "all" and not HAS_FEATURE_CATALOG:
+        checked = ", ".join(str(path) for path in FEATURE_CATALOG_CANDIDATES)
+        raise FileNotFoundError(
+            "--group_scope all requires feature_catalog_pm10_pm25.py for static and "
+            f"engineered groups. Checked: {checked}. Use --group_scope dynamic or deploy the catalog."
+        )
+    if HAS_FEATURE_CATALOG:
+        print(f"[catalog] using {FEATURE_CATALOG_PATH}", flush=True)
+    else:
+        print(
+            "[catalog] feature_catalog_pm10_pm25.py not found; using the dynamic-only "
+            "dataset_build_config fallback.",
+            flush=True,
+        )
     out_dir = Path(cli.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ev = load_source_evaluator()
@@ -832,6 +881,8 @@ def main() -> None:
                 "shared_dynamic_features": shared_dynamic,
                 "permutation_modes": cli.modes,
                 "group_scope": cli.group_scope,
+                "feature_catalog_path": FEATURE_CATALOG_PATH,
+                "feature_catalog_fallback": bool(not HAS_FEATURE_CATALOG),
                 "repeats": cli.repeats,
                 "bootstrap_iters": cli.bootstrap_iters,
                 "bootstrap_unit": "valid date",

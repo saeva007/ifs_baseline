@@ -19,6 +19,13 @@ PANGU2025_STATION_FILE="${PANGU2025_STATION_FILE:-}"
 ALLOW_EXISTING_RUN="${ALLOW_EXISTING_RUN:-0}"
 ALLOW_UNVERIFIED_PANGU_LEAD="${ALLOW_UNVERIFIED_PANGU_LEAD:-0}"
 
+case "${PANGU2025_STATION_FILE}" in
+    /path/to/*|PATH_TO_*|REPLACE_ME*)
+        echo "[WARN] Ignoring placeholder PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}; trying known lead24h locations." >&2
+        PANGU2025_STATION_FILE=""
+        ;;
+esac
+
 if [[ ! "${RUN_TAG}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "ERROR: RUN_TAG may contain only letters, digits, dot, underscore, and hyphen: ${RUN_TAG}" >&2
     exit 2

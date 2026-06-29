@@ -188,10 +188,11 @@ cd /public/home/putianshu/vis_mlp/ifs_baseline
 # Inspect every sbatch command without submitting it.
 RUN_TAG=qcore_pangu2025_rerun DRY_RUN=1 bash submit_q_core_fair_experiment.sh
 
-# Submit with the already generated current Pangu-2025 lead24h station product.
-RUN_TAG=qcore_pangu2025_rerun \
-PANGU2025_STATION_FILE=/path/to/pangu_station_2025_lead24h.nc \
-bash submit_q_core_fair_experiment.sh
+# Submit with automatic discovery of the existing current lead24h station product.
+RUN_TAG=qcore_pangu2025_rerun bash submit_q_core_fair_experiment.sh
+
+# If it is stored elsewhere, pass the verified real path explicitly:
+# PANGU2025_STATION_FILE=/actual/path/pangu_station_2025_lead24h.nc
 ```
 
 If the station product must be regenerated first, pass
