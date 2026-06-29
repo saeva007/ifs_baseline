@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fail-fast audit for the Pangu-2025 q-core fair-comparison datasets.
+"""Staged audit for the Pangu-2025 q-core fair-comparison datasets.
 
 The audit is deliberately stricter than the training loader.  The loader can
 replace non-finite inputs after scaling, which is useful operationally but can
-hide a broken source field.  This script therefore checks the declared layout,
-actual arrays, physical sanity, split identity, and label identity before any
-S1/S2 training job is allowed to start.
+hide a broken source field.  This script therefore checks all inexpensive
+layout/time/label/pairing constraints before scanning the large feature arrays,
+and reports all issues found in the same stage before any S1/S2 job can start.
 """
 
 from __future__ import annotations
@@ -43,6 +43,8 @@ EXPECTED_ORDER = [
 EXPECTED_FEATURE_SET = "q_core_no_rh2m"
 EXPECTED_S2_MAX_VIS_M = 30000.0
 LEGACY_S1_MAX_VIS_M = 90000.0
+DEFAULT_NOMINAL_YEAR = 2025
+DEFAULT_NEXT_YEAR_SPILL_DAYS = 1
 S2_SPLITS = ("train", "val", "test")
 S1_SPLITS = ("train", "val")
 
@@ -164,6 +166,46 @@ def metadata_frame(path: Path, split: str) -> pd.DataFrame:
     return out
 
 
+def valid_time_scope_stats(
+    tag: str,
+    split: str,
+    meta: pd.DataFrame,
+    nominal_year: int,
+    next_year_spill_days: int,
+) -> Dict[str, object]:
+    """Validate valid times for a nominal initialization year.
+
+    The current products use 12 <= lead < 24 h.  Initializations on 31
+    December 2025 therefore legitimately verify on 1 January 2026.  The old
+    year-equality check confused initialization year with valid-time year.
+    """
+    if next_year_spill_days < 0:
+        raise ValueError(f"next_year_spill_days must be >= 0, got {next_year_spill_days}")
+    times = pd.to_datetime(meta["time_key"], utc=True)
+    allowed_start = pd.Timestamp(year=nominal_year, month=1, day=1, tz="UTC")
+    next_year_start = pd.Timestamp(year=nominal_year + 1, month=1, day=1, tz="UTC")
+    allowed_stop = next_year_start + pd.Timedelta(days=next_year_spill_days)
+    outside = (times < allowed_start) | (times >= allowed_stop)
+    if outside.any():
+        bad = times[outside]
+        examples = [str(v) for v in bad.iloc[:3].tolist()]
+        raise ValueError(
+            f"{tag}/{split}: {int(outside.sum())} valid times fall outside "
+            f"[{allowed_start}, {allowed_stop}); min={times.min()}, max={times.max()}, "
+            f"examples={examples}"
+        )
+    year_counts = times.dt.year.value_counts().sort_index()
+    spill = times >= next_year_start
+    return {
+        "valid_time_min_utc": str(times.min()),
+        "valid_time_max_utc": str(times.max()),
+        "valid_time_year_counts": {str(int(year)): int(count) for year, count in year_counts.items()},
+        "next_year_boundary_spill_rows": int(spill.sum()),
+        "allowed_valid_time_start_utc": str(allowed_start),
+        "allowed_valid_time_stop_exclusive_utc": str(allowed_stop),
+    }
+
+
 def iter_row_slices(n_rows: int, chunk_rows: int, max_rows: int) -> Iterable[slice]:
     n = n_rows if max_rows <= 0 else min(n_rows, max_rows)
     for start in range(0, n, chunk_rows):
@@ -253,12 +295,10 @@ def audit_dataset(
     tag: str,
     path: Path,
     splits: Sequence[str],
-    min_finite: float,
-    max_outside: float,
-    chunk_rows: int,
-    max_rows: int,
     require_meta: bool,
-) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
+    nominal_year: int,
+    next_year_spill_days: int,
+) -> Dict[str, object]:
     cfg = load_config(path)
     feature_set = normalized_feature_set(cfg.get("feature_set"))
     if feature_set != EXPECTED_FEATURE_SET:
@@ -288,7 +328,6 @@ def audit_dataset(
     label_upper_m, label_policy_source = visibility_label_policy(tag, cfg, require_meta)
 
     split_summary: Dict[str, object] = {}
-    feature_rows: List[Dict[str, object]] = []
     for split in splits:
         x_path = path / f"X_{split}.npy"
         y_path = path / f"y_{split}.npy"
@@ -308,37 +347,63 @@ def audit_dataset(
             meta = metadata_frame(path, split)
             if len(meta) != len(y):
                 raise ValueError(f"{tag}/{split}: metadata rows={len(meta)} but labels={len(y)}")
-            years = pd.to_datetime(meta["time_key"], utc=True).dt.year.unique().tolist()
-            if years != [2025]:
-                raise ValueError(f"{tag}/{split}: expected 2025 valid times only, got years={years}")
-        rows = scan_dynamic_features(x, window, order, chunk_rows, max_rows)
-        for row in rows:
-            row.update({"source": tag, "split": split, "dataset_dir": str(path)})
-            if float(row["finite_fraction"]) < min_finite:
-                raise ValueError(
-                    f"{tag}/{split}/{row['feature']}: finite_fraction={row['finite_fraction']:.6f} "
-                    f"is below {min_finite:.6f}"
-                )
-            if float(row["nonzero_fraction_of_finite"]) <= 1e-6:
-                raise ValueError(f"{tag}/{split}/{row['feature']}: channel is effectively all zero")
-            if float(row["outside_plausible_fraction"]) > max_outside:
-                raise ValueError(
-                    f"{tag}/{split}/{row['feature']}: outside-plausible fraction "
-                    f"{row['outside_plausible_fraction']:.6f} exceeds {max_outside:.6f}"
-                )
-        feature_rows.extend(rows)
+            time_stats = valid_time_scope_stats(
+                tag, split, meta, nominal_year, next_year_spill_days
+            )
+        else:
+            time_stats = {}
         split_summary[split] = {
             "rows": int(len(y)),
             "row_width": int(x.shape[1]),
             "static_dim": static_dim,
             **label_stats,
+            **time_stats,
         }
     return {
         "path": str(path),
         "config": cfg,
         "label_policy_source": label_policy_source,
         "splits": split_summary,
-    }, feature_rows
+    }
+
+
+def audit_dataset_features(
+    tag: str,
+    path: Path,
+    splits: Sequence[str],
+    cfg: Mapping[str, object],
+    min_finite: float,
+    max_outside: float,
+    chunk_rows: int,
+    max_rows: int,
+) -> Tuple[List[Dict[str, object]], List[str]]:
+    """Scan every requested split and return all quality issues together."""
+    window = int(cfg.get("window", 12))
+    order = [str(v) for v in cfg.get("dynamic_feature_order", [])]
+    feature_rows: List[Dict[str, object]] = []
+    issues: List[str] = []
+    for split in splits:
+        x = np.load(path / f"X_{split}.npy", mmap_mode="r")
+        rows = scan_dynamic_features(x, window, order, chunk_rows, max_rows)
+        for row in rows:
+            row.update({"source": tag, "split": split, "dataset_dir": str(path)})
+            finite_fraction = float(row["finite_fraction"])
+            nonzero_fraction = float(row["nonzero_fraction_of_finite"])
+            outside_fraction = float(row["outside_plausible_fraction"])
+            if finite_fraction < min_finite:
+                issues.append(
+                    f"{tag}/{split}/{row['feature']}: finite_fraction={finite_fraction:.6f} "
+                    f"is below {min_finite:.6f}"
+                )
+            if nonzero_fraction <= 1e-6:
+                issues.append(f"{tag}/{split}/{row['feature']}: channel is effectively all zero")
+            if outside_fraction > max_outside:
+                issues.append(
+                    f"{tag}/{split}/{row['feature']}: outside-plausible fraction "
+                    f"{outside_fraction:.6f} exceeds {max_outside:.6f}"
+                )
+        feature_rows.extend(rows)
+    return feature_rows, issues
 
 
 def audit_paired_splits(
@@ -347,6 +412,7 @@ def audit_paired_splits(
 ) -> Tuple[List[Dict[str, object]], Dict[str, List[Tuple[str, str]]]]:
     coverage_rows: List[Dict[str, object]] = []
     common_keys_by_split: Dict[str, List[Tuple[str, str]]] = {}
+    issues: List[str] = []
     for split in splits:
         frames: Dict[str, pd.DataFrame] = {}
         labels: Dict[str, pd.Series] = {}
@@ -359,15 +425,17 @@ def audit_paired_splits(
             common_index = frame.index if common_index is None else common_index.intersection(frame.index, sort=False)
         assert common_index is not None
         if len(common_index) == 0:
-            raise RuntimeError(f"{split}: no common (time, station_id) rows across sources")
+            issues.append(f"{split}: no common (time, station_id) rows across sources")
+            common_keys_by_split[split] = []
+            continue
         common_index = common_index.sort_values()
         ref_tag = next(iter(sources))
         ref_y = labels[ref_tag].reindex(common_index).to_numpy()
         for tag, frame in frames.items():
             y = labels[tag].reindex(common_index).to_numpy()
             if not np.allclose(ref_y, y, rtol=0.0, atol=1e-3, equal_nan=False):
-                mismatch = int((np.abs(ref_y - y) > 1e-3).sum())
-                raise ValueError(f"{split}: {tag} has {mismatch} labels inconsistent with {ref_tag}")
+                mismatch = int((~np.isclose(ref_y, y, rtol=0.0, atol=1e-3, equal_nan=False)).sum())
+                issues.append(f"{split}: {tag} has {mismatch} labels inconsistent with {ref_tag}")
             coverage_rows.append(
                 {
                     "split": split,
@@ -377,7 +445,10 @@ def audit_paired_splits(
                     "common_fraction": float(len(common_index) / max(len(frame), 1)),
                 }
             )
-        validate_shared_covariates(sources, frames, common_index, split, ref_tag)
+        try:
+            validate_shared_covariates(sources, frames, common_index, split, ref_tag)
+        except Exception as exc:
+            issues.append(f"{split}: shared-covariate check failed: {type(exc).__name__}: {exc}")
         common_keys_by_split[split] = [(str(a), str(b)) for a, b in common_index.tolist()]
 
     seen: set[Tuple[str, str]] = set()
@@ -385,8 +456,10 @@ def audit_paired_splits(
         keys = set(common_keys_by_split[split])
         overlap = seen.intersection(keys)
         if overlap:
-            raise ValueError(f"Split leakage: {split} shares {len(overlap)} sample keys with an earlier split")
+            issues.append(f"Split leakage: {split} shares {len(overlap)} sample keys with an earlier split")
         seen.update(keys)
+    if issues:
+        raise ValueError("Paired-sample audit found issue(s):\n- " + "\n- ".join(issues))
     return coverage_rows, common_keys_by_split
 
 
@@ -457,32 +530,65 @@ def validate_shared_protocol(dataset_results: Mapping[str, Dict[str, object]]) -
         "test_last_days",
         "gap_hours",
         "max_vis_threshold",
+        "fe_dim",
+        "fog_fe_dim",
+        "pm_time_match",
     )
     tags = list(dataset_results)
     ref_tag = tags[0]
     ref_cfg = dataset_results[ref_tag]["config"]
+    issues: List[str] = []
     for tag in tags[1:]:
         cfg = dataset_results[tag]["config"]
         mismatches = {field: (ref_cfg.get(field), cfg.get(field)) for field in fields if ref_cfg.get(field) != cfg.get(field)}
         if mismatches:
-            raise ValueError(f"Protocol mismatch {ref_tag} vs {tag}: {mismatches}")
+            issues.append(f"Protocol mismatch {ref_tag} vs {tag}: {mismatches}")
+    if issues:
+        raise ValueError("\n".join(issues))
 
 
 def validate_cross_source_units(feature_df: pd.DataFrame, source_tags: Sequence[str]) -> None:
     s2 = feature_df[feature_df["source"].isin(source_tags)].copy()
+    issues: List[str] = []
     for split in S2_SPLITS:
         part = s2[s2["split"] == split]
         mslp = part[part["feature"] == "MSLP"].set_index("source")["mean"]
         if len(mslp) != len(source_tags):
-            raise ValueError(f"{split}: missing MSLP audit rows for one or more sources")
-        unit_family = {tag: ("Pa" if float(value) > 20000.0 else "hPa") for tag, value in mslp.items()}
-        if len(set(unit_family.values())) != 1:
-            raise ValueError(f"{split}: cross-source MSLP unit mismatch detected: {unit_family}")
+            issues.append(f"{split}: missing MSLP audit rows for one or more sources")
+        else:
+            unit_family = {tag: ("Pa" if float(value) > 20000.0 else "hPa") for tag, value in mslp.items()}
+            if len(set(unit_family.values())) != 1:
+                issues.append(f"{split}: cross-source MSLP unit mismatch detected: {unit_family}")
         for feature in ("Q_1000", "Q_925"):
             q = part[part["feature"] == feature].set_index("source")["mean"]
+            if len(q) != len(source_tags):
+                issues.append(f"{split}: missing {feature} audit rows for one or more sources")
+                continue
             bad = {tag: float(value) for tag, value in q.items() if not (1e-5 < float(value) < 0.04)}
             if bad:
-                raise ValueError(f"{split}: {feature} does not look like kg kg-1 for sources {bad}")
+                issues.append(f"{split}: {feature} does not look like kg kg-1 for sources {bad}")
+    if issues:
+        raise ValueError("Cross-source unit audit found issue(s):\n- " + "\n- ".join(issues))
+
+
+def write_failure_report(
+    out_dir: Path,
+    stage: str,
+    issues: Sequence[str],
+    partial: Mapping[str, object] | None = None,
+) -> None:
+    payload = {
+        "status": "failed",
+        "stage": stage,
+        "issues": list(issues),
+        "partial": dict(partial or {}),
+    }
+    with (out_dir / "q_core_data_audit_failed.json").open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+
+def raise_stage_failure(stage: str, issues: Sequence[str]) -> None:
+    raise RuntimeError(f"q-core audit failed during {stage}:\n- " + "\n- ".join(issues))
 
 
 def main() -> None:
@@ -494,47 +600,136 @@ def main() -> None:
     ap.add_argument("--max-outside-plausible-fraction", type=float, default=0.01)
     ap.add_argument("--chunk-rows", type=int, default=50000)
     ap.add_argument("--max-rows-per-split", type=int, default=0, help="0 scans every row")
+    ap.add_argument("--nominal-year", type=int, default=DEFAULT_NOMINAL_YEAR)
+    ap.add_argument(
+        "--next-year-spill-days",
+        type=int,
+        default=DEFAULT_NEXT_YEAR_SPILL_DAYS,
+        help="Allow valid-time spill from 31 December initializations; 1 is correct for lead < 24 h.",
+    )
     args = ap.parse_args()
 
     sources = parse_specs(args.sources)
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale_name in (
+        "q_core_data_audit.json",
+        "q_core_data_audit_failed.json",
+        "q_core_feature_quality.csv",
+        "q_core_common_sample_coverage.csv",
+    ):
+        stale_path = out_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     results: Dict[str, Dict[str, object]] = {}
-    feature_rows: List[Dict[str, object]] = []
+    structural_issues: List[str] = []
     for tag, path in sources.items():
-        result, rows = audit_dataset(
-            tag,
-            path,
-            S2_SPLITS,
+        try:
+            results[tag] = audit_dataset(
+                tag,
+                path,
+                S2_SPLITS,
+                require_meta=True,
+                nominal_year=args.nominal_year,
+                next_year_spill_days=args.next_year_spill_days,
+            )
+        except Exception as exc:
+            structural_issues.append(f"{tag}: {type(exc).__name__}: {exc}")
+
+    s1_path = Path(args.s1_dir).expanduser().resolve()
+    s1_result: Dict[str, object] = {}
+    try:
+        s1_result = audit_dataset(
+            "s1_q_core_no_rh2m",
+            s1_path,
+            S1_SPLITS,
+            require_meta=False,
+            nominal_year=args.nominal_year,
+            next_year_spill_days=args.next_year_spill_days,
+        )
+    except Exception as exc:
+        structural_issues.append(f"s1_q_core_no_rh2m: {type(exc).__name__}: {exc}")
+
+    if structural_issues:
+        write_failure_report(
+            out_dir,
+            "structural_time_label_checks",
+            structural_issues,
+            {"sources_completed": results, "s1_completed": s1_result},
+        )
+        raise_stage_failure("structural_time_label_checks", structural_issues)
+
+    cross_issues: List[str] = []
+    coverage_rows: List[Dict[str, object]] = []
+    common_keys: Dict[str, List[Tuple[str, str]]] = {}
+    try:
+        validate_shared_protocol(results)
+    except Exception as exc:
+        cross_issues.append(f"shared protocol: {type(exc).__name__}: {exc}")
+    try:
+        coverage_rows, common_keys = audit_paired_splits(sources, S2_SPLITS)
+    except Exception as exc:
+        cross_issues.append(f"paired samples: {type(exc).__name__}: {exc}")
+    if cross_issues:
+        write_failure_report(
+            out_dir,
+            "cross_source_pairing_checks",
+            cross_issues,
+            {"sources": results, "s1": s1_result},
+        )
+        raise_stage_failure("cross_source_pairing_checks", cross_issues)
+
+    feature_rows: List[Dict[str, object]] = []
+    feature_issues: List[str] = []
+    for tag, path in sources.items():
+        try:
+            rows, issues = audit_dataset_features(
+                tag,
+                path,
+                S2_SPLITS,
+                results[tag]["config"],
+                args.min_feature_finite_fraction,
+                args.max_outside_plausible_fraction,
+                args.chunk_rows,
+                args.max_rows_per_split,
+            )
+            feature_rows.extend(rows)
+            feature_issues.extend(issues)
+        except Exception as exc:
+            feature_issues.append(f"{tag}: feature scan failed: {type(exc).__name__}: {exc}")
+    try:
+        rows, issues = audit_dataset_features(
+            "s1_q_core_no_rh2m",
+            s1_path,
+            S1_SPLITS,
+            s1_result["config"],
             args.min_feature_finite_fraction,
             args.max_outside_plausible_fraction,
             args.chunk_rows,
             args.max_rows_per_split,
-            require_meta=True,
         )
-        results[tag] = result
         feature_rows.extend(rows)
-
-    s1_result, s1_rows = audit_dataset(
-        "s1_q_core_no_rh2m",
-        Path(args.s1_dir).expanduser().resolve(),
-        S1_SPLITS,
-        args.min_feature_finite_fraction,
-        args.max_outside_plausible_fraction,
-        args.chunk_rows,
-        args.max_rows_per_split,
-        require_meta=False,
-    )
-    feature_rows.extend(s1_rows)
-    validate_shared_protocol(results)
-    coverage_rows, common_keys = audit_paired_splits(sources, S2_SPLITS)
+        feature_issues.extend(issues)
+    except Exception as exc:
+        feature_issues.append(f"s1_q_core_no_rh2m: feature scan failed: {type(exc).__name__}: {exc}")
 
     feature_df = pd.DataFrame(feature_rows)
-    validate_cross_source_units(feature_df, list(sources))
     feature_df.to_csv(out_dir / "q_core_feature_quality.csv", index=False)
+    try:
+        validate_cross_source_units(feature_df, list(sources))
+    except Exception as exc:
+        feature_issues.append(f"cross-source units: {type(exc).__name__}: {exc}")
     coverage_df = pd.DataFrame(coverage_rows)
     coverage_df.to_csv(out_dir / "q_core_common_sample_coverage.csv", index=False)
+    if feature_issues:
+        write_failure_report(
+            out_dir,
+            "feature_quality_and_unit_checks",
+            feature_issues,
+            {"sources": results, "s1": s1_result},
+        )
+        raise_stage_failure("feature_quality_and_unit_checks", feature_issues)
     summary = {
         "status": "passed",
         "feature_set": EXPECTED_FEATURE_SET,
@@ -546,6 +741,8 @@ def main() -> None:
             "min_feature_finite_fraction": args.min_feature_finite_fraction,
             "max_outside_plausible_fraction": args.max_outside_plausible_fraction,
             "max_rows_per_split": args.max_rows_per_split,
+            "nominal_year": args.nominal_year,
+            "next_year_spill_days": args.next_year_spill_days,
         },
     }
     with (out_dir / "q_core_data_audit.json").open("w", encoding="utf-8") as f:

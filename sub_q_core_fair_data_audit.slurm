@@ -30,6 +30,8 @@ ERA5_2025_DATA_DIR="${ERA5_2025_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era
 MIN_FEATURE_FINITE_FRACTION="${MIN_FEATURE_FINITE_FRACTION:-0.99}"
 MAX_OUTSIDE_PLAUSIBLE_FRACTION="${MAX_OUTSIDE_PLAUSIBLE_FRACTION:-0.01}"
 MAX_ROWS_PER_SPLIT="${AUDIT_MAX_ROWS_PER_SPLIT:-0}"
+NOMINAL_YEAR="${NOMINAL_YEAR:-2025}"
+NEXT_YEAR_SPILL_DAYS="${NEXT_YEAR_SPILL_DAYS:-1}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
 cd "${BASELINE_DIR}"
@@ -43,7 +45,8 @@ CMD=(
     --min-feature-finite-fraction "${MIN_FEATURE_FINITE_FRACTION}"
     --max-outside-plausible-fraction "${MAX_OUTSIDE_PLAUSIBLE_FRACTION}"
     --max-rows-per-split "${MAX_ROWS_PER_SPLIT}"
+    --nominal-year "${NOMINAL_YEAR}"
+    --next-year-spill-days "${NEXT_YEAR_SPILL_DAYS}"
 )
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"
-

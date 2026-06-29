@@ -210,6 +210,14 @@ common `(valid_time, station_id)` intersection. Its outputs are written under
 The four S2 builders declare and enforce a `30000 m` visibility-label ceiling;
 the audit reads this value from each `dataset_build_config.json` rather than
 assuming that clear labels above 10 km are invalid.
+The experiment year is the forecast-initialization year, not a strict
+valid-time year. With `12 <= lead < 24 h`, 31 December 2025 initializations can
+legitimately verify on 1 January 2026. The audit therefore accepts valid times
+from 1 January 2025 through the one-day next-year boundary spill, while still
+rejecting dates beyond that physically permitted interval. It performs all
+inexpensive structural/time/label/pairing checks before scanning the large
+feature arrays and writes every issue found in the failing stage to
+`data_audit/q_core_data_audit_failed.json`.
 
 If all data builds completed but the audit failed, do not delete or rebuild the
 versioned datasets. After fixing and syncing the audit code, resume from the
