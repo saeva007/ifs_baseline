@@ -41,6 +41,8 @@ EXPECTED_ORDER = [
     "PM25_ugm3",
 ]
 EXPECTED_FEATURE_SET = "q_core_no_rh2m"
+EXPECTED_S2_MAX_VIS_M = 30000.0
+LEGACY_S1_MAX_VIS_M = 90000.0
 S2_SPLITS = ("train", "val", "test")
 S1_SPLITS = ("train", "val")
 
@@ -85,6 +87,58 @@ def normalized_station(values: pd.Series) -> pd.Series:
         .str.replace(r"\.0$", "", regex=True)
         .str.upper()
     )
+
+
+def visibility_label_policy(
+    tag: str,
+    cfg: Mapping[str, object],
+    require_meta: bool,
+) -> Tuple[float, str]:
+    """Return the label ceiling declared by the dataset builder.
+
+    S2 builders all retain observed visibility through 30 km.  Historical S1
+    derived configs predate this metadata field; their source builder retains
+    labels through 90 km, so that narrowly scoped fallback remains supported.
+    """
+    raw = cfg.get("max_vis_threshold")
+    if raw is None:
+        if require_meta:
+            raise ValueError(f"{tag}: dataset config is missing max_vis_threshold")
+        return LEGACY_S1_MAX_VIS_M, "legacy_s1_builder_fallback"
+    try:
+        upper = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{tag}: invalid max_vis_threshold={raw!r}") from exc
+    if not math.isfinite(upper) or upper <= 0:
+        raise ValueError(f"{tag}: max_vis_threshold must be finite and positive, got {raw!r}")
+    if require_meta and not math.isclose(upper, EXPECTED_S2_MAX_VIS_M, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError(
+            f"{tag}: max_vis_threshold={upper:g} m, expected {EXPECTED_S2_MAX_VIS_M:g} m "
+            "for the paired S2 builders"
+        )
+    return upper, "dataset_build_config"
+
+
+def validate_visibility_labels(tag: str, split: str, y: np.ndarray, upper_m: float) -> Dict[str, object]:
+    y_arr = np.asarray(y, dtype=np.float64)
+    finite = np.isfinite(y_arr)
+    n_nonfinite = int((~finite).sum())
+    n_negative = int((finite & (y_arr < 0)).sum())
+    n_above = int((finite & (y_arr > upper_m)).sum())
+    finite_values = y_arr[finite]
+    label_min = float(np.min(finite_values)) if finite_values.size else math.nan
+    label_max = float(np.max(finite_values)) if finite_values.size else math.nan
+    if n_nonfinite or n_negative or n_above:
+        raise ValueError(
+            f"{tag}/{split}: invalid visibility labels for declared [0, {upper_m:g}] m range; "
+            f"nonfinite={n_nonfinite}, negative={n_negative}, above_upper={n_above}, "
+            f"finite_min={label_min:g}, finite_max={label_max:g}"
+        )
+    return {
+        "label_min_m": label_min,
+        "label_max_m": label_max,
+        "label_upper_bound_m": float(upper_m),
+    }
 
 
 def metadata_frame(path: Path, split: str) -> pd.DataFrame:
@@ -231,6 +285,7 @@ def audit_dataset(
     fe_dim = int(cfg.get("fe_dim", -1))
     if window != 12 or fe_dim < 0:
         raise ValueError(f"{tag}: unexpected window/fe_dim: window={window}, fe_dim={fe_dim}")
+    label_upper_m, label_policy_source = visibility_label_policy(tag, cfg, require_meta)
 
     split_summary: Dict[str, object] = {}
     feature_rows: List[Dict[str, object]] = []
@@ -248,9 +303,7 @@ def audit_dataset(
             raise ValueError(
                 f"{tag}/{split}: row width {x.shape[1]} implies static_dim={static_dim}; expected 6"
             )
-        y_arr = np.asarray(y, dtype=np.float64)
-        if not np.isfinite(y_arr).all() or (y_arr < 0).any() or (y_arr > 10000).any():
-            raise ValueError(f"{tag}/{split}: visibility labels contain non-finite or out-of-range values")
+        label_stats = validate_visibility_labels(tag, split, y, label_upper_m)
         if require_meta:
             meta = metadata_frame(path, split)
             if len(meta) != len(y):
@@ -278,10 +331,14 @@ def audit_dataset(
             "rows": int(len(y)),
             "row_width": int(x.shape[1]),
             "static_dim": static_dim,
-            "label_min_m": float(np.min(y_arr)),
-            "label_max_m": float(np.max(y_arr)),
+            **label_stats,
         }
-    return {"path": str(path), "config": cfg, "splits": split_summary}, feature_rows
+    return {
+        "path": str(path),
+        "config": cfg,
+        "label_policy_source": label_policy_source,
+        "splits": split_summary,
+    }, feature_rows
 
 
 def audit_paired_splits(
@@ -392,7 +449,15 @@ def validate_shared_covariates(
 
 
 def validate_shared_protocol(dataset_results: Mapping[str, Dict[str, object]]) -> None:
-    fields = ("window", "step", "split", "val_last_days", "test_last_days", "gap_hours")
+    fields = (
+        "window",
+        "step",
+        "split",
+        "val_last_days",
+        "test_last_days",
+        "gap_hours",
+        "max_vis_threshold",
+    )
     tags = list(dataset_results)
     ref_tag = tags[0]
     ref_cfg = dataset_results[ref_tag]["config"]

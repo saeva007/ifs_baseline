@@ -18,6 +18,7 @@ BUILD_PANGU_STATION="${BUILD_PANGU_STATION:-0}"
 PANGU2025_STATION_FILE="${PANGU2025_STATION_FILE:-}"
 ALLOW_EXISTING_RUN="${ALLOW_EXISTING_RUN:-0}"
 ALLOW_UNVERIFIED_PANGU_LEAD="${ALLOW_UNVERIFIED_PANGU_LEAD:-0}"
+RESUME_FROM_AUDIT="${RESUME_FROM_AUDIT:-0}"
 
 case "${PANGU2025_STATION_FILE}" in
     /path/to/*|PATH_TO_*|REPLACE_ME*)
@@ -44,6 +45,7 @@ IFS_DATA_DIR="${IFS_DATA_DIR:-${DATA_ROOT}/ifs}"
 PANGU2025_DATA_DIR="${PANGU2025_DATA_DIR:-${DATA_ROOT}/pangu2025}"
 ERA5_2025_DATA_DIR="${ERA5_2025_DATA_DIR:-${DATA_ROOT}/era5_2025}"
 S1_DATA_DIR="${S1_DATA_DIR:-${DATA_ROOT}/s1}"
+EVAL_ROOT="${BASE}/paper_eval_results_pm10_pm25_journal/q_core_fair_pangu2025/${RUN_TAG}"
 
 is_true() {
     [[ "$1" == "1" || "$1" == "true" || "$1" == "TRUE" ]]
@@ -101,6 +103,11 @@ if [[ -z "${PANGU2025_STATION_FILE}" ]]; then
     PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc"
 fi
 
+if is_true "${RESUME_FROM_AUDIT}" && is_true "${BUILD_PANGU_STATION}"; then
+    echo "ERROR: RESUME_FROM_AUDIT=1 reuses completed datasets and cannot be combined with BUILD_PANGU_STATION=1." >&2
+    exit 2
+fi
+
 if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_EXISTING_RUN}"; then
     existing=()
     for path in \
@@ -108,14 +115,22 @@ if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_EXISTING_RUN}"; then
         "${CKPT_DIR}/${TIANJI_RUN_ID}_S2_PhaseB_best_score.pt" \
         "${CKPT_DIR}/${IFS_RUN_ID}_S2_PhaseB_best_score.pt" \
         "${CKPT_DIR}/${PANGU2025_RUN_ID}_S2_PhaseB_best_score.pt" \
-        "${CKPT_DIR}/${ERA5_2025_RUN_ID}_S2_PhaseB_best_score.pt" \
-        "${DATA_ROOT}" \
-        "${BASE}/paper_eval_results_pm10_pm25_journal/q_core_fair_pangu2025/${RUN_TAG}"
+        "${CKPT_DIR}/${ERA5_2025_RUN_ID}_S2_PhaseB_best_score.pt"
     do
         if [[ -e "${path}" ]]; then
             existing+=("${path}")
         fi
     done
+    if ! is_true "${RESUME_FROM_AUDIT}" && [[ -e "${DATA_ROOT}" ]]; then
+        existing+=("${DATA_ROOT}")
+    fi
+    if is_true "${RESUME_FROM_AUDIT}"; then
+        if [[ -e "${EVAL_ROOT}/argmax_paired/q_core_paired_common_metrics.csv" ]]; then
+            existing+=("${EVAL_ROOT}/argmax_paired/q_core_paired_common_metrics.csv")
+        fi
+    elif [[ -e "${EVAL_ROOT}" ]]; then
+        existing+=("${EVAL_ROOT}")
+    fi
     if (( ${#existing[@]} > 0 )); then
         printf 'ERROR: RUN_TAG=%s would reuse existing artifacts:\n' "${RUN_TAG}" >&2
         printf '  %s\n' "${existing[@]}" >&2
@@ -130,6 +145,7 @@ echo "FEATURE_SET=${FEATURE_SET}"
 echo "PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}"
 echo "DATA_ROOT=${DATA_ROOT}"
 echo "S1_RUN_ID=${S1_RUN_ID}"
+echo "RESUME_FROM_AUDIT=${RESUME_FROM_AUDIT}"
 
 pangu_station_dep=""
 if is_true "${BUILD_PANGU_STATION}"; then
@@ -137,12 +153,12 @@ if is_true "${BUILD_PANGU_STATION}"; then
         --export="ALL,OUT_FILE=${PANGU2025_STATION_FILE},YEAR=2025" \
         sub_pangu_station_idw.slurm)"
     echo "Pangu station interpolation: job ${pangu_station_dep}"
-elif ! is_true "${DRY_RUN}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
+elif ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
     echo "ERROR: Pangu-2025 station file is missing or empty: ${PANGU2025_STATION_FILE}" >&2
     echo "Set PANGU2025_STATION_FILE to the current lead12_23h station product, or set BUILD_PANGU_STATION=1." >&2
     exit 2
 fi
-if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
+if ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && ! is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
     if [[ "$(basename "${PANGU2025_STATION_FILE}")" != *lead12_23h* ]]; then
         echo "ERROR: Pangu station filename does not identify the required 12 <= lead < 24 h product: ${PANGU2025_STATION_FILE}" >&2
         echo "Use pangu_station_2025_lead12_23h.nc, or set ALLOW_UNVERIFIED_PANGU_LEAD=1 only after manual metadata verification." >&2
@@ -150,34 +166,68 @@ if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
     fi
 fi
 
-s1_data_job="$(submit s1_data \
-    --export="ALL,FEATURE_SET=${FEATURE_SET},OUT_DIR=${S1_DATA_DIR}" \
-    sub_s1_overlap_data.slurm)"
-tianji_data_job="$(submit tianji_data \
-    --export="ALL,FEATURE_SET=${FEATURE_SET},OUT_DIR=${TIANJI_DATA_DIR}" \
-    sub_tianji_overlap_data.slurm)"
-ifs_data_job="$(submit ifs_data \
-    --export="ALL,FEATURE_SET=${FEATURE_SET},YEAR=2025,OUT_DIR=${IFS_DATA_DIR}" \
-    sub_ifs_data.slurm)"
+require_dataset_files() {
+    local label="$1"
+    local dir="$2"
+    local require_meta="$3"
+    shift 3
+    local split path
+    for path in "${dir}/dataset_build_config.json"; do
+        [[ -s "${path}" ]] || { echo "ERROR: ${label} resume input is missing or empty: ${path}" >&2; exit 2; }
+    done
+    for split in "$@"; do
+        for path in "${dir}/X_${split}.npy" "${dir}/y_${split}.npy"; do
+            [[ -s "${path}" ]] || { echo "ERROR: ${label} resume input is missing or empty: ${path}" >&2; exit 2; }
+        done
+        if is_true "${require_meta}"; then
+            path="${dir}/meta_${split}.csv"
+            [[ -s "${path}" ]] || { echo "ERROR: ${label} resume input is missing or empty: ${path}" >&2; exit 2; }
+        fi
+    done
+}
 
-pangu_data_args=(
-    --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},SOURCE_FILE=${PANGU2025_STATION_FILE},OUT_DIR=${PANGU2025_DATA_DIR}"
-)
-if [[ -n "${pangu_station_dep}" ]]; then
-    pangu_data_args+=(--dependency="afterok:${pangu_station_dep}")
+if is_true "${RESUME_FROM_AUDIT}"; then
+    if ! is_true "${DRY_RUN}"; then
+        require_dataset_files s1 "${S1_DATA_DIR}" 0 train val
+        require_dataset_files tianji "${TIANJI_DATA_DIR}" 1 train val test
+        require_dataset_files ifs "${IFS_DATA_DIR}" 1 train val test
+        require_dataset_files pangu2025 "${PANGU2025_DATA_DIR}" 1 train val test
+        require_dataset_files era5_2025 "${ERA5_2025_DATA_DIR}" 1 train val test
+    fi
+    data_deps="reused_existing_datasets"
+    audit_job="$(submit data_audit \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
+        sub_q_core_fair_data_audit.slurm)"
+else
+    s1_data_job="$(submit s1_data \
+        --export="ALL,FEATURE_SET=${FEATURE_SET},OUT_DIR=${S1_DATA_DIR}" \
+        sub_s1_overlap_data.slurm)"
+    tianji_data_job="$(submit tianji_data \
+        --export="ALL,FEATURE_SET=${FEATURE_SET},OUT_DIR=${TIANJI_DATA_DIR}" \
+        sub_tianji_overlap_data.slurm)"
+    ifs_data_job="$(submit ifs_data \
+        --export="ALL,FEATURE_SET=${FEATURE_SET},YEAR=2025,OUT_DIR=${IFS_DATA_DIR}" \
+        sub_ifs_data.slurm)"
+
+    pangu_data_args=(
+        --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},SOURCE_FILE=${PANGU2025_STATION_FILE},OUT_DIR=${PANGU2025_DATA_DIR}"
+    )
+    if [[ -n "${pangu_station_dep}" ]]; then
+        pangu_data_args+=(--dependency="afterok:${pangu_station_dep}")
+    fi
+    pangu_data_args+=(sub_station_source_overlap_data.slurm)
+    pangu_data_job="$(submit pangu_data "${pangu_data_args[@]}")"
+
+    era5_data_job="$(submit era5_data \
+        --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},OUT_DIR=${ERA5_2025_DATA_DIR}" \
+        sub_station_source_overlap_data.slurm)"
+
+    data_deps="$(join_by_colon "${s1_data_job}" "${tianji_data_job}" "${ifs_data_job}" "${pangu_data_job}" "${era5_data_job}")"
+    audit_job="$(submit data_audit \
+        --dependency="afterok:${data_deps}" \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
+        sub_q_core_fair_data_audit.slurm)"
 fi
-pangu_data_args+=(sub_station_source_overlap_data.slurm)
-pangu_data_job="$(submit pangu_data "${pangu_data_args[@]}")"
-
-era5_data_job="$(submit era5_data \
-    --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},OUT_DIR=${ERA5_2025_DATA_DIR}" \
-    sub_station_source_overlap_data.slurm)"
-
-data_deps="$(join_by_colon "${s1_data_job}" "${tianji_data_job}" "${ifs_data_job}" "${pangu_data_job}" "${era5_data_job}")"
-audit_job="$(submit data_audit \
-    --dependency="afterok:${data_deps}" \
-    --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
-    sub_q_core_fair_data_audit.slurm)"
 
 s1_train_job="$(submit s1_train \
     --dependency="afterok:${audit_job}" \
@@ -206,9 +256,17 @@ eval_job="$(submit paired_eval \
     --export="ALL,RUN_TAG=${RUN_TAG},S1_RUN_ID=${S1_RUN_ID},TIANJI_RUN_ID=${TIANJI_RUN_ID},IFS_RUN_ID=${IFS_RUN_ID},PANGU2025_RUN_ID=${PANGU2025_RUN_ID},ERA5_2025_RUN_ID=${ERA5_2025_RUN_ID},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
     sub_static_rnn_q_core_fair_eval.slurm)"
 
-summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
+if is_true "${RESUME_FROM_AUDIT}"; then
+    summary_path="logs/q_core_fair_${RUN_TAG}_resume_$(date +%Y%m%d_%H%M%S)_submission.txt"
+else
+    summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
+fi
 {
-    echo "experiment_status=scheduled"
+    if is_true "${RESUME_FROM_AUDIT}"; then
+        echo "experiment_status=scheduled_resume_from_audit"
+    else
+        echo "experiment_status=scheduled"
+    fi
     echo "run_tag=${RUN_TAG}"
     echo "feature_set=${FEATURE_SET}"
     echo "threshold_mode=argmax"
@@ -218,6 +276,7 @@ summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
     echo "era5_role=reference_analysis"
     echo "pangu_station_file=${PANGU2025_STATION_FILE}"
     echo "data_root=${DATA_ROOT}"
+    echo "resume_from_audit=${RESUME_FROM_AUDIT}"
     echo "data_jobs=${data_deps}"
     echo "audit_job=${audit_job}"
     echo "s1_train_job=${s1_train_job}"
@@ -231,4 +290,4 @@ summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
 } | tee "${summary_path}"
 
 echo "Submission manifest: ${summary_path}"
-echo "The evaluation job will start only if every data, audit, S1, and S2 dependency succeeds."
+echo "The evaluation job will start only if the audit, S1, and every S2 dependency succeeds."

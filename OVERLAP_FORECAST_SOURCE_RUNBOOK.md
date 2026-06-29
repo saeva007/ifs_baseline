@@ -207,6 +207,28 @@ channels, checks broad physical ranges and 2025 valid times, verifies identical
 month-tail split settings, and confirms that visibility labels agree on the
 common `(valid_time, station_id)` intersection. Its outputs are written under
 `paper_eval_results_pm10_pm25_journal/q_core_fair_pangu2025/<run_tag>/data_audit`.
+The four S2 builders declare and enforce a `30000 m` visibility-label ceiling;
+the audit reads this value from each `dataset_build_config.json` rather than
+assuming that clear labels above 10 km are invalid.
+
+If all data builds completed but the audit failed, do not delete or rebuild the
+versioned datasets. After fixing and syncing the audit code, resume from the
+existing datasets with the same run tag:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+RUN_TAG=qcore_pangu2025_rerun_20260629 \
+PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h.nc \
+RESUME_FROM_AUDIT=1 \
+bash submit_q_core_fair_experiment.sh
+```
+
+This mode verifies that every expected S1/S2 array, metadata file, and build
+config is present, submits a fresh audit with no stale Slurm dependency, and
+then recreates only the `audit -> S1 -> four S2 -> paired evaluation` chain.
+It writes a timestamped resume manifest so the original failed submission
+record is preserved. It refuses existing checkpoints unless
+`ALLOW_EXISTING_RUN=1` is deliberately supplied.
 
 The final evaluation always uses each source-specific S2 checkpoint with
 `argmax`. It first saves the ordinary per-source predictions, then recomputes

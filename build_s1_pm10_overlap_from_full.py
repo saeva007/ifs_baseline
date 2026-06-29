@@ -59,6 +59,7 @@ SOURCE_BASE_DYN = WINDOW * SOURCE_DYN_VARS  # 324
 STATIC_VEG = 6  # 5 + 1
 SOURCE_FE_DIM = 36
 SOURCE_EXPECTED_ROW = SOURCE_BASE_DYN + STATIC_VEG + SOURCE_FE_DIM
+DEFAULT_S1_MAX_VIS_THRESHOLD = 90000.0
 
 
 def _output_dims(feature_set: str, feature_vars: list[str]) -> tuple[int, int, int, int]:
@@ -148,6 +149,20 @@ def copy_if_exists(src_dir: str, name: str, dst_dir: str) -> bool:
     return True
 
 
+def source_max_vis_threshold(source_dir: str) -> tuple[float, str]:
+    cfg_path = os.path.join(source_dir, "dataset_build_config.json")
+    if os.path.isfile(cfg_path):
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            source_cfg = json.load(f)
+        raw = source_cfg.get("max_vis_threshold")
+        if raw is not None:
+            value = float(raw)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{cfg_path}: invalid max_vis_threshold={raw!r}")
+            return value, cfg_path
+    return DEFAULT_S1_MAX_VIS_THRESHOLD, "s1_data_aerosol.py (>90000 m treated as missing)"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -188,6 +203,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     feature_vars = resolve_s1_feature_vars(args)
     dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(args.feature_set, feature_vars)
+    max_vis_threshold, label_policy_source = source_max_vis_threshold(args.source_dir)
 
     if args.merge_train_val:
         xt = os.path.join(args.source_dir, "X_train.npy")
@@ -263,6 +279,8 @@ def main():
         "dyn_vars": int(dyn_vars),
         "fog_fe_dim": int(fog_fe_dim),
         "fe_dim": int(fog_fe_dim + 4),
+        "max_vis_threshold": float(max_vis_threshold),
+        "label_policy_source": label_policy_source,
         "overlap_channels": OVERLAP_CANONICAL,
         "common_core_channels": COMMON_CORE_PMST_FEATURES,
         "populated_pmst_features": feature_vars,
