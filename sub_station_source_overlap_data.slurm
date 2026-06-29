@@ -62,10 +62,11 @@ if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
     YEAR="${BASH_REMATCH[1]}"
 fi
 if [[ -z "${SOURCE_FILE}" && "${SOURCE_KIND}" == "station_nc" && "${SOURCE_TAG}" == pangu* ]]; then
-    PANGU_CANDIDATES=(
-        "${BASELINE_DIR}/pangu_station/pangu_station_${YEAR}_lead24h.nc"
-        "/data2/share/chenxi/PuTS/mlp/ifs_baseline/pangu_station/pangu_station_${YEAR}_lead24h.nc"
-    )
+    if [[ "${YEAR}" == "2025" ]]; then
+        PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc")
+    else
+        PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_${YEAR}_lead24h.nc")
+    fi
     for candidate in "${PANGU_CANDIDATES[@]}"; do
         if [[ -s "${candidate}" ]]; then
             SOURCE_FILE="${candidate}"
@@ -91,15 +92,15 @@ fi
 if [[ -z "${VEG_FILE}" ]]; then
     if [[ -f "${BASE}/data_vegtype.nc" ]]; then
         VEG_FILE="${BASE}/data_vegtype.nc"
-    elif [[ -f "/data2/share/chenxi/PuTS/tianji/data_vegtype.nc" ]]; then
-        VEG_FILE="/data2/share/chenxi/PuTS/tianji/data_vegtype.nc"
+    elif [[ -f "/public/home/putianshu/vis_cnn/data_vegtype.nc" ]]; then
+        VEG_FILE="/public/home/putianshu/vis_cnn/data_vegtype.nc"
     fi
 fi
 if [[ -z "${ORO_FILE}" ]]; then
     if [[ -f "${BASE}/data_orography.nc" ]]; then
         ORO_FILE="${BASE}/data_orography.nc"
-    elif [[ -f "/data2/share/chenxi/PuTS/tianji/data_orography.nc" ]]; then
-        ORO_FILE="/data2/share/chenxi/PuTS/tianji/data_orography.nc"
+    elif [[ -f "/public/home/putianshu/vis_cnn/data_orography.nc" ]]; then
+        ORO_FILE="/public/home/putianshu/vis_cnn/data_orography.nc"
     fi
 fi
 

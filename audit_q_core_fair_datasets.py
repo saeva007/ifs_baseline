@@ -223,9 +223,9 @@ def audit_dataset(
         if isinstance(source_inputs, str):
             source_inputs = [source_inputs]
         provenance = " ".join(str(v) for v in source_inputs)
-        if "lead24h" not in provenance.lower():
+        if "lead12_23h" not in provenance.lower():
             raise ValueError(
-                f"{tag}: source_inputs do not identify the current lead24h Pangu product: {source_inputs}"
+                f"{tag}: source_inputs do not identify the current 12 <= lead < 24 h Pangu product: {source_inputs}"
             )
     window = int(cfg.get("window", 12))
     fe_dim = int(cfg.get("fe_dim", -1))

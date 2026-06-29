@@ -34,13 +34,13 @@ cd "${BASELINE_DIR}"
 mkdir -p logs
 
 SCRIPT_PATH="${SCRIPT_PATH:-${BASELINE_DIR}/interpolate_pangu_to_stations.py}"
-INPUT_DIR="${INPUT_DIR:-/data2/share/chenxi/PuTS/mlp/pangu_2025_china_chunks}"
+INPUT_DIR="${INPUT_DIR:-${BASE}/pangu_2025_china_chunks_lead12_23h}"
 INPUT_GLOB="${INPUT_GLOB:-}"
 INPUT_FILES="${INPUT_FILES:-}"
 STATION_FILE="${STATION_FILE:-}"
 TARGET_FILE="${TARGET_FILE:-${BASE}/tianji_auto_station/merged_final_all_vars.nc}"
 YEAR="${YEAR:-2025}"
-OUT_FILE="${OUT_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc}"
+OUT_FILE="${OUT_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc}"
 K="${K:-4}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 

@@ -21,7 +21,7 @@ ALLOW_UNVERIFIED_PANGU_LEAD="${ALLOW_UNVERIFIED_PANGU_LEAD:-0}"
 
 case "${PANGU2025_STATION_FILE}" in
     /path/to/*|PATH_TO_*|REPLACE_ME*)
-        echo "[WARN] Ignoring placeholder PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}; trying known lead24h locations." >&2
+        echo "[WARN] Ignoring placeholder PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}; trying the current lead12_23h product." >&2
         PANGU2025_STATION_FILE=""
         ;;
 esac
@@ -82,8 +82,7 @@ join_by_colon() {
 
 find_pangu_station_file() {
     local candidates=(
-        "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc"
-        "/data2/share/chenxi/PuTS/mlp/ifs_baseline/pangu_station/pangu_station_2025_lead24h.nc"
+        "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc"
     )
     local path
     for path in "${candidates[@]}"; do
@@ -99,7 +98,7 @@ if [[ -z "${PANGU2025_STATION_FILE}" ]] && ! is_true "${DRY_RUN}"; then
     PANGU2025_STATION_FILE="$(find_pangu_station_file || true)"
 fi
 if [[ -z "${PANGU2025_STATION_FILE}" ]]; then
-    PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc"
+    PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc"
 fi
 
 if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_EXISTING_RUN}"; then
@@ -140,13 +139,13 @@ if is_true "${BUILD_PANGU_STATION}"; then
     echo "Pangu station interpolation: job ${pangu_station_dep}"
 elif ! is_true "${DRY_RUN}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
     echo "ERROR: Pangu-2025 station file is missing or empty: ${PANGU2025_STATION_FILE}" >&2
-    echo "Set PANGU2025_STATION_FILE to the current lead24h station product, or set BUILD_PANGU_STATION=1." >&2
+    echo "Set PANGU2025_STATION_FILE to the current lead12_23h station product, or set BUILD_PANGU_STATION=1." >&2
     exit 2
 fi
 if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
-    if [[ "$(basename "${PANGU2025_STATION_FILE}")" != *lead24h* ]]; then
-        echo "ERROR: Pangu station filename does not identify the required lead24h product: ${PANGU2025_STATION_FILE}" >&2
-        echo "Rename/regenerate it with lead24h provenance, or set ALLOW_UNVERIFIED_PANGU_LEAD=1 after manual metadata verification." >&2
+    if [[ "$(basename "${PANGU2025_STATION_FILE}")" != *lead12_23h* ]]; then
+        echo "ERROR: Pangu station filename does not identify the required 12 <= lead < 24 h product: ${PANGU2025_STATION_FILE}" >&2
+        echo "Use pangu_station_2025_lead12_23h.nc, or set ALLOW_UNVERIFIED_PANGU_LEAD=1 only after manual metadata verification." >&2
         exit 2
     fi
 fi
@@ -215,7 +214,7 @@ summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
     echo "threshold_mode=argmax"
     echo "sample_scope=four_source_paired_test_intersection"
     echo "controlled_dimension=common_input_layout"
-    echo "lead_time_caveat=pangu_lead24h_vs_tianji_ifs_12_to_lt24h"
+    echo "forecast_lead_window=12_to_lt24h"
     echo "era5_role=reference_analysis"
     echo "pangu_station_file=${PANGU2025_STATION_FILE}"
     echo "data_root=${DATA_ROOT}"

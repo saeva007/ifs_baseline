@@ -22,11 +22,16 @@ import xarray as xr
 from scipy.spatial import cKDTree
 
 
-WORK_DIR_DEFAULT = "/data2/share/chenxi/PuTS/mlp"
+WORK_DIR_DEFAULT = "/public/home/putianshu/vis_mlp"
 PANGU_DIR_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_2025_china_chunks_lead12_23h")
-STATION_FILE_DEFAULT = "/public/home/chenxi/PuTS/vis_mlp/China_national_station_info_without_polar.csv"
+STATION_FILE_DEFAULT = ""
 TARGET_FILE_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "tianji_auto_station", "merged_final_all_vars.nc")
-OUT_FILE_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_station", "pangu_station_2025_lead12_23h.nc")
+OUT_FILE_DEFAULT = os.path.join(
+    WORK_DIR_DEFAULT,
+    "ifs_baseline",
+    "pangu_station",
+    "pangu_station_2025_lead12_23h.nc",
+)
 
 
 def _open_dataset(path: str) -> xr.Dataset:

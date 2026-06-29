@@ -165,14 +165,12 @@ for Tianji, IFS, Pangu-2025, and ERA5-2025. It never derives Pangu RH2M from
 1000-hPa humidity. T2ND is intentionally omitted because its only difference
 from Tianji is RH2M, which is absent from this input space.
 
-This controls the input-variable layout, model architecture, labels, and paired
-evaluation samples; it does not make every source an identical forecast-lead
-experiment. The current Pangu 24 h ONNX product is lead24h, whereas the existing
-Tianji/IFS stitching convention uses `12 <= lead_hour < 24`; ERA5 is a reference
-analysis rather than an operational forecast. Accordingly, interpret this as a
-common-input product comparison. A pure forecast-source attribution would also
-require either Pangu 12 h fields or Tianji/IFS fields rebuilt at lead24h, and
-ERA5 should remain a reference ceiling rather than a peer forecast model.
+This controls the input-variable layout, model architecture, labels, paired
+evaluation samples, and forecast-lead window. The current Pangu station product
+is `pangu_station_2025_lead12_23h.nc`, matching the existing Tianji/IFS
+`12 <= lead_hour < 24` stitching convention. ERA5 remains a reference analysis,
+not an operational forecast, so it is a reference ceiling rather than a peer
+forecast model.
 
 Use the end-to-end submitter rather than issuing the data and training jobs by
 hand. The submitter creates unique run IDs and enforces this dependency graph:
@@ -188,20 +186,20 @@ cd /public/home/putianshu/vis_mlp/ifs_baseline
 # Inspect every sbatch command without submitting it.
 RUN_TAG=qcore_pangu2025_rerun DRY_RUN=1 bash submit_q_core_fair_experiment.sh
 
-# Submit with automatic discovery of the existing current lead24h station product.
+# Submit with automatic discovery of the current 12 <= lead < 24 h station product.
 RUN_TAG=qcore_pangu2025_rerun bash submit_q_core_fair_experiment.sh
 
 # If it is stored elsewhere, pass the verified real path explicitly:
-# PANGU2025_STATION_FILE=/actual/path/pangu_station_2025_lead24h.nc
+# PANGU2025_STATION_FILE=/actual/path/pangu_station_2025_lead12_23h.nc
 ```
 
 If the station product must be regenerated first, pass
 `BUILD_PANGU_STATION=1`, `INPUT_DIR` for the current Pangu-2025 China NetCDF
 files, and the desired `PANGU2025_STATION_FILE`. The interpolation job then
 becomes an explicit dependency of the Pangu dataset build. Do not silently use
-the historical Pangu-2021 station file. The submitter also requires `lead24h`
-provenance in the station filename; use `ALLOW_UNVERIFIED_PANGU_LEAD=1` only
-after manually verifying the NetCDF metadata.
+the historical Pangu-2021 station file. The submitter requires `lead12_23h`
+provenance in the 2025 station filename; use `ALLOW_UNVERIFIED_PANGU_LEAD=1`
+only after manually verifying the NetCDF metadata.
 
 `audit_q_core_fair_datasets.py` checks the JSON-declared layout against the
 actual arrays, rejects zero-filled, all-zero, or excessively non-finite
