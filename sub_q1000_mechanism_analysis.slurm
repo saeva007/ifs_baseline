@@ -42,6 +42,7 @@ NUMERICAL_TAGS="${NUMERICAL_TAGS:-tianji,ifs,era5_2025_source_full}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 MIN_PAIRS="${MIN_PAIRS:-100}"
+REQUIRE_CASE_CONTROL="${REQUIRE_CASE_CONTROL:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 case "${FEATURE_SET}" in
@@ -73,6 +74,22 @@ SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
 cd "${BASELINE_DIR}"
 
+if [[ "${REQUIRE_CASE_CONTROL}" == "1" || "${REQUIRE_CASE_CONTROL}" == "true" ]]; then
+    MISSING_CASE_FILES=()
+    for tag in "${PANGU_TAG}" ${NUMERICAL_TAGS//,/ }; do
+        expected="${EVAL_DIR}/per_sample_${tag}.csv"
+        if [[ ! -s "${expected}" ]]; then
+            MISSING_CASE_FILES+=("${expected}")
+        fi
+    done
+    if (( ${#MISSING_CASE_FILES[@]} > 0 )); then
+        printf 'ERROR: case-control requires non-empty per-sample files; missing:\n' >&2
+        printf '  %s\n' "${MISSING_CASE_FILES[@]}" >&2
+        printf 'Generate them first with:\n  NO_PER_SAMPLE_CSV=0 bash submit_static_rnn_source_full_argmax_eval.sh figure1_all_sources\n' >&2
+        exit 2
+    fi
+fi
+
 CMD=(
     python "${SCRIPT_PATH}"
     --sources "${SOURCES}"
@@ -86,6 +103,9 @@ CMD=(
     --bootstrap_iters "${BOOTSTRAP_ITERS}"
     --min_pairs "${MIN_PAIRS}"
 )
+if [[ "${REQUIRE_CASE_CONTROL}" == "1" || "${REQUIRE_CASE_CONTROL}" == "true" ]]; then
+    CMD+=(--require_case_control)
+fi
 if [[ -n "${LIMIT_SAMPLES}" ]]; then
     CMD+=(--limit_samples "${LIMIT_SAMPLES}")
 fi

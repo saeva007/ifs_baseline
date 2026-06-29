@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH -J station_source_data
-#SBATCH --partition=cpu_parallel
+#SBATCH --partition=kshcexclu04
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
 #SBATCH -t 48:00:00
-#SBATCH -D /data2/share/chenxi/PuTS/mlp/ifs_baseline
-#SBATCH -o /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.out
-#SBATCH -e /data2/share/chenxi/PuTS/mlp/ifs_baseline/logs/%j_%x.err
+#SBATCH -D /public/home/putianshu/vis_mlp/ifs_baseline
+#SBATCH -o /public/home/putianshu/vis_mlp/ifs_baseline/logs/%j_%x.out
+#SBATCH -e /public/home/putianshu/vis_mlp/ifs_baseline/logs/%j_%x.err
 #SBATCH --exclusive
 
 set -euo pipefail
@@ -16,12 +16,10 @@ set -euo pipefail
 echo "Station-source overlap data build started at: $(date)"
 echo "Node: $(hostname)"
 
-source /lustre/chenxi/yliang/miniforge3/bin/activate
 module purge
-module load compiler/dtk/23.10
 module load compiler/devtoolset/7.3.1
-module load mpi/hpcx/2.7.4/gcc-7.3.1
-source /lustre/chenxi/yliang/work/cast3/env.sh
+source /public/home/putianshu/miniconda3/bin/activate
+conda activate torch
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
@@ -29,11 +27,13 @@ export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 
-WORK_DIR="${WORK_DIR:-/data2/share/chenxi/PuTS/mlp}"
-cd "${WORK_DIR}/ifs_baseline"
+BASE="${BASE:-/public/home/putianshu/vis_mlp}"
+BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
+WORK_DIR="${WORK_DIR:-${BASE}}"
+cd "${BASELINE_DIR}"
 mkdir -p logs
 
-SCRIPT_PATH="${SCRIPT_PATH:-${WORK_DIR}/ifs_baseline/build_dataset_station_source_overlap_12h.py}"
+SCRIPT_PATH="${SCRIPT_PATH:-${BASELINE_DIR}/build_dataset_station_source_overlap_12h.py}"
 SOURCE_KIND="${SOURCE_KIND:-station_nc}"
 SOURCE_TAG="${SOURCE_TAG:-pangu2021}"
 SOURCE_FILE="${SOURCE_FILE:-}"
@@ -62,28 +62,42 @@ if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
     YEAR="${BASH_REMATCH[1]}"
 fi
 if [[ -z "${SOURCE_FILE}" && "${SOURCE_KIND}" == "station_nc" && "${SOURCE_TAG}" == pangu* ]]; then
-    SOURCE_FILE="${WORK_DIR}/ifs_baseline/pangu_station/pangu_station_${YEAR}_lead24h.nc"
+    PANGU_CANDIDATES=(
+        "${BASELINE_DIR}/pangu_station/pangu_station_${YEAR}_lead24h.nc"
+        "/data2/share/chenxi/PuTS/mlp/ifs_baseline/pangu_station/pangu_station_${YEAR}_lead24h.nc"
+    )
+    for candidate in "${PANGU_CANDIDATES[@]}"; do
+        if [[ -s "${candidate}" ]]; then
+            SOURCE_FILE="${candidate}"
+            break
+        fi
+    done
+    if [[ -z "${SOURCE_FILE}" ]]; then
+        echo "ERROR: no non-empty station product found for ${SOURCE_TAG}/${YEAR}." >&2
+        echo "Pass SOURCE_FILE explicitly; expected the current Pangu valid-time station NetCDF." >&2
+        exit 2
+    fi
 fi
 if [[ -z "${TARGET_FILE}" ]]; then
     if [[ "${YEAR}" == "2025" ]]; then
-        TARGET_FILE="${WORK_DIR}/tianji_auto_station/merged_final_all_vars.nc"
+        TARGET_FILE="${BASE}/tianji_auto_station/merged_final_all_vars.nc"
     else
-        TARGET_FILE="${WORK_DIR}/CMA_visibility_2021_2023_GeoCoords_1.nc"
+        TARGET_FILE="${BASE}/CMA_visibility_2021_2023_GeoCoords_1.nc"
     fi
 fi
 if [[ -z "${OUT_DIR}" ]]; then
-    OUT_DIR="${WORK_DIR}/ifs_baseline/ml_dataset_overlap_${SOURCE_TAG}_12h_pm10_pm25_${FEATURE_SUFFIX}"
+    OUT_DIR="${BASELINE_DIR}/ml_dataset_overlap_${SOURCE_TAG}_12h_pm10_pm25_${FEATURE_SUFFIX}"
 fi
 if [[ -z "${VEG_FILE}" ]]; then
-    if [[ -f "${WORK_DIR}/data_vegtype.nc" ]]; then
-        VEG_FILE="${WORK_DIR}/data_vegtype.nc"
+    if [[ -f "${BASE}/data_vegtype.nc" ]]; then
+        VEG_FILE="${BASE}/data_vegtype.nc"
     elif [[ -f "/data2/share/chenxi/PuTS/tianji/data_vegtype.nc" ]]; then
         VEG_FILE="/data2/share/chenxi/PuTS/tianji/data_vegtype.nc"
     fi
 fi
 if [[ -z "${ORO_FILE}" ]]; then
-    if [[ -f "${WORK_DIR}/data_orography.nc" ]]; then
-        ORO_FILE="${WORK_DIR}/data_orography.nc"
+    if [[ -f "${BASE}/data_orography.nc" ]]; then
+        ORO_FILE="${BASE}/data_orography.nc"
     elif [[ -f "/data2/share/chenxi/PuTS/tianji/data_orography.nc" ]]; then
         ORO_FILE="/data2/share/chenxi/PuTS/tianji/data_orography.nc"
     fi

@@ -62,10 +62,11 @@ Source-full variable availability:
 | IFS | `RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,LCC,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD`; no current `CAPE,T_925,INVERSION` |
 | ERA5-2025 | `RH2M,T2M,PRECIP,MSLP,SW_RAD,U10,WSPD10,V10,WDIR10,CAPE,LCC,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,W_925,W_1000,DPD,INVERSION` |
 | Pangu-2021 | `RH2M,T2M,MSLP,U10,WSPD10,V10,WDIR10,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,DPD,INVERSION`; no current `PRECIP,SW_RAD,CAPE,LCC,W_925,W_1000` |
+| Pangu-2025 | `T2M,MSLP,U10,WSPD10,V10,WDIR10,T_925,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,INVERSION`; no `RH2M,D2M,DPD,PRECIP,SW_RAD,CAPE,LCC,W_925,W_1000` |
 
-The current Pangu exporter derives `RH2M` from 1000 hPa humidity. If the paper
-requires strict 2 m RH only, label this explicitly or rebuild the Pangu
-source-full data without that proxy before using it as a main RH2M claim.
+The legacy Pangu-2021 exporter derives `RH2M` from 1000 hPa humidity. It must be
+labelled as a proxy if retained. The Pangu-2025 source-full path does not derive
+`RH2M` from `Q_1000` and is the required path for the same-year mechanism study.
 Pangu-2021 uses `CMA_visibility_2021_2023_GeoCoords_1.nc` by default, while the
 Tianji, IFS, T2ND, and ERA5-2025 paths use 2025 labels. Treat the all-source
 source-full figure as best-effort performance, not a strict same-year
@@ -153,6 +154,70 @@ run `test_PMST_overlap_forecast_source_s2.py --independent_sources` for only
 `pangu2021_source_full` without `--skip_ifs_forecast_baseline`. Merge the two
 output directories with `merge_overlap_source_eval_metrics.py`; it will write
 `fig_forecast_source_key_metrics_pangu_ifs_ensemble.*`.
+
+## Pangu-2025 Strict Common-Variable Rerun
+
+The reproducible same-variable experiment is `FEATURE_SET=q_core_no_rh2m`, not
+`source_full`, legacy `common_core`, or `compact_common_core`. It uses the exact
+17-channel dynamic order
+`T2M,MSLP,U10,WSPD10,V10,WDIR10,RH_925,U_925,WSPD925,V_925,DP_1000,DP_925,Q_1000,Q_925,ZENITH,PM10_ugm3,PM25_ugm3`
+for Tianji, IFS, Pangu-2025, and ERA5-2025. It never derives Pangu RH2M from
+1000-hPa humidity. T2ND is intentionally omitted because its only difference
+from Tianji is RH2M, which is absent from this input space.
+
+This controls the input-variable layout, model architecture, labels, and paired
+evaluation samples; it does not make every source an identical forecast-lead
+experiment. The current Pangu 24 h ONNX product is lead24h, whereas the existing
+Tianji/IFS stitching convention uses `12 <= lead_hour < 24`; ERA5 is a reference
+analysis rather than an operational forecast. Accordingly, interpret this as a
+common-input product comparison. A pure forecast-source attribution would also
+require either Pangu 12 h fields or Tianji/IFS fields rebuilt at lead24h, and
+ERA5 should remain a reference ceiling rather than a peer forecast model.
+
+Use the end-to-end submitter rather than issuing the data and training jobs by
+hand. The submitter creates unique run IDs and enforces this dependency graph:
+all five data builds -> cross-source data audit -> shared S1 -> four S2 models ->
+paired argmax evaluation. Any failed dependency prevents downstream jobs from
+running. By default, every dataset is written below
+`ifs_baseline/q_core_fair_datasets/<run_tag>/`, so a new Pangu-2025 rerun cannot
+silently mix with or overwrite an older common-variable dataset.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+# Inspect every sbatch command without submitting it.
+RUN_TAG=qcore_pangu2025_rerun DRY_RUN=1 bash submit_q_core_fair_experiment.sh
+
+# Submit with the already generated current Pangu-2025 lead24h station product.
+RUN_TAG=qcore_pangu2025_rerun \
+PANGU2025_STATION_FILE=/path/to/pangu_station_2025_lead24h.nc \
+bash submit_q_core_fair_experiment.sh
+```
+
+If the station product must be regenerated first, pass
+`BUILD_PANGU_STATION=1`, `INPUT_DIR` for the current Pangu-2025 China NetCDF
+files, and the desired `PANGU2025_STATION_FILE`. The interpolation job then
+becomes an explicit dependency of the Pangu dataset build. Do not silently use
+the historical Pangu-2021 station file. The submitter also requires `lead24h`
+provenance in the station filename; use `ALLOW_UNVERIFIED_PANGU_LEAD=1` only
+after manually verifying the NetCDF metadata.
+
+`audit_q_core_fair_datasets.py` checks the JSON-declared layout against the
+actual arrays, rejects zero-filled, all-zero, or excessively non-finite
+channels, checks broad physical ranges and 2025 valid times, verifies identical
+month-tail split settings, and confirms that visibility labels agree on the
+common `(valid_time, station_id)` intersection. Its outputs are written under
+`paper_eval_results_pm10_pm25_journal/q_core_fair_pangu2025/<run_tag>/data_audit`.
+
+The final evaluation always uses each source-specific S2 checkpoint with
+`argmax`. It first saves the ordinary per-source predictions, then recomputes
+all reported comparison metrics on the four-source paired test intersection.
+Uncertainty for source-minus-Pangu differences is obtained by paired bootstrap
+resampling of UTC valid dates, preserving within-day spatial and temporal
+dependence. Use `q_core_paired_common_metrics.csv` and
+`q_core_paired_deltas_vs_pangu2025.csv` as the common-input result tables;
+`overall_metrics.csv` retains unpaired full-source diagnostics and should not
+be used for source attribution.
 
 ## Required Order
 
@@ -334,8 +399,9 @@ FEATURE_SET=common_core \
 sub_station_source_overlap_data.slurm
 ```
 
-The Pangu `RH2M` field is a proxy derived in `pangu_data.py` from the 1000 hPa
-humidity field; keep this note in figure captions and RH2M quality discussion.
+The legacy Pangu-2021 `RH2M` field is a proxy derived in `pangu_data.py` from
+1000 hPa humidity. Pangu-2025 does not use this proxy and must stay excluded
+from RH2M quality figures.
 
 ERA5-2025 can be built directly from the station feature directory:
 
@@ -562,6 +628,49 @@ Important outputs:
 - `per_sample_softmax_ensemble_eval.csv`: paired probabilities, predictions, correctness, and ensemble win/loss flags.
 - `softmax_ensemble_report.txt`: compact human-readable summary.
 - `fig_overlap_softmax_ensemble_key_metrics.*`: Tianji, IFS, and ensemble key-metric bars when matplotlib is available.
+
+## Q1000 Extreme Verification And Multi-Source Model Reliance
+
+The Q1000 overall MAE is already paired by common valid time and station:
+`mean(abs(Q_source - Q_ERA5))`. It measures overall agreement with the ERA5
+reference analysis, but ordinary humidity cases dominate it. Use
+`q1000_extreme_spatiotemporal_metrics.csv` for the high-tail question. Its
+`exact_reference_threshold` rows apply the monthly ERA5 P90/P95/P99 threshold
+to both fields and jointly test amplitude calibration and concurrence. Its
+`quantile_matched` rows apply each source's own monthly quantile and test
+whether equal-frequency extremes occur at the same station and valid time.
+Interpret SEDI together with POD, FAR, CSI, ETS, and frequency bias. Conditional
+bias/MAE/RMSE on ERA5-extreme cases are descriptive only; do not rank sources
+from those conditional errors alone because of the forecaster's dilemma.
+
+For a paired feature-importance smoke test:
+
+```bash
+sbatch --export=ALL,LIMIT_ROWS=20000,SAMPLE_SIZE=10000,MIN_LOW_VIS=20,REPEATS=2,BOOTSTRAP_ITERS=100,MAX_GROUPS=2 sub_multi_source_feature_importance.slurm
+```
+
+For the full source-full analysis:
+
+```bash
+sbatch --export=ALL,SAMPLE_SIZE=50000,REPEATS=5,BOOTSTRAP_ITERS=1000 sub_multi_source_feature_importance.slurm
+```
+
+`analyze_multi_source_feature_importance.py` uses the same common
+`(valid time, station)` rows for Tianji, T2ND, IFS, Pangu-2025, and ERA5. It
+samples uniformly, preserving the observed event rate, and permutes each
+dynamic predictor as a complete 12 h sequence. Marginal grouped permutation is
+the primary Fisher et al. model-reliance analysis. The season/hour/region and
+moisture-state stratified permutation is a dependence-aware sensitivity check,
+not an exact reimplementation of Strobl et al.'s random-forest algorithm.
+Uncertainty and source-to-source differences use the same valid-date bootstrap
+draws; marginal donor maps are also shared across models.
+
+Use `multi_source_grouped_permutation_importance.csv` for within-model
+reliance, `multi_source_shared_feature_importance.csv` for inputs shared by all
+sources, and `multi_source_pairwise_feature_importance_differences.csv` for
+direct paired differences. `global_shared` rows support all-source comparison;
+`pair_shared` rows support controlled Tianji-T2ND RH2M comparison. Never compare
+`native_*` package magnitudes across sources when their members differ.
 
 ## Completion Checklist
 
