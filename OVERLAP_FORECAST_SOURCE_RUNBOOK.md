@@ -642,17 +642,38 @@ Interpret SEDI together with POD, FAR, CSI, ETS, and frequency bias. Conditional
 bias/MAE/RMSE on ERA5-extreme cases are descriptive only; do not rank sources
 from those conditional errors alone because of the forecaster's dilemma.
 
+To draw only the paired multi-source Q1000 and DP1000 probability-density
+figure on the current source-full data:
+
+```bash
+sbatch --export=ALL,DISTRIBUTION_ONLY=1,REQUIRE_CASE_CONTROL=0,FEATURE_SET=source_full,OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/q1000_dp1000_distribution_source_full sub_q1000_mechanism_analysis.slurm
+```
+
+This writes `fig_q1000_dp1000_probability_distribution.*`, editable density
+source data in `q1000_dp1000_probability_density.csv`, and P50/P90/P95/P99 in
+`q1000_dp1000_distribution_quantiles.csv`. Q1000 and DP1000 use separate panels
+and physical units. ERA5 is labelled as reference analysis, not truth. At fixed
+1000 hPa, DP1000 is a monotonic coordinate transform of Q1000 and therefore is
+an interpretation/consistency panel rather than independent mechanism evidence.
+
 For a paired feature-importance smoke test:
 
 ```bash
-sbatch --export=ALL,LIMIT_ROWS=20000,SAMPLE_SIZE=10000,MIN_LOW_VIS=20,REPEATS=2,BOOTSTRAP_ITERS=100,MAX_GROUPS=2 sub_multi_source_feature_importance.slurm
+sbatch --export=ALL,LIMIT_ROWS=20000,SAMPLE_SIZE=10000,MIN_LOW_VIS=20,REPEATS=2,BOOTSTRAP_ITERS=100,GROUP_SCOPE=dynamic,MAX_GROUPS=2,FEATURE_IMPORTANCE_OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/multi_source_feature_importance_smoke sub_multi_source_feature_importance.slurm
 ```
 
 For the full source-full analysis:
 
 ```bash
-sbatch --export=ALL,SAMPLE_SIZE=50000,REPEATS=5,BOOTSTRAP_ITERS=1000 sub_multi_source_feature_importance.slurm
+sbatch --export=ALL,SAMPLE_SIZE=50000,REPEATS=5,BOOTSTRAP_ITERS=1000,GROUP_SCOPE=all,MAX_GROUPS=0,FEATURE_IMPORTANCE_OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/multi_source_feature_importance_source_full sub_multi_source_feature_importance.slurm
 ```
+
+`MAX_GROUPS` is only a smoke-test truncation switch. Any positive value evaluates
+only the first N groups for each source. `MAX_GROUPS=0` evaluates every group.
+`GROUP_SCOPE=dynamic` covers all source meteorological/aerosol time-series
+variables plus physical packages; `GROUP_SCOPE=all` additionally covers static
+and engineered feature groups. Use the dedicated `FEATURE_IMPORTANCE_OUT_DIR`
+variable so an unrelated exported `OUT_DIR` cannot redirect these results.
 
 `analyze_multi_source_feature_importance.py` uses the same common
 `(valid time, station)` rows for Tianji, T2ND, IFS, Pangu-2025, and ERA5. It
@@ -670,6 +691,9 @@ sources, and `multi_source_pairwise_feature_importance_differences.csv` for
 direct paired differences. `global_shared` rows support all-source comparison;
 `pair_shared` rows support controlled Tianji-T2ND RH2M comparison. Never compare
 `native_*` package magnitudes across sources when their members differ.
+`feature_importance_group_manifest.csv` records every available group and
+whether it was selected, so a truncated smoke run cannot be mistaken for the
+full analysis.
 
 ## Completion Checklist
 

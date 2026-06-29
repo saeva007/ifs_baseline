@@ -43,6 +43,7 @@ BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-}"
 MIN_PAIRS="${MIN_PAIRS:-100}"
 REQUIRE_CASE_CONTROL="${REQUIRE_CASE_CONTROL:-1}"
+DISTRIBUTION_ONLY="${DISTRIBUTION_ONLY:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 case "${FEATURE_SET}" in
@@ -74,7 +75,8 @@ SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
 cd "${BASELINE_DIR}"
 
-if [[ "${REQUIRE_CASE_CONTROL}" == "1" || "${REQUIRE_CASE_CONTROL}" == "true" ]]; then
+if [[ "${DISTRIBUTION_ONLY}" != "1" && "${DISTRIBUTION_ONLY}" != "true" ]] && \
+   [[ "${REQUIRE_CASE_CONTROL}" == "1" || "${REQUIRE_CASE_CONTROL}" == "true" ]]; then
     MISSING_CASE_FILES=()
     for tag in "${PANGU_TAG}" ${NUMERICAL_TAGS//,/ }; do
         expected="${EVAL_DIR}/per_sample_${tag}.csv"
@@ -105,6 +107,9 @@ CMD=(
 )
 if [[ "${REQUIRE_CASE_CONTROL}" == "1" || "${REQUIRE_CASE_CONTROL}" == "true" ]]; then
     CMD+=(--require_case_control)
+fi
+if [[ "${DISTRIBUTION_ONLY}" == "1" || "${DISTRIBUTION_ONLY}" == "true" ]]; then
+    CMD+=(--distribution_only)
 fi
 if [[ -n "${LIMIT_SAMPLES}" ]]; then
     CMD+=(--limit_samples "${LIMIT_SAMPLES}")

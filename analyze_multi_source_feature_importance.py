@@ -118,7 +118,7 @@ def parse_args() -> argparse.Namespace:
         default="dynamic",
         help="dynamic keeps source-comparable 12 h variables; all also includes static/engineered groups.",
     )
-    ap.add_argument("--max_groups", type=int, default=0, help="Smoke-test limit after group construction.")
+    ap.add_argument("--max_groups", type=int, default=0, help="Smoke-test limit after group construction; 0 evaluates all groups.")
     ap.add_argument("--no_packages", action="store_true")
     ap.add_argument("--no_plot", action="store_true")
     ap.add_argument("--allow_legacy_time_alignment", action="store_true")
@@ -808,6 +808,8 @@ def main() -> None:
     all_results: List[pd.DataFrame] = []
     all_draws: Dict[str, Dict[Tuple[str, str, str, str], np.ndarray]] = {}
     baseline_records: List[Dict[str, object]] = []
+    group_manifest_records: List[Dict[str, object]] = []
+    group_counts: Dict[str, Dict[str, int]] = {}
     for tag in source_order:
         source_eval = source_evals[tag]
         x_test = np.load(Path(source_eval.spec.data_dir) / "X_test.npy", mmap_mode="r")
@@ -825,8 +827,49 @@ def main() -> None:
             group.setdefault("analysis_level", "individual_group")
         if not cli.no_packages:
             groups = add_physical_packages(groups, orders[tag], eval_args.window, shared_dynamic)
+        available_group_count = len(groups)
         if cli.max_groups > 0:
             groups = groups[: cli.max_groups]
+            print(
+                f"[SMOKE LIMIT] {tag}: evaluating only {len(groups)}/{available_group_count} groups "
+                f"because --max_groups={cli.max_groups}.",
+                flush=True,
+            )
+        else:
+            print(f"[groups] {tag}: evaluating all {available_group_count} groups.", flush=True)
+        selected_ids = {
+            (str(group.get("block", "")), str(group.get("feature", ""))) for group in groups
+        }
+        full_groups = permutation_groups(
+            eval_args.window,
+            source_eval.dyn_vars_count,
+            source_eval.extra_feat_dim,
+            orders[tag],
+        )
+        if cli.group_scope == "dynamic":
+            full_groups = [group for group in full_groups if group.get("block") == "dynamic_12h"]
+        for group in full_groups:
+            group.setdefault("analysis_level", "individual_group")
+        if not cli.no_packages:
+            full_groups = add_physical_packages(full_groups, orders[tag], eval_args.window, shared_dynamic)
+        for rank, group in enumerate(full_groups, start=1):
+            group_manifest_records.append(
+                {
+                    "source": tag,
+                    "source_label": labels[tag],
+                    "rank": rank,
+                    "block": group.get("block", ""),
+                    "feature": group.get("feature", ""),
+                    "analysis_level": group.get("analysis_level", "individual_group"),
+                    "members": ",".join(group_members(group)),
+                    "n_columns": int(len(group.get("columns", []))),
+                    "selected": (str(group.get("block", "")), str(group.get("feature", ""))) in selected_ids,
+                }
+            )
+        group_counts[tag] = {
+            "available": int(available_group_count),
+            "selected": int(len(groups)),
+        }
         result, baseline, source_draws = evaluate_importance(
             tag,
             labels[tag],
@@ -850,6 +893,7 @@ def main() -> None:
     results = pd.concat(all_results, ignore_index=True)
     results.to_csv(out_dir / "multi_source_grouped_permutation_importance.csv", index=False, float_format="%.8f")
     pd.DataFrame(baseline_records).to_csv(out_dir / "multi_source_importance_baseline_metrics.csv", index=False)
+    pd.DataFrame(group_manifest_records).to_csv(out_dir / "feature_importance_group_manifest.csv", index=False)
     results[results["shared_across_sources"].astype(bool)].to_csv(
         out_dir / "multi_source_shared_feature_importance.csv", index=False, float_format="%.8f"
     )
@@ -881,6 +925,9 @@ def main() -> None:
                 "shared_dynamic_features": shared_dynamic,
                 "permutation_modes": cli.modes,
                 "group_scope": cli.group_scope,
+                "max_groups": cli.max_groups,
+                "group_counts": group_counts,
+                "truncated_smoke_run": bool(cli.max_groups > 0),
                 "feature_catalog_path": FEATURE_CATALOG_PATH,
                 "feature_catalog_fallback": bool(not HAS_FEATURE_CATALOG),
                 "repeats": cli.repeats,

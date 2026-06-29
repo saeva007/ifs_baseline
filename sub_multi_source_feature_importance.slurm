@@ -35,7 +35,7 @@ BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 TRAIN_DIR="${TRAIN_DIR:-${BASE}/train}"
 CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 SCRIPT="${SCRIPT:-${BASELINE_DIR}/analyze_multi_source_feature_importance.py}"
-OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/multi_source_feature_importance_source_full}"
+FEATURE_IMPORTANCE_OUT_DIR="${FEATURE_IMPORTANCE_OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/multi_source_feature_importance_source_full}"
 
 TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full}"
 T2ND_DATA_DIR="${T2ND_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_T2ND_rh2m_source_full}"
@@ -57,17 +57,17 @@ MIN_LOW_VIS="${MIN_LOW_VIS:-200}"
 REPEATS="${REPEATS:-5}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 MODES="${MODES:-marginal,stratified}"
-GROUP_SCOPE="${GROUP_SCOPE:-dynamic}"
+GROUP_SCOPE="${GROUP_SCOPE:-all}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
 MAX_GROUPS="${MAX_GROUPS:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
-mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
+mkdir -p "${BASELINE_DIR}/logs" "${FEATURE_IMPORTANCE_OUT_DIR}"
 
 CMD=(
   python "${SCRIPT}"
   --sources "${SOURCES}"
-  --out_dir "${OUT_DIR}"
+  --out_dir "${FEATURE_IMPORTANCE_OUT_DIR}"
   --reference_source tianji
   --static_rnn_train_dir "${TRAIN_DIR}"
   --device "${DEVICE}"
@@ -94,6 +94,8 @@ if [[ -n "${EXTRA_ARGS}" ]]; then
 fi
 
 echo "Multi-source feature importance started at: $(date)"
+echo "Output directory: ${FEATURE_IMPORTANCE_OUT_DIR}"
+echo "Group scope: ${GROUP_SCOPE}; max groups: ${MAX_GROUPS} (0 means all)"
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"
 echo "Finished at: $(date)"
