@@ -15,6 +15,8 @@ set -euo pipefail
 
 module purge
 module load compiler/devtoolset/7.3.1
+export CONDA_NO_PLUGINS=true
+export CONDA_SOLVER=classic
 source /public/home/putianshu/miniconda3/bin/activate
 conda activate torch
 
@@ -32,6 +34,8 @@ MAX_OUTSIDE_PLAUSIBLE_FRACTION="${MAX_OUTSIDE_PLAUSIBLE_FRACTION:-0.01}"
 MAX_ROWS_PER_SPLIT="${AUDIT_MAX_ROWS_PER_SPLIT:-0}"
 NOMINAL_YEAR="${NOMINAL_YEAR:-2025}"
 NEXT_YEAR_SPILL_DAYS="${NEXT_YEAR_SPILL_DAYS:-1}"
+EXPECTED_PANGU_LEAD_MIN_HOURS="${EXPECTED_PANGU_LEAD_MIN_HOURS:-24}"
+EXPECTED_PANGU_LEAD_MAX_HOURS="${EXPECTED_PANGU_LEAD_MAX_HOURS:-24}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
 cd "${BASELINE_DIR}"
@@ -47,6 +51,8 @@ CMD=(
     --max-rows-per-split "${MAX_ROWS_PER_SPLIT}"
     --nominal-year "${NOMINAL_YEAR}"
     --next-year-spill-days "${NEXT_YEAR_SPILL_DAYS}"
+    --expected-pangu-lead-min-hours "${EXPECTED_PANGU_LEAD_MIN_HOURS}"
+    --expected-pangu-lead-max-hours "${EXPECTED_PANGU_LEAD_MAX_HOURS}"
 )
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"

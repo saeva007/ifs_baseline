@@ -298,6 +298,8 @@ def audit_dataset(
     require_meta: bool,
     nominal_year: int,
     next_year_spill_days: int,
+    expected_pangu_lead_min_hours: float,
+    expected_pangu_lead_max_hours: float,
 ) -> Dict[str, object]:
     cfg = load_config(path)
     feature_set = normalized_feature_set(cfg.get("feature_set"))
@@ -327,10 +329,24 @@ def audit_dataset(
         lead_min = float(lead.get("min_hours", math.nan))
         lead_max = float(lead.get("max_hours", math.nan))
         if not (
-            math.isclose(lead_min, 24.0, rel_tol=0.0, abs_tol=1e-6)
-            and math.isclose(lead_max, 24.0, rel_tol=0.0, abs_tol=1e-6)
+            math.isclose(
+                lead_min,
+                expected_pangu_lead_min_hours,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+            and math.isclose(
+                lead_max,
+                expected_pangu_lead_max_hours,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
         ):
-            raise ValueError(f"{tag}: expected the current 24 h ONNX product, got lead={lead}")
+            raise ValueError(
+                f"{tag}: expected Pangu lead range "
+                f"{expected_pangu_lead_min_hours:g}..{expected_pangu_lead_max_hours:g} h, "
+                f"got lead={lead}"
+            )
     if require_meta and tag.lower() in {"era5", "era5_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
         missing_native_q = {"Q_1000", "Q_925"} - native
@@ -631,7 +647,12 @@ def main() -> None:
         default=DEFAULT_NEXT_YEAR_SPILL_DAYS,
         help="Allow valid-time spill from 31 December initializations; 1 day covers the 24 h product.",
     )
+    ap.add_argument("--expected-pangu-lead-min-hours", type=float, default=24.0)
+    ap.add_argument("--expected-pangu-lead-max-hours", type=float, default=24.0)
     args = ap.parse_args()
+
+    if args.expected_pangu_lead_min_hours > args.expected_pangu_lead_max_hours:
+        ap.error("--expected-pangu-lead-min-hours cannot exceed --expected-pangu-lead-max-hours")
 
     sources = parse_specs(args.sources)
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -657,6 +678,8 @@ def main() -> None:
                 require_meta=True,
                 nominal_year=args.nominal_year,
                 next_year_spill_days=args.next_year_spill_days,
+                expected_pangu_lead_min_hours=args.expected_pangu_lead_min_hours,
+                expected_pangu_lead_max_hours=args.expected_pangu_lead_max_hours,
             )
         except Exception as exc:
             structural_issues.append(f"{tag}: {type(exc).__name__}: {exc}")
@@ -671,6 +694,8 @@ def main() -> None:
             require_meta=False,
             nominal_year=args.nominal_year,
             next_year_spill_days=args.next_year_spill_days,
+            expected_pangu_lead_min_hours=args.expected_pangu_lead_min_hours,
+            expected_pangu_lead_max_hours=args.expected_pangu_lead_max_hours,
         )
     except Exception as exc:
         structural_issues.append(f"s1_q_core_no_rh2m: {type(exc).__name__}: {exc}")
@@ -767,6 +792,8 @@ def main() -> None:
             "max_rows_per_split": args.max_rows_per_split,
             "nominal_year": args.nominal_year,
             "next_year_spill_days": args.next_year_spill_days,
+            "expected_pangu_lead_min_hours": args.expected_pangu_lead_min_hours,
+            "expected_pangu_lead_max_hours": args.expected_pangu_lead_max_hours,
         },
     }
     with (out_dir / "q_core_data_audit.json").open("w", encoding="utf-8") as f:

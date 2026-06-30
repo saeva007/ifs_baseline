@@ -251,6 +251,68 @@ dependence. Use `q_core_paired_common_metrics.csv` and
 `overall_metrics.csv` retains unpaired full-source diagnostics and should not
 be used for source attribution.
 
+### Corrected canonical-station rerun (fair + best effort)
+
+When only the Pangu station coordinates were wrong, do not rebuild the already
+completed q-core S1, Tianji, IFS, or ERA5 datasets. Use
+`submit_corrected_pangu2025_experiments.sh`. It first runs a compute-node
+preflight that compares the old and new Pangu station products against
+`merged_final_all_vars.nc`. The preflight requires all of the following before
+any large data build or GPU job can start:
+
+- the new station IDs and coordinates equal the canonical target station table;
+- at least one old station coordinate differs from the corrected coordinate;
+- sampled interpolated meteorological values differ between old and new files;
+- valid times are unique and hourly;
+- per-time `init_time`/`forecast_lead_hours` evidence is present, internally
+  consistent, and has the declared lead range.
+
+The chain then builds only two Pangu datasets (`q_core_no_rh2m` and
+`source_full`), runs the four-source q-core pairing audit, trains a fresh shared
+q-core S1 and all four fair S2 models, and evaluates the paired fair result. In
+parallel, it reuses the unaffected Pangu-2025 dyn19 source-full S1 checkpoint,
+trains only a corrected Pangu source-full S2, and reruns the all-source
+best-effort argmax evaluation with the existing Tianji/IFS/T2ND/ERA5 models.
+
+Inspect the exact submission graph first:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+git pull
+
+RUN_TAG=pangu2025_canonical_20260630 \
+OLD_PANGU_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h.nc \
+PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h_canonical.nc \
+REUSED_QCORE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_pangu2025_rerun_20260629 \
+EXPECTED_PANGU_LEAD_MIN_HOURS=12 \
+EXPECTED_PANGU_LEAD_MAX_HOURS=23 \
+DRY_RUN=1 \
+bash submit_corrected_pangu2025_experiments.sh
+```
+
+If the paths and run IDs are correct, submit the real chain by removing only
+`DRY_RUN=1`:
+
+```bash
+RUN_TAG=pangu2025_canonical_20260630 \
+OLD_PANGU_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h.nc \
+PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h_canonical.nc \
+REUSED_QCORE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_pangu2025_rerun_20260629 \
+EXPECTED_PANGU_LEAD_MIN_HOURS=12 \
+EXPECTED_PANGU_LEAD_MAX_HOURS=23 \
+bash submit_corrected_pangu2025_experiments.sh
+```
+
+The lead range above is an assertion, not a filename inference. If the uploaded
+canonical file was written by the legacy interpolator and therefore lacks
+`init_time/forecast_lead_hours`, the first job fails before allocating data-build
+or training resources. In that case, rerun station interpolation on the other
+cluster with the repository's current `interpolate_pangu_to_stations.py` and
+the canonical target (or `STATION_FILE=""`). This is only an interpolation
+rerun; Pangu ONNX inference is not required as long as the existing gridded
+inputs already carry their initialization/lead metadata. Do not bypass this
+failure with filename-based or manually guessed lead provenance.
+
 ## Required Order
 
 Run from the remote overlap repository:
