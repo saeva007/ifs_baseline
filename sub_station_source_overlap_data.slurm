@@ -57,13 +57,16 @@ CHUNK_WINS="${CHUNK_WINS:-}"
 STAGING_DIR="${STAGING_DIR:-}"
 KEEP_STAGING="${KEEP_STAGING:-0}"
 DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
+EXPECTED_TIME_STEP_HOURS="${EXPECTED_TIME_STEP_HOURS:-1}"
+EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-}"
+EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-}"
 
 if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
     YEAR="${BASH_REMATCH[1]}"
 fi
 if [[ -z "${SOURCE_FILE}" && "${SOURCE_KIND}" == "station_nc" && "${SOURCE_TAG}" == pangu* ]]; then
     if [[ "${YEAR}" == "2025" ]]; then
-        PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc")
+        PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc")
     else
         PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_${YEAR}_lead24h.nc")
     fi
@@ -105,6 +108,17 @@ if [[ -z "${ORO_FILE}" ]]; then
 fi
 
 PY_ARGS=(--source_kind "${SOURCE_KIND}" --source_tag "${SOURCE_TAG}" --year "${YEAR}" --target_file "${TARGET_FILE}" --feature_set "${FEATURE_SET}" --out_dir "${OUT_DIR}")
+PY_ARGS+=(--expected_time_step_hours "${EXPECTED_TIME_STEP_HOURS}")
+if [[ "${SOURCE_TAG}" == "pangu2025" ]]; then
+    EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-24}"
+    EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-24}"
+fi
+if [[ -n "${EXPECTED_LEAD_MIN_HOURS}" ]]; then
+    PY_ARGS+=(--expected_lead_min_hours "${EXPECTED_LEAD_MIN_HOURS}")
+fi
+if [[ -n "${EXPECTED_LEAD_MAX_HOURS}" ]]; then
+    PY_ARGS+=(--expected_lead_max_hours "${EXPECTED_LEAD_MAX_HOURS}")
+fi
 if [[ -n "${SOURCE_FILE}" ]]; then
     PY_ARGS+=(--source_file "${SOURCE_FILE}")
 fi

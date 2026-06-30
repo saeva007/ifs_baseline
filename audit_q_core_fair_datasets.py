@@ -312,15 +312,39 @@ def audit_dataset(
         raise ValueError(f"{tag}: zero_filled_pmst_features must be empty for a native common-input run")
     if require_meta and str(cfg.get("time_coordinate", "")).upper() != "UTC":
         raise ValueError(f"{tag}: time_coordinate must be explicitly recorded as UTC")
+    if require_meta:
+        time_axis = cfg.get("source_time_axis")
+        if not isinstance(time_axis, Mapping):
+            raise ValueError(f"{tag}: dataset config lacks source_time_axis evidence")
+        if not bool(time_axis.get("regular")) or not math.isclose(
+            float(time_axis.get("expected_step_hours", math.nan)), 1.0, rel_tol=0.0, abs_tol=1e-6
+        ):
+            raise ValueError(f"{tag}: source time axis is not verified hourly: {time_axis}")
     if require_meta and tag.lower() in {"pangu2025", "pangu_2025"}:
-        source_inputs = cfg.get("source_inputs", [])
-        if isinstance(source_inputs, str):
-            source_inputs = [source_inputs]
-        provenance = " ".join(str(v) for v in source_inputs)
-        if "lead12_23h" not in provenance.lower():
+        lead = cfg.get("source_forecast_lead")
+        if not isinstance(lead, Mapping) or not bool(lead.get("available")):
+            raise ValueError(f"{tag}: missing forecast-lead evidence: {lead}")
+        lead_min = float(lead.get("min_hours", math.nan))
+        lead_max = float(lead.get("max_hours", math.nan))
+        if not (
+            math.isclose(lead_min, 24.0, rel_tol=0.0, abs_tol=1e-6)
+            and math.isclose(lead_max, 24.0, rel_tol=0.0, abs_tol=1e-6)
+        ):
+            raise ValueError(f"{tag}: expected the current 24 h ONNX product, got lead={lead}")
+    if require_meta and tag.lower() in {"era5", "era5_2025"}:
+        native = {str(v) for v in cfg.get("native_source_features", [])}
+        missing_native_q = {"Q_1000", "Q_925"} - native
+        if missing_native_q:
             raise ValueError(
-                f"{tag}: source_inputs do not identify the current 12 <= lead < 24 h Pangu product: {source_inputs}"
+                f"{tag}: ERA5 reference must use native specific humidity, not T/RH reconstruction; "
+                f"missing native fields={sorted(missing_native_q)}"
             )
+    if require_meta and tag.lower() in {"tianji", "pangu2025", "pangu_2025"}:
+        native = {str(v) for v in cfg.get("native_source_features", [])}
+        if "Q_1000" not in native:
+            raise ValueError(f"{tag}: Q_1000 is not documented as a native source field")
+    if require_meta and tag.lower() == "ifs" and "native IFS" not in str(cfg.get("q1000_provenance", "")):
+        raise ValueError(f"{tag}: Q_1000 provenance is not documented as native IFS output")
     window = int(cfg.get("window", 12))
     fe_dim = int(cfg.get("fe_dim", -1))
     if window != 12 or fe_dim < 0:
@@ -605,7 +629,7 @@ def main() -> None:
         "--next-year-spill-days",
         type=int,
         default=DEFAULT_NEXT_YEAR_SPILL_DAYS,
-        help="Allow valid-time spill from 31 December initializations; 1 is correct for lead < 24 h.",
+        help="Allow valid-time spill from 31 December initializations; 1 day covers the 24 h product.",
     )
     args = ap.parse_args()
 

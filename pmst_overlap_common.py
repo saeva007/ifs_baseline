@@ -231,6 +231,56 @@ def normalize_tianji_times(raw_times) -> pd.DatetimeIndex:
         times = times + pd.to_timedelta(TIANJI_INPUT_TIME_SHIFT_HOURS, unit="h")
     return times
 
+
+def summarize_time_axis(raw_times, expected_step_hours: float = 1.0) -> Dict[str, object]:
+    """Summarize valid-time cadence and whether every adjacent step is regular."""
+    times = pd.DatetimeIndex(pd.to_datetime(raw_times))
+    if times.hasnans:
+        raise ValueError("time axis contains NaT values")
+    if times.has_duplicates:
+        raise ValueError(f"time axis contains {int(times.duplicated(keep=False).sum())} duplicate entries")
+    if not times.is_monotonic_increasing:
+        raise ValueError("time axis is not monotonically increasing")
+    if len(times) < 2:
+        return {
+            "count": int(len(times)),
+            "start": str(times.min()) if len(times) else "",
+            "end": str(times.max()) if len(times) else "",
+            "expected_step_hours": float(expected_step_hours),
+            "regular": True,
+            "delta_hours_min": None,
+            "delta_hours_max": None,
+            "irregular_transition_count": 0,
+        }
+    delta_hours = np.asarray(np.diff(times.values) / np.timedelta64(1, "h"), dtype=np.float64)
+    regular = np.isclose(delta_hours, float(expected_step_hours), rtol=0.0, atol=1.0e-6)
+    unique, counts = np.unique(np.round(delta_hours, 6), return_counts=True)
+    histogram = {str(float(k)): int(v) for k, v in zip(unique, counts)}
+    return {
+        "count": int(len(times)),
+        "start": str(times[0]),
+        "end": str(times[-1]),
+        "expected_step_hours": float(expected_step_hours),
+        "regular": bool(regular.all()),
+        "delta_hours_min": float(np.min(delta_hours)),
+        "delta_hours_max": float(np.max(delta_hours)),
+        "irregular_transition_count": int((~regular).sum()),
+        "delta_hours_histogram": histogram,
+    }
+
+
+def require_regular_time_axis(raw_times, expected_step_hours: float, source_label: str) -> Dict[str, object]:
+    summary = summarize_time_axis(raw_times, expected_step_hours)
+    if not bool(summary["regular"]):
+        raise ValueError(
+            f"{source_label} time axis is not a continuous {expected_step_hours:g}-hour sequence: "
+            f"irregular_transitions={summary['irregular_transition_count']}, "
+            f"delta_range={summary['delta_hours_min']}..{summary['delta_hours_max']} h, "
+            f"histogram={summary.get('delta_hours_histogram', {})}. "
+            "A 12-step window cannot be interpreted as 12 hours."
+        )
+    return summary
+
 # Where overlap variables sit in the 24-dim PMST met block
 OVERLAP_PMST_INDICES: Dict[str, int] = {
     name: PMST_INDEX[name] for name in OVERLAP_CANONICAL if name in PMST_INDEX

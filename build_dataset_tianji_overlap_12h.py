@@ -36,6 +36,7 @@ from pmst_overlap_common import (
     load_pm10_dataarray,
     load_pm25_dataarray,
     normalize_tianji_times,
+    require_regular_time_axis,
     TIANJI_INPUT_TIME_SHIFT_HOURS,
     TIANJI_TIME_ALIGNMENT,
     describe_available_pmst_features,
@@ -282,6 +283,7 @@ def main():
     )
     ap.add_argument("--window", type=int, default=WINDOW_SIZE_DEFAULT)
     ap.add_argument("--step", type=int, default=STEP_SIZE_DEFAULT)
+    ap.add_argument("--expected_time_step_hours", type=float, default=1.0)
     ap.add_argument("--val_last_days", type=int, default=VAL_LAST_DAYS_DEFAULT)
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
@@ -328,6 +330,7 @@ def main():
     rename_map = {k: v for k, v in VAR_MAPPING.items() if k in ds_in.data_vars and v not in ds_in.data_vars}
     if rename_map:
         ds_in = ds_in.rename(rename_map)
+    native_source_features = sorted(str(v) for v in ds_in.data_vars)
 
     rh2m_override_da = load_rh2m_override_dataarray(args.rh2m_override_file, args.rh2m_override_var)
     available = describe_available_pmst_features(ds_in.data_vars)
@@ -353,6 +356,9 @@ def main():
         raise AttributeError("Latitude/Longitude coordinates not found.")
 
     times = normalize_tianji_times(ds_in.time.values)
+    time_axis_summary = require_regular_time_axis(
+        times, args.expected_time_step_hours, "Tianji merged station source"
+    )
     stations = ds_in.station_id.values
     nt, ns = len(times), len(stations)
 
@@ -532,6 +538,9 @@ def main():
         "feature_set": args.feature_set,
         "overlap_vars": feature_vars,
         "available_pmst_features": [name for name in resolve_pmst_feature_set("source_full", available)],
+        "native_source_features": native_source_features,
+        "q1000_provenance": "native Tianji q1000 field" if "Q_1000" in native_source_features else "derived",
+        "dp1000_provenance": "native Tianji dp1000 field" if "DP_1000" in native_source_features else "derived from Q_1000",
         "zero_filled_pmst_features": [],
         "excluded_pmst_features": [name for name in FINAL_FEATURE_ORDER if name not in feature_vars],
         "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
@@ -546,6 +555,7 @@ def main():
         "tianji_raw_time_alignment": TIANJI_TIME_ALIGNMENT,
         "tianji_input_time_shift_hours": TIANJI_INPUT_TIME_SHIFT_HOURS,
         "time_coordinate": "UTC",
+        "source_time_axis": time_axis_summary,
         "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,

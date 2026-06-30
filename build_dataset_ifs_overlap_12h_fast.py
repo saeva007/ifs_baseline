@@ -54,6 +54,7 @@ from pmst_overlap_common import (
     load_pm10_dataarray,
     load_pm25_dataarray,
     normalize_tianji_times,
+    require_regular_time_axis,
     TIANJI_INPUT_TIME_SHIFT_HOURS,
     TIANJI_TIME_ALIGNMENT,
     normalize_var_coord,
@@ -595,6 +596,7 @@ def main():
     ap.add_argument("--out_dir", default=os.path.join(IFS_BASELINE_ROOT, "ml_dataset_overlap_ifs_12h_pm10_pm25_baseline"))
     ap.add_argument("--window", type=int, default=WINDOW_SIZE_DEFAULT)
     ap.add_argument("--step", type=int, default=STEP_SIZE_DEFAULT)
+    ap.add_argument("--expected_time_step_hours", type=float, default=1.0)
     ap.add_argument("--val_last_days", type=int, default=VAL_LAST_DAYS_DEFAULT)
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
@@ -629,6 +631,9 @@ def main():
         lats = ds_tj["lat"].values if "lat" in ds_tj else ds_tj["latitude"].values
         lons = ds_tj["lon"].values if "lon" in ds_tj else ds_tj["longitude"].values
         times = normalize_tianji_times(ds_tj.time.values)
+        time_axis_summary = require_regular_time_axis(
+            times, args.expected_time_step_hours, "IFS target valid-time axis"
+        )
         stations = ds_tj.station_id.values
         vis_key = "vis" if "vis" in ds_tj.data_vars else "visibility"
         y = ds_tj[vis_key].values.astype(np.float32)
@@ -766,6 +771,7 @@ def main():
             "WSPD10/WDIR10/WSPD925": "computed from U/V wind components",
             "DPD": "computed from T2M and D2M",
         },
+        "q1000_provenance": "native IFS pressure-level specific humidity",
         "precipitation_transform": "IFS PRECIP is treated as hourly amount/rate and is not differenced.",
         "fe_dim": int(fe_dim),
         "fog_fe_dim": int(fog_fe_dim),
@@ -777,6 +783,7 @@ def main():
         "tianji_raw_time_alignment": TIANJI_TIME_ALIGNMENT,
         "tianji_input_time_shift_hours": TIANJI_INPUT_TIME_SHIFT_HOURS,
         "time_coordinate": "UTC",
+        "source_time_axis": time_axis_summary,
         "ifs_time_match": "nearest_90min_utc",
         "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,

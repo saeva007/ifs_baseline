@@ -14,7 +14,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -23,14 +23,14 @@ from scipy.spatial import cKDTree
 
 
 WORK_DIR_DEFAULT = "/public/home/putianshu/vis_mlp"
-PANGU_DIR_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_2025_china_chunks_lead12_23h")
+PANGU_DIR_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "pangu_2025_china_chunks")
 STATION_FILE_DEFAULT = ""
 TARGET_FILE_DEFAULT = os.path.join(WORK_DIR_DEFAULT, "tianji_auto_station", "merged_final_all_vars.nc")
 OUT_FILE_DEFAULT = os.path.join(
     WORK_DIR_DEFAULT,
     "ifs_baseline",
     "pangu_station",
-    "pangu_station_2025_lead12_23h.nc",
+    "pangu_station_2025_lead24h.nc",
 )
 
 
@@ -176,6 +176,57 @@ def _interp_var(da: xr.DataArray, time_name: str, lat_name: str, lon_name: str, 
     return np.sum(vals * weights[None, :, :], axis=2).astype(np.float32)
 
 
+def _lead_coordinates(
+    ds: xr.Dataset,
+    time_name: str,
+    allow_missing: bool,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Return per-valid-time initialization and lead coordinates.
+
+    Pangu grid outputs carry ``init_time`` and ``forecast_lead_hours``.  These
+    coordinates must survive station interpolation because a filename is not
+    evidence of forecast lead.
+    """
+    valid = pd.DatetimeIndex(pd.to_datetime(ds[time_name].values))
+    init_values: Optional[np.ndarray] = None
+    if "init_time" in ds.coords or "init_time" in ds.data_vars:
+        raw = np.asarray(ds["init_time"].values).reshape(-1)
+        if raw.size == 1 and len(valid) > 1:
+            raw = np.repeat(raw, len(valid))
+        if raw.size != len(valid):
+            raise ValueError(
+                f"init_time length={raw.size} does not match valid-time length={len(valid)}"
+            )
+        init_values = pd.DatetimeIndex(pd.to_datetime(raw)).values
+
+    declared = ds.attrs.get("forecast_lead_hours")
+    lead_values: Optional[np.ndarray] = None
+    if init_values is not None:
+        lead_values = (
+            (valid.values - init_values) / np.timedelta64(1, "h")
+        ).astype(np.float32)
+        if declared is not None and not np.allclose(
+            lead_values, float(declared), rtol=0.0, atol=1.0e-6
+        ):
+            raise ValueError(
+                f"forecast_lead_hours attr={declared} disagrees with valid_time-init_time "
+                f"range={float(np.min(lead_values))}..{float(np.max(lead_values))} h"
+            )
+    elif declared is not None:
+        lead_values = np.full(len(valid), float(declared), dtype=np.float32)
+        init_values = (
+            valid.values - pd.to_timedelta(lead_values, unit="h").to_numpy()
+        )
+
+    if (init_values is None or lead_values is None) and not allow_missing:
+        raise ValueError(
+            "Pangu source lacks init_time/forecast_lead_hours metadata. "
+            "Regenerate it with run_pangu_onnx_2025.py, or pass "
+            "--allow_missing_lead_metadata for diagnostics only."
+        )
+    return init_values, lead_values
+
+
 def _input_files(args: argparse.Namespace) -> List[str]:
     if args.input_files:
         files = [p.strip() for p in args.input_files.split(",") if p.strip()]
@@ -203,6 +254,11 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--eps", type=float, default=1.0e-6)
     ap.add_argument("--compress_level", type=int, default=1)
+    ap.add_argument(
+        "--allow_missing_lead_metadata",
+        action="store_true",
+        help="Permit legacy inputs without init_time/lead metadata; diagnostics only.",
+    )
     args = ap.parse_args()
 
     files = _input_files(args)
@@ -215,29 +271,40 @@ def main() -> None:
         ds = _open_dataset(fp)
         try:
             time_name = _coord_name(ds, ("time", "valid_time"))
+            init_values, lead_values = _lead_coordinates(
+                ds, time_name, args.allow_missing_lead_metadata
+            )
             lat_name, lon_name, _, _, points = _grid_points(ds)
             idx, weights = _station_neighbors(points, station_lats, station_lons, args.k, args.eps)
             data_vars: Dict[str, Tuple[Tuple[str, str], np.ndarray]] = {}
+            variable_attrs: Dict[str, Dict[str, object]] = {}
             for name in ds.data_vars:
                 da = ds[name]
                 if not {time_name, lat_name, lon_name}.issubset(set(da.dims)):
                     print(f"  [skip] {name}: dims={da.dims}", flush=True)
                     continue
                 data_vars[str(name)] = (("time", "station_id"), _interp_var(da, time_name, lat_name, lon_name, idx, weights))
+                variable_attrs[str(name)] = dict(da.attrs)
+            coords = {
+                "time": pd.DatetimeIndex(pd.to_datetime(ds[time_name].values)),
+                "station_id": station_ids,
+                "lat": ("station_id", station_lats.astype(np.float32)),
+                "lon": ("station_id", station_lons.astype(np.float32)),
+            }
+            if init_values is not None and lead_values is not None:
+                coords["init_time"] = ("time", init_values)
+                coords["forecast_lead_hours"] = ("time", lead_values)
             part = xr.Dataset(
                 data_vars,
-                coords={
-                    "time": pd.DatetimeIndex(pd.to_datetime(ds[time_name].values)),
-                    "station_id": station_ids,
-                    "lat": ("station_id", station_lats.astype(np.float32)),
-                    "lon": ("station_id", station_lons.astype(np.float32)),
-                },
+                coords=coords,
                 attrs={
                     "source": f"Pangu China lead files for year {int(args.year)}",
                     "interpolation": f"IDW k={int(args.k)} in latitude/longitude degrees",
                     "source_file": fp,
                 },
             )
+            for name, attrs in variable_attrs.items():
+                part[name].attrs.update(attrs)
             out_datasets.append(part)
             sources.append(fp)
         finally:
@@ -246,7 +313,15 @@ def main() -> None:
     out = out.sortby("time")
     _, unique_idx = np.unique(pd.DatetimeIndex(out["time"].values).values, return_index=True)
     if len(unique_idx) != out.sizes["time"]:
-        out = out.isel(time=np.sort(unique_idx))
+        raise ValueError(
+            f"Pangu inputs contain {int(out.sizes['time'] - len(unique_idx))} duplicate valid times; "
+            "do not silently choose one initialization/lead."
+        )
+    if "forecast_lead_hours" in out.coords:
+        lead = np.asarray(out["forecast_lead_hours"].values, dtype=np.float64)
+        out.attrs["forecast_lead_hours_min"] = float(np.nanmin(lead))
+        out.attrs["forecast_lead_hours_max"] = float(np.nanmax(lead))
+        out.attrs["lead_provenance"] = "per-time valid_time minus init_time"
     out.attrs.update(
         {
             "target_file": args.target_file,

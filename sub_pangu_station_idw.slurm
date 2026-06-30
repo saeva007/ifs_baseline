@@ -34,15 +34,31 @@ cd "${BASELINE_DIR}"
 mkdir -p logs
 
 SCRIPT_PATH="${SCRIPT_PATH:-${BASELINE_DIR}/interpolate_pangu_to_stations.py}"
-INPUT_DIR="${INPUT_DIR:-${BASE}/pangu_2025_china_chunks_lead12_23h}"
+INPUT_DIR="${INPUT_DIR:-}"
 INPUT_GLOB="${INPUT_GLOB:-}"
 INPUT_FILES="${INPUT_FILES:-}"
 STATION_FILE="${STATION_FILE:-}"
 TARGET_FILE="${TARGET_FILE:-${BASE}/tianji_auto_station/merged_final_all_vars.nc}"
 YEAR="${YEAR:-2025}"
-OUT_FILE="${OUT_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h.nc}"
+OUT_FILE="${OUT_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc}"
 K="${K:-4}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+
+if [[ -z "${INPUT_DIR}" ]]; then
+    for candidate in \
+        "${BASE}/pangu_2025_china_chunks" \
+        "/data2/share/chenxi/PuTS/mlp/pangu_2025_china_chunks"
+    do
+        if [[ -d "${candidate}" ]]; then
+            INPUT_DIR="${candidate}"
+            break
+        fi
+    done
+fi
+if [[ -z "${INPUT_DIR}" || ! -d "${INPUT_DIR}" ]]; then
+    echo "ERROR: Pangu grid directory not found. Pass INPUT_DIR explicitly." >&2
+    exit 2
+fi
 
 CMD=(
     python "${SCRIPT_PATH}"

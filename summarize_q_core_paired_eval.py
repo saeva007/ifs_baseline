@@ -369,8 +369,9 @@ def main() -> None:
             "paired test samples",
         ],
         "interpretation_caveats": [
+            "Pangu-2025 uses a 24 h ONNX product while Tianji/IFS use their existing 12 <= lead_hour < 24 stitching convention.",
             "ERA5 is a reference analysis, not an operational forecast source.",
-            "Tianji, IFS, and Pangu-2025 use the shared 12 <= lead_hour < 24 window; results remain a controlled product comparison rather than causal attribution.",
+            "Results are a common-input product comparison, not pure forecast-source causal attribution.",
         ],
         "reference": args.reference,
         "paired_common_rows": int(len(common)),

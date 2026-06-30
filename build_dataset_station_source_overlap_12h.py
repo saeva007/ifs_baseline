@@ -45,6 +45,8 @@ from pmst_overlap_common import (
     load_pm25_dataarray,
     normalize_var_coord,
     resolve_pmst_feature_set,
+    require_regular_time_axis,
+    summarize_time_axis,
     scatter_overlap_fields,
     select_dynamic_layout,
     save_chunked_monthtail,
@@ -85,6 +87,8 @@ ERA5_VAR_CONFIG = {
     "T_1000": {"name": "temperature", "level": 1000},
     "RH_925": {"name": "relative_humidity", "level": 925},
     "RH_1000": {"name": "relative_humidity", "level": 1000},
+    "Q_925": {"name": "specific_humidity", "level": 925},
+    "Q_1000": {"name": "specific_humidity", "level": 1000},
     "U_925": {"name": "u_component_of_wind", "level": 925},
     "V_925": {"name": "v_component_of_wind", "level": 925},
     "W_925": {"name": "vertical_velocity", "level": 925},
@@ -179,7 +183,10 @@ def _load_station_nc(paths: Sequence[str]) -> xr.Dataset:
         raise ValueError(f"station_nc source must have time and station_id dimensions; got dims={dict(ds.sizes)}")
     _, unique_idx = np.unique(pd.DatetimeIndex(ds["time"].values).values, return_index=True)
     if len(unique_idx) != ds.sizes["time"]:
-        ds = ds.isel(time=np.sort(unique_idx))
+        raise ValueError(
+            f"station source contains {int(ds.sizes['time'] - len(unique_idx))} duplicate valid times; "
+            "lead selection must be explicit before dataset construction"
+        )
     return ds.sortby("time")
 
 
@@ -329,6 +336,53 @@ def _extract_fields(ds: xr.Dataset, t0: int, t1: int) -> Dict[str, np.ndarray]:
     return fields
 
 
+def _forecast_lead_summary(ds: xr.Dataset) -> Dict[str, object]:
+    valid = pd.DatetimeIndex(pd.to_datetime(ds["time"].values))
+    lead = None
+    provenance = ""
+    if "forecast_lead_hours" in ds.coords or "forecast_lead_hours" in ds.data_vars:
+        raw = np.asarray(ds["forecast_lead_hours"].values, dtype=np.float64).reshape(-1)
+        if raw.size == 1 and len(valid) > 1:
+            raw = np.repeat(raw, len(valid))
+        if raw.size != len(valid):
+            raise ValueError(
+                f"forecast_lead_hours length={raw.size} does not match time length={len(valid)}"
+            )
+        lead = raw
+        provenance = "forecast_lead_hours coordinate"
+    if "init_time" in ds.coords or "init_time" in ds.data_vars:
+        init = np.asarray(ds["init_time"].values).reshape(-1)
+        if init.size == 1 and len(valid) > 1:
+            init = np.repeat(init, len(valid))
+        if init.size != len(valid):
+            raise ValueError(f"init_time length={init.size} does not match time length={len(valid)}")
+        derived = np.asarray(
+            (valid.values - pd.DatetimeIndex(pd.to_datetime(init)).values) / np.timedelta64(1, "h"),
+            dtype=np.float64,
+        )
+        if lead is not None and not np.allclose(lead, derived, rtol=0.0, atol=1.0e-6):
+            raise ValueError("forecast_lead_hours disagrees with valid_time-init_time")
+        lead = derived
+        provenance = "valid_time minus init_time"
+    if lead is None and "forecast_lead_hours" in ds.attrs:
+        lead = np.full(len(valid), float(ds.attrs["forecast_lead_hours"]), dtype=np.float64)
+        provenance = "global forecast_lead_hours attribute"
+    if lead is None:
+        return {"available": False, "provenance": "missing"}
+    finite = np.isfinite(lead)
+    if not finite.all():
+        raise ValueError(f"forecast lead contains {int((~finite).sum())} non-finite values")
+    unique, counts = np.unique(np.round(lead, 6), return_counts=True)
+    return {
+        "available": True,
+        "provenance": provenance,
+        "min_hours": float(np.min(lead)),
+        "max_hours": float(np.max(lead)),
+        "unique_hours": [float(v) for v in unique.tolist()],
+        "counts": [int(v) for v in counts.tolist()],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build PMST-27 overlap dataset from station-level source fields.")
     ap.add_argument("--source_kind", choices=["station_nc", "era5_feature_dir"], default=os.environ.get("SOURCE_KIND", "station_nc"))
@@ -349,6 +403,11 @@ def main() -> None:
     ap.add_argument("--feature_set", choices=FEATURE_SET_CHOICES, default=os.environ.get("FEATURE_SET", "common_core"))
     ap.add_argument("--window", type=int, default=WINDOW_SIZE_DEFAULT)
     ap.add_argument("--step", type=int, default=STEP_SIZE_DEFAULT)
+    ap.add_argument("--expected_time_step_hours", type=float, default=1.0)
+    ap.add_argument("--allow_irregular_time_axis", action="store_true")
+    ap.add_argument("--expected_lead_min_hours", type=float, default=None)
+    ap.add_argument("--expected_lead_max_hours", type=float, default=None)
+    ap.add_argument("--allow_missing_forecast_lead", action="store_true")
     ap.add_argument("--val_last_days", type=int, default=VAL_LAST_DAYS_DEFAULT)
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
@@ -373,7 +432,10 @@ def main() -> None:
         paths = _paths_from_args(args.source_file, args.source_glob)
         ds_source = _load_station_nc(paths)
         source_inputs = paths
-    ds_source = _ensure_derived(_rename_canonical(_normalize_station_dims(ds_source)))
+    ds_source = _rename_canonical(_normalize_station_dims(ds_source))
+    native_source_features = sorted(str(v) for v in ds_source.data_vars)
+    ds_source = _ensure_derived(ds_source)
+    derived_source_features = sorted(set(str(v) for v in ds_source.data_vars) - set(native_source_features))
     target = _load_target(args.target_file)
 
     source_stations = ds_source["station_id"].values
@@ -386,6 +448,32 @@ def main() -> None:
     source_stations = ds_source["station_id"].values
 
     times = pd.DatetimeIndex(pd.to_datetime(ds_source["time"].values))
+    if args.allow_irregular_time_axis:
+        time_axis_summary = summarize_time_axis(times, args.expected_time_step_hours)
+    else:
+        time_axis_summary = require_regular_time_axis(
+            times, args.expected_time_step_hours, args.source_tag
+        )
+    lead_summary = _forecast_lead_summary(ds_source)
+    require_lead = args.source_tag.lower().replace("-", "") in {"pangu2025", "pangu_2025"}
+    if require_lead and not bool(lead_summary["available"]) and not args.allow_missing_forecast_lead:
+        raise ValueError(
+            "Pangu-2025 source has no per-time forecast lead metadata. "
+            "Regenerate station interpolation with the current interpolator; filenames are not provenance."
+        )
+    if bool(lead_summary["available"]):
+        lead_min = float(lead_summary["min_hours"])
+        lead_max = float(lead_summary["max_hours"])
+        if args.expected_lead_min_hours is not None and lead_min < args.expected_lead_min_hours - 1.0e-6:
+            raise ValueError(
+                f"{args.source_tag} lead minimum {lead_min:g} h is below required "
+                f"{args.expected_lead_min_hours:g} h"
+            )
+        if args.expected_lead_max_hours is not None and lead_max > args.expected_lead_max_hours + 1.0e-6:
+            raise ValueError(
+                f"{args.source_tag} lead maximum {lead_max:g} h exceeds required "
+                f"{args.expected_lead_max_hours:g} h"
+            )
     lats, lons = _coords_for_source(ds_source, target, source_stations)
     y_arr = _aligned_target_visibility(target, times, source_stations, args.target_time_tolerance_minutes)
 
@@ -535,6 +623,8 @@ def main() -> None:
         "source_tag": args.source_tag,
         "source_kind": args.source_kind,
         "source_inputs": source_inputs,
+        "native_source_features": native_source_features,
+        "derived_source_features": derived_source_features,
         "year": args.year,
         "target_file": args.target_file,
         "target_time_tolerance_minutes": args.target_time_tolerance_minutes,
@@ -552,6 +642,8 @@ def main() -> None:
         "step": args.step,
         "split": "month_tail",
         "time_coordinate": "UTC",
+        "source_time_axis": time_axis_summary,
+        "source_forecast_lead": lead_summary,
         "pm_time_match": "nearest_90min_utc",
         "val_last_days": args.val_last_days,
         "test_last_days": args.test_last_days,
