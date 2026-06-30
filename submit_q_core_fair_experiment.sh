@@ -16,13 +16,16 @@ RUN_TAG="${RUN_TAG:-qcore_pangu2025_$(date +%Y%m%d_%H%M%S)}"
 DRY_RUN="${DRY_RUN:-0}"
 BUILD_PANGU_STATION="${BUILD_PANGU_STATION:-0}"
 PANGU2025_STATION_FILE="${PANGU2025_STATION_FILE:-}"
+EXPECTED_PANGU_LEAD_MIN_HOURS="${EXPECTED_PANGU_LEAD_MIN_HOURS:-12}"
+EXPECTED_PANGU_LEAD_MAX_HOURS="${EXPECTED_PANGU_LEAD_MAX_HOURS:-23}"
+INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-1}"
 ALLOW_EXISTING_RUN="${ALLOW_EXISTING_RUN:-0}"
 ALLOW_UNVERIFIED_PANGU_LEAD="${ALLOW_UNVERIFIED_PANGU_LEAD:-0}"
 RESUME_FROM_AUDIT="${RESUME_FROM_AUDIT:-0}"
 
 case "${PANGU2025_STATION_FILE}" in
     /path/to/*|PATH_TO_*|REPLACE_ME*)
-        echo "[WARN] Ignoring placeholder PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}; trying the current lead24h product." >&2
+        echo "[WARN] Ignoring placeholder PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}; using the canonical 12--23 h product." >&2
         PANGU2025_STATION_FILE=""
         ;;
 esac
@@ -84,7 +87,7 @@ join_by_colon() {
 
 find_pangu_station_file() {
     local candidates=(
-        "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc"
+        "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc"
     )
     local path
     for path in "${candidates[@]}"; do
@@ -100,7 +103,7 @@ if [[ -z "${PANGU2025_STATION_FILE}" ]] && ! is_true "${DRY_RUN}"; then
     PANGU2025_STATION_FILE="$(find_pangu_station_file || true)"
 fi
 if [[ -z "${PANGU2025_STATION_FILE}" ]]; then
-    PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc"
+    PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc"
 fi
 
 if is_true "${RESUME_FROM_AUDIT}" && is_true "${BUILD_PANGU_STATION}"; then
@@ -143,27 +146,24 @@ echo "Pangu-2025 q-core fair experiment"
 echo "RUN_TAG=${RUN_TAG}"
 echo "FEATURE_SET=${FEATURE_SET}"
 echo "PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}"
+echo "EXPECTED_PANGU_LEAD=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEAD_MAX_HOURS}h"
 echo "DATA_ROOT=${DATA_ROOT}"
 echo "S1_RUN_ID=${S1_RUN_ID}"
 echo "RESUME_FROM_AUDIT=${RESUME_FROM_AUDIT}"
 
 pangu_station_dep=""
 if is_true "${BUILD_PANGU_STATION}"; then
-    pangu_station_dep="$(submit pangu_station \
-        --export="ALL,OUT_FILE=${PANGU2025_STATION_FILE},YEAR=2025" \
-        sub_pangu_station_idw.slurm)"
-    echo "Pangu station interpolation: job ${pangu_station_dep}"
+    echo "ERROR: BUILD_PANGU_STATION=1 is disabled for the canonical stitched product." >&2
+    echo "Provide PANGU2025_STATION_FILE=${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc." >&2
+    exit 2
 elif ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
     echo "ERROR: Pangu-2025 station file is missing or empty: ${PANGU2025_STATION_FILE}" >&2
-    echo "Set PANGU2025_STATION_FILE to the current lead24h station product, or set BUILD_PANGU_STATION=1." >&2
+    echo "Set PANGU2025_STATION_FILE to the verified canonical 12--23 h station product." >&2
     exit 2
 fi
-if ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && ! is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
-    if [[ "$(basename "${PANGU2025_STATION_FILE}")" != *lead24h* ]]; then
-        echo "ERROR: Pangu station filename does not identify the current 24 h ONNX product: ${PANGU2025_STATION_FILE}" >&2
-        echo "Use pangu_station_2025_lead24h.nc. The data builder also verifies per-time lead metadata." >&2
-        exit 2
-    fi
+if is_true "${ALLOW_UNVERIFIED_PANGU_LEAD}"; then
+    echo "ERROR: ALLOW_UNVERIFIED_PANGU_LEAD is no longer supported by the publication q-core chain." >&2
+    exit 2
 fi
 
 require_dataset_files() {
@@ -196,7 +196,7 @@ if is_true "${RESUME_FROM_AUDIT}"; then
     fi
     data_deps="reused_existing_datasets"
     audit_job="$(submit data_audit \
-        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR},EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}" \
         sub_q_core_fair_data_audit.slurm)"
 else
     s1_data_job="$(submit s1_data \
@@ -210,7 +210,7 @@ else
         sub_ifs_data.slurm)"
 
     pangu_data_args=(
-        --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},SOURCE_FILE=${PANGU2025_STATION_FILE},OUT_DIR=${PANGU2025_DATA_DIR}"
+        --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=${FEATURE_SET},SOURCE_FILE=${PANGU2025_STATION_FILE},OUT_DIR=${PANGU2025_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}"
     )
     if [[ -n "${pangu_station_dep}" ]]; then
         pangu_data_args+=(--dependency="afterok:${pangu_station_dep}")
@@ -225,7 +225,7 @@ else
     data_deps="$(join_by_colon "${s1_data_job}" "${tianji_data_job}" "${ifs_data_job}" "${pangu_data_job}" "${era5_data_job}")"
     audit_job="$(submit data_audit \
         --dependency="afterok:${data_deps}" \
-        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR},EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}" \
         sub_q_core_fair_data_audit.slurm)"
 fi
 
@@ -272,7 +272,9 @@ fi
     echo "threshold_mode=argmax"
     echo "sample_scope=four_source_paired_test_intersection"
     echo "controlled_dimension=common_input_layout"
-    echo "lead_time_caveat=pangu_lead24h_vs_tianji_ifs_12_to_lt24h"
+    echo "lead_time_scope=pangu_tianji_ifs_12_to_23h"
+    echo "expected_pangu_lead_hours=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEAD_MAX_HOURS}"
+    echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
     echo "era5_role=reference_analysis"
     echo "pangu_station_file=${PANGU2025_STATION_FILE}"
     echo "data_root=${DATA_ROOT}"

@@ -20,8 +20,7 @@ module purge
 module load compiler/devtoolset/7.3.1
 export CONDA_NO_PLUGINS=true
 export CONDA_SOLVER=classic
-source /public/home/putianshu/miniconda3/bin/activate
-conda activate torch
+source /public/home/putianshu/vis_mlp/ifs_baseline/activate_torch_runtime.sh
 
 cd /public/home/putianshu/vis_mlp/ifs_baseline
 mkdir -p logs

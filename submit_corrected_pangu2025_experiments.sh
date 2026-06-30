@@ -126,23 +126,39 @@ require_dataset() {
     done
 }
 
+require_canonical_unit_policy() {
+    local label="$1"
+    local dir="$2"
+    local config="${dir}/dataset_build_config.json"
+    if ! grep -q '"canonical_unit_policy"[[:space:]]*:[[:space:]]*"pmst_canonical_units_v2_20260630"' "${config}"; then
+        echo "ERROR: ${label} predates canonical PM/MSLP units: ${config}" >&2
+        echo "Run submit_q_core_fair_experiment.sh with a fresh RUN_TAG; do not reuse this q-core dataset." >&2
+        exit 2
+    fi
+}
+
 if ! is_true "${DRY_RUN}"; then
     require_file "canonical target station product" "${TARGET_FILE}"
 
     if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
         require_dataset corrected_pangu_qcore "${PANGU_QCORE_DATA_DIR}" 1 train val test
         require_dataset corrected_pangu_source_full "${PANGU_SOURCE_FULL_DATA_DIR}" 1 train val test
+        require_canonical_unit_policy corrected_pangu_qcore "${PANGU_QCORE_DATA_DIR}"
     else
         require_file "legacy Pangu station product" "${OLD_PANGU_STATION_FILE}"
         require_file "corrected Pangu station product" "${PANGU2025_STATION_FILE}"
     fi
     if [[ -n "${REUSE_ERA5_QCORE_DATA_DIR}" ]]; then
         require_dataset corrected_era5_qcore "${ERA5_QCORE_DATA_DIR}" 1 train val test
+        require_canonical_unit_policy corrected_era5_qcore "${ERA5_QCORE_DATA_DIR}"
     fi
 
     require_dataset qcore_s1 "${S1_QCORE_DATA_DIR}" 0 train val
     require_dataset qcore_tianji "${TIANJI_QCORE_DATA_DIR}" 1 train val test
     require_dataset qcore_ifs "${IFS_QCORE_DATA_DIR}" 1 train val test
+    require_canonical_unit_policy qcore_s1 "${S1_QCORE_DATA_DIR}"
+    require_canonical_unit_policy qcore_tianji "${TIANJI_QCORE_DATA_DIR}"
+    require_canonical_unit_policy qcore_ifs "${IFS_QCORE_DATA_DIR}"
     require_file "Pangu source-full S1 checkpoint" "${BEST_PANGU_S1_CKPT}"
     require_dataset source_full_tianji "${TIANJI_SOURCE_FULL_DATA_DIR}" 1 train val test
     require_dataset source_full_ifs "${IFS_SOURCE_FULL_DATA_DIR}" 1 train val test

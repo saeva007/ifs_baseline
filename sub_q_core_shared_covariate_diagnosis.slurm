@@ -16,8 +16,7 @@ module purge
 module load compiler/devtoolset/7.3.1
 export CONDA_NO_PLUGINS=true
 export CONDA_SOLVER=classic
-source /public/home/putianshu/miniconda3/bin/activate
-conda activate torch
+source /public/home/putianshu/vis_mlp/ifs_baseline/activate_torch_runtime.sh
 
 BASELINE_DIR="${BASELINE_DIR:-/public/home/putianshu/vis_mlp/ifs_baseline}"
 LEFT_DIR="${LEFT_DIR:?Set LEFT_DIR to the Tianji q-core dataset}"

@@ -41,6 +41,18 @@ EXPECTED_ORDER = [
     "PM25_ugm3",
 ]
 EXPECTED_FEATURE_SET = "q_core_no_rh2m"
+EXPECTED_UNIT_POLICY = "pmst_canonical_units_v2_20260630"
+EXPECTED_CANONICAL_UNITS = {
+    "T2M": "K",
+    "MSLP": "Pa",
+    "RH_925": "%",
+    "DP_1000": "K",
+    "DP_925": "K",
+    "Q_1000": "kg kg-1",
+    "Q_925": "kg kg-1",
+    "PM10_ugm3": "ug m-3",
+    "PM25_ugm3": "ug m-3",
+}
 EXPECTED_S2_MAX_VIS_M = 30000.0
 LEGACY_S1_MAX_VIS_M = 90000.0
 DEFAULT_NOMINAL_YEAR = 2025
@@ -265,7 +277,7 @@ def iter_row_slices(n_rows: int, chunk_rows: int, max_rows: int) -> Iterable[sli
 def plausible_bounds(feature: str) -> Tuple[float, float] | None:
     return {
         "T2M": (180.0, 340.0),
-        "MSLP": (500.0, 120000.0),  # accepts hPa or Pa; cross-source units are checked separately
+        "MSLP": (50000.0, 120000.0),
         "U10": (-150.0, 150.0),
         "WSPD10": (0.0, 150.0),
         "V10": (-150.0, 150.0),
@@ -352,6 +364,22 @@ def audit_dataset(
     expected_pangu_lead_max_hours: float,
 ) -> Dict[str, object]:
     cfg = load_config(path)
+    unit_policy = str(cfg.get("canonical_unit_policy", ""))
+    if unit_policy != EXPECTED_UNIT_POLICY:
+        raise ValueError(
+            f"{tag}: canonical_unit_policy={unit_policy!r}, expected {EXPECTED_UNIT_POLICY!r}; "
+            "this dataset predates the PM/MSLP unit repair and must be rebuilt"
+        )
+    declared_units = cfg.get("canonical_dynamic_units")
+    if not isinstance(declared_units, Mapping):
+        raise ValueError(f"{tag}: canonical_dynamic_units metadata is missing")
+    unit_mismatch = {
+        name: (declared_units.get(name), expected)
+        for name, expected in EXPECTED_CANONICAL_UNITS.items()
+        if declared_units.get(name) != expected
+    }
+    if unit_mismatch:
+        raise ValueError(f"{tag}: canonical dynamic-unit metadata mismatch: {unit_mismatch}")
     feature_set = normalized_feature_set(cfg.get("feature_set"))
     if feature_set != EXPECTED_FEATURE_SET:
         raise ValueError(f"{tag}: feature_set={feature_set!r}, expected {EXPECTED_FEATURE_SET!r}")
@@ -684,9 +712,13 @@ def validate_cross_source_units(feature_df: pd.DataFrame, source_tags: Sequence[
         if len(mslp) != len(source_tags):
             issues.append(f"{split}: missing MSLP audit rows for one or more sources")
         else:
-            unit_family = {tag: ("Pa" if float(value) > 20000.0 else "hPa") for tag, value in mslp.items()}
-            if len(set(unit_family.values())) != 1:
-                issues.append(f"{split}: cross-source MSLP unit mismatch detected: {unit_family}")
+            bad_mslp = {
+                tag: float(value)
+                for tag, value in mslp.items()
+                if not (50000.0 < float(value) < 120000.0)
+            }
+            if bad_mslp:
+                issues.append(f"{split}: MSLP does not look like Pa for sources {bad_mslp}")
         for feature in ("Q_1000", "Q_925"):
             q = part[part["feature"] == feature].set_index("source")["mean"]
             if len(q) != len(source_tags):

@@ -44,6 +44,9 @@ from pmst_overlap_common import (
     TOTAL_DYN,
     build_static_features,
     build_station_reindex_map,
+    canonicalize_pm_concentration,
+    CANONICAL_DYNAMIC_UNITS,
+    CANONICAL_UNIT_POLICY_VERSION,
     compute_fog_features_pmst,
     cyclical_time_features,
     describe_available_pmst_features,
@@ -374,8 +377,10 @@ def _extract_pm_channel(pm_da: Optional[xr.DataArray], times: pd.DatetimeIndex, 
         base = np.asarray(pm_da.values).reshape(-1)
         linear_idx_grid = time_pos[:, None] * ns_pm + sid_pos[None, :]
         pm_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
-    pm_grid = np.maximum(pm_grid, 0.0)
-    pm_ug = pm_grid * 1e12
+    pm_ug = canonicalize_pm_concentration(
+        pm_grid,
+        str(pm_da.attrs.get("units", "")),
+    )
     med = np.nanmedian(pm_ug)
     if not np.isfinite(med):
         med = 0.0
@@ -764,6 +769,8 @@ def main():
         "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
         "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set, feature_vars),
         "dyn_vars": int(dyn_vars_for_feature_set(args.feature_set, feature_vars)),
+        "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
+        "canonical_dynamic_units": CANONICAL_DYNAMIC_UNITS,
         "derived_overlap_vars": {
             "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
             "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",

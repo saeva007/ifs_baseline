@@ -20,8 +20,7 @@ module purge
 module load compiler/devtoolset/7.3.1
 export CONDA_NO_PLUGINS=true
 export CONDA_SOLVER=classic
-source /public/home/putianshu/miniconda3/bin/activate
-conda activate torch
+source /public/home/putianshu/vis_mlp/ifs_baseline/activate_torch_runtime.sh
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
@@ -62,14 +61,17 @@ DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 EXPECTED_TIME_STEP_HOURS="${EXPECTED_TIME_STEP_HOURS:-1}"
 EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-}"
 EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-}"
-INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-0}"
+INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-}"
 
 if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
     YEAR="${BASH_REMATCH[1]}"
 fi
 if [[ -z "${SOURCE_FILE}" && "${SOURCE_KIND}" == "station_nc" && "${SOURCE_TAG}" == pangu* ]]; then
     if [[ "${YEAR}" == "2025" ]]; then
-        PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc")
+        PANGU_CANDIDATES=(
+            "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc"
+            "${BASELINE_DIR}/pangu_station/pangu_station_2025_lead24h.nc"
+        )
     else
         PANGU_CANDIDATES=("${BASELINE_DIR}/pangu_station/pangu_station_${YEAR}_lead24h.nc")
     fi
@@ -113,8 +115,14 @@ fi
 PY_ARGS=(--source_kind "${SOURCE_KIND}" --source_tag "${SOURCE_TAG}" --year "${YEAR}" --target_file "${TARGET_FILE}" --feature_set "${FEATURE_SET}" --out_dir "${OUT_DIR}")
 PY_ARGS+=(--expected_time_step_hours "${EXPECTED_TIME_STEP_HOURS}")
 if [[ "${SOURCE_TAG}" == "pangu2025" ]]; then
-    EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-24}"
-    EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-24}"
+    if [[ "$(basename "${SOURCE_FILE}")" == *lead12_23h* ]]; then
+        EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-12}"
+        EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-23}"
+        INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-1}"
+    else
+        EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-24}"
+        EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-24}"
+    fi
 fi
 if [[ -n "${EXPECTED_LEAD_MIN_HOURS}" ]]; then
     PY_ARGS+=(--expected_lead_min_hours "${EXPECTED_LEAD_MIN_HOURS}")

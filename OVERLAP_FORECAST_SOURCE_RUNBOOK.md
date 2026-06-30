@@ -166,13 +166,9 @@ for Tianji, IFS, Pangu-2025, and ERA5-2025. It never derives Pangu RH2M from
 from Tianji is RH2M, which is absent from this input space.
 
 This controls the input-variable layout, model architecture, labels, and paired
-evaluation samples; it does not control forecast lead. The current Pangu ONNX
-model advances exactly 24 h, whereas the existing Tianji/IFS products use
-`12 <= lead_hour < 24`. ERA5 remains a reference analysis, not an operational
-forecast. Therefore this is a common-input product comparison, not a causal
-forecast-source attribution experiment. A strict lead-matched experiment must
-rebuild Tianji/IFS at lead24h or generate Pangu 12--23 h fields with the official
-1/3/6 h models and verified hierarchical stepping.
+evaluation samples. The active canonical Pangu station product uses the same
+documented 12--23 h stitched lead range as the Tianji/IFS comparison products.
+ERA5 remains a reference analysis, not an operational forecast.
 
 Use the end-to-end submitter rather than issuing the data and training jobs by
 hand. The submitter creates unique run IDs and enforces this dependency graph:
@@ -188,21 +184,17 @@ cd /public/home/putianshu/vis_mlp/ifs_baseline
 # Inspect every sbatch command without submitting it.
 RUN_TAG=qcore_pangu2025_rerun DRY_RUN=1 bash submit_q_core_fair_experiment.sh
 
-# Submit with automatic discovery of the current lead24h station product.
+# Submit with automatic discovery of the canonical 12--23 h station product.
 RUN_TAG=qcore_pangu2025_rerun bash submit_q_core_fair_experiment.sh
 
 # If it is stored elsewhere, pass the verified real path explicitly:
-# PANGU2025_STATION_FILE=/actual/path/pangu_station_2025_lead24h.nc
+# PANGU2025_STATION_FILE=/actual/path/pangu_station_2025_lead12_23h_canonical.nc
 ```
 
-If the station product must be regenerated first, pass
-`BUILD_PANGU_STATION=1`, `INPUT_DIR` for the current Pangu-2025 China NetCDF
-files, and the desired `PANGU2025_STATION_FILE`. The interpolation job then
-becomes an explicit dependency of the Pangu dataset build. Do not silently use
-the historical Pangu-2021 station file. The station interpolator preserves
-per-time `init_time` and `forecast_lead_hours`; the downstream builder verifies
-those values and rejects filename-only provenance. Bulk inference must use
-`INIT_HOURS=all` so a 12-step input sequence is actually 12 consecutive hours.
+`BUILD_PANGU_STATION=1` is intentionally disabled in this launcher because the
+generic interpolation job creates a different lead product. Supply the already
+verified canonical station file. The downstream builder checks its explicit
+12--23 h schedule and rejects filename-only provenance.
 
 `audit_q_core_fair_datasets.py` checks the JSON-declared layout against the
 actual arrays, rejects zero-filled, all-zero, or excessively non-finite
@@ -214,32 +206,26 @@ The four S2 builders declare and enforce a `30000 m` visibility-label ceiling;
 the audit reads this value from each `dataset_build_config.json` rather than
 assuming that clear labels above 10 km are invalid.
 The experiment year is the forecast-initialization year, not a strict
-valid-time year. With a 24 h Pangu lead, 31 December 2025 initializations can
-legitimately verify on 1 January 2026. The audit therefore accepts valid times
+valid-time year. Late 31 December 2025 initializations can legitimately verify
+on 1 January 2026. The audit therefore accepts valid times
 from 1 January 2025 through the one-day next-year boundary spill, while still
 rejecting dates beyond that physically permitted interval. It performs all
 inexpensive structural/time/label/pairing checks before scanning the large
 feature arrays and writes every issue found in the failing stage to
 `data_audit/q_core_data_audit_failed.json`.
 
-If all data builds completed but the audit failed, do not delete or rebuild the
-versioned datasets. After fixing and syncing the audit code, resume from the
-existing datasets with the same run tag:
+Datasets built before unit policy `pmst_canonical_units_v2_20260630` must not be
+resumed. They contain legacy PM values scaled by `1e12` and may mix Tianji hPa
+with Pa from the other sources. Use a fresh run tag so all five datasets are
+rebuilt. `RESUME_FROM_AUDIT=1` is only valid when every config already declares
+that exact unit policy; it is not valid for the failed legacy run shown above.
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline
-RUN_TAG=qcore_pangu2025_rerun_20260629 \
-PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead24h.nc \
-RESUME_FROM_AUDIT=1 \
+RUN_TAG=qcore_pangu2025_units_v2_20260630 \
+PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h_canonical.nc \
 bash submit_q_core_fair_experiment.sh
 ```
-
-This mode verifies that every expected S1/S2 array, metadata file, and build
-config is present, submits a fresh audit with no stale Slurm dependency, and
-then recreates only the `audit -> S1 -> four S2 -> paired evaluation` chain.
-It writes a timestamped resume manifest so the original failed submission
-record is preserved. It refuses existing checkpoints unless
-`ALLOW_EXISTING_RUN=1` is deliberately supplied.
 
 The final evaluation always uses each source-specific S2 checkpoint with
 `argmax`. It first saves the ordinary per-source predictions, then recomputes
@@ -253,9 +239,11 @@ be used for source attribution.
 
 ### Corrected canonical-station rerun (fair + best effort)
 
-When only the Pangu station coordinates were wrong, do not rebuild the already
-completed q-core S1, Tianji, IFS, or ERA5 datasets. Use
-`submit_corrected_pangu2025_experiments.sh`. It first runs a compute-node
+The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do
+not use that reuse path for the repaired fair experiment because those datasets
+predate the canonical PM/MSLP policy. Use `submit_q_core_fair_experiment.sh`
+with a fresh run tag. `submit_corrected_pangu2025_experiments.sh` remains only
+for diagnosing the historical coordinate-only rerun. It first runs a compute-node
 preflight that compares the old and new Pangu station products against
 `merged_final_all_vars.nc`. The preflight requires all of the following before
 any large data build or GPU job can start:

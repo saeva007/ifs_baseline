@@ -26,6 +26,8 @@ import xarray as xr
 from numpy.lib.stride_tricks import sliding_window_view
 
 from pmst_overlap_common import (
+    CANONICAL_DYNAMIC_UNITS,
+    CANONICAL_UNIT_POLICY_VERSION,
     OVERLAP_CANONICAL,
     OVERLAP_SOURCE_FIELDS,
     TOTAL_DYN,
@@ -441,6 +443,8 @@ def main():
             for k, v in IFS_MAP.items()
         },
         "dyn_layout": "24_pmst_met + zenith + pm10 + pm2p5",
+        "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
+        "canonical_dynamic_units": CANONICAL_DYNAMIC_UNITS,
         "derived_overlap_vars": {
             "RH2M": "computed from IFS T2M and D2M when no direct RH2M is present",
             "DP_1000": "computed from IFS Q_1000 and 1000 hPa pressure",

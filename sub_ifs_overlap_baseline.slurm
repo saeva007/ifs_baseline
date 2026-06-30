@@ -513,8 +513,8 @@ module load compiler/devtoolset/7.3.1
 module load mpi/hpcx/2.11.0/gcc-7.3.1
 source /public/home/xichen/ncydata/dtk/dtk-24.04.1/env.sh
 export LD_LIBRARY_PATH=/public/home/xichen/ncydata/dtk/dtk-24.04.1/.hyhal/lib:$LD_LIBRARY_PATH
-source /public/home/jarvis226/miniconda3/bin/activate
-conda activate torch
+export TORCH_ENV="${TORCH_ENV:-/public/home/jarvis226/miniconda3/envs/torch}"
+source /public/home/putianshu/vis_mlp/ifs_baseline/activate_torch_runtime.sh
 export LD_LIBRARY_PATH=/public/home/xichen/.conda/envs/py310_ppy/openssl/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/public/home/xichen/ncydata/panpy_test_liud/hipnn/lib/release/:$LD_LIBRARY_PATH
 export PYTHONUNBUFFERED=1
@@ -524,7 +524,7 @@ export OMP_NUM_THREADS=4
 TORCHRUN_BIN="$(command -v torchrun)"
 # 【已修复：添加空格 || [ 】
 if [ -z "${TORCHRUN_BIN}" ] || [ ! -x "${TORCHRUN_BIN}" ]; then
-    echo "ERROR: torchrun not found after conda activate torch (PATH=${PATH:-})" >&2
+    echo "ERROR: torchrun not found in direct torch runtime (PATH=${PATH:-})" >&2
     exit 1
 fi
 echo "TORCHRUN_BIN=${TORCHRUN_BIN}"

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import gc
 import glob
+import math
 import os
+import re
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
@@ -172,6 +174,83 @@ FEATURE_SET_CHOICES: Tuple[str, ...] = (
     "overlap_full",
     "source_full",
 )
+
+CANONICAL_UNIT_POLICY_VERSION = "pmst_canonical_units_v2_20260630"
+CANONICAL_DYNAMIC_UNITS: Dict[str, str] = {
+    "T2M": "K",
+    "MSLP": "Pa",
+    "RH2M": "%",
+    "RH_925": "%",
+    "RH_1000": "%",
+    "DP_1000": "K",
+    "DP_925": "K",
+    "Q_1000": "kg kg-1",
+    "Q_925": "kg kg-1",
+    "PM10_ugm3": "ug m-3",
+    "PM25_ugm3": "ug m-3",
+}
+
+
+def _finite_median_abs(values: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    finite = np.abs(arr[np.isfinite(arr)])
+    return float(np.median(finite)) if finite.size else math.nan
+
+
+def canonicalize_pm_concentration(values: np.ndarray, declared_units: str = "") -> np.ndarray:
+    """Return PM concentration in ug m-3, repairing the legacy CAMS scale.
+
+    Historical station files label raw CAMS kg m-3 values as ``ug m-3`` and
+    historical dataset builders multiplied them by 1e12 (ng m-3).  Magnitude
+    therefore participates in the decision instead of trusting that bad label.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    arr = np.where(arr >= 0.0, arr, np.nan)
+    positive = arr[np.isfinite(arr) & (arr > 0.0)]
+    median_abs = float(np.median(positive)) if positive.size else math.nan
+    units = re.sub(r"[\s_µμ]+", "", str(declared_units).strip().lower())
+    if not math.isfinite(median_abs) or median_abs == 0.0:
+        scale = 1.0
+    elif median_abs < 1.0e-3:
+        # Raw CAMS mass concentration in kg m-3, including legacy files whose
+        # attrs incorrectly claim ug m-3.
+        scale = 1.0e9
+    elif median_abs > 1.0e4:
+        # Legacy builders used kg m-3 * 1e12, which is numerically ng m-3.
+        scale = 1.0e-3
+    elif "kgm-3" in units or "kg/m3" in units:
+        scale = 1.0e9
+    else:
+        scale = 1.0
+    return (arr * scale).astype(np.float32)
+
+
+def canonicalize_pmst_field(name: str, values: np.ndarray) -> np.ndarray:
+    """Normalize unit families used by every S1/S2 forecast-source builder."""
+    canon = normalize_var_coord(name)
+    arr = np.asarray(values, dtype=np.float32)
+    median_abs = _finite_median_abs(arr)
+    if not math.isfinite(median_abs):
+        return arr
+    if canon == "MSLP":
+        if 500.0 <= median_abs <= 2000.0:
+            return (arr * 100.0).astype(np.float32)
+        if 20000.0 <= median_abs <= 120000.0:
+            return arr
+        raise ValueError(f"MSLP scale is neither hPa nor Pa: median_abs={median_abs:g}")
+    if canon in {"T2M", "T_925", "T_1000", "DP_925", "DP_1000", "D2M"}:
+        if median_abs < 150.0:
+            return (arr + 273.15).astype(np.float32)
+        return arr
+    if canon in {"RH2M", "RH_925", "RH_1000"}:
+        if median_abs <= 1.5:
+            return (arr * 100.0).astype(np.float32)
+        return arr
+    if canon in {"Q_925", "Q_1000"}:
+        if median_abs > 0.2:
+            return (arr / 1000.0).astype(np.float32)
+        return arr
+    return arr
 
 
 def source_full_profile_features(profile: str) -> List[str]:
@@ -619,7 +698,10 @@ def scatter_overlap_fields(
     fields: canonical/source name -> (nt, ns) float32 array.
     Returns X_met (nt, ns, 24) with shared PMST slots filled and derived fields added.
     """
-    fields = {normalize_var_coord(k): v for k, v in fields.items()}
+    fields = {
+        normalize_var_coord(k): canonicalize_pmst_field(k, v)
+        for k, v in fields.items()
+    }
     enabled = {normalize_var_coord(v) for v in (feature_names if feature_names is not None else OVERLAP_CANONICAL)}
     enabled = {v for v in enabled if v in PMST_INDEX}
     x = np.zeros((nt, ns, PMST_MET_DIM), dtype=np.float32)
@@ -820,8 +902,10 @@ def append_pm10_channel(
         linear_idx_grid = time_pos[:, None] * ns_pm10 + sid_pos[None, :]
         if ok_mask.any():
             pm10_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
-        pm10_grid = np.maximum(pm10_grid, 0.0)
-        pm10_ug = pm10_grid * 1e12
+        pm10_ug = canonicalize_pm_concentration(
+            pm10_grid,
+            str(pm10_da.attrs.get("units", "")),
+        )
         med = np.nanmedian(pm10_ug)
         if not np.isfinite(med):
             med = 0.0
@@ -906,8 +990,10 @@ def append_pm25_channel(
         linear_idx_grid = time_pos[:, None] * ns_pm25 + sid_pos[None, :]
         if ok_mask.any():
             pm25_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
-        pm25_grid = np.maximum(pm25_grid, 0.0)
-        pm25_ug = pm25_grid * 1e12
+        pm25_ug = canonicalize_pm_concentration(
+            pm25_grid,
+            str(pm25_da.attrs.get("units", "")),
+        )
         med = np.nanmedian(pm25_ug)
         if not np.isfinite(med):
             med = 0.0

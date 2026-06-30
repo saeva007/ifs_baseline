@@ -21,6 +21,8 @@ from numpy.lib.stride_tricks import sliding_window_view
 from tqdm import tqdm
 
 from pmst_overlap_common import (
+    CANONICAL_DYNAMIC_UNITS,
+    CANONICAL_UNIT_POLICY_VERSION,
     FEATURE_SET_CHOICES,
     FINAL_FEATURE_ORDER,
     PMST_SOURCE_FIELDS,
@@ -546,6 +548,8 @@ def main():
         "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
         "dynamic_feature_order": dynamic_order,
         "dyn_vars": int(dyn_vars_count),
+        "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
+        "canonical_dynamic_units": CANONICAL_DYNAMIC_UNITS,
         "precipitation_transform": "Tianji PRECIP treated as accumulated amount and converted to hourly increments by differencing along valid time.",
         "fe_dim": fe_dim,
         "fog_fe_dim": int(fog_fe_dim),

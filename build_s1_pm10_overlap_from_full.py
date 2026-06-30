@@ -36,6 +36,8 @@ import os
 import numpy as np
 
 from pmst_overlap_common import (
+    CANONICAL_DYNAMIC_UNITS,
+    CANONICAL_UNIT_POLICY_VERSION,
     COMMON_CORE_PMST_FEATURES,
     FEATURE_SET_CHOICES,
     FINAL_FEATURE_ORDER,
@@ -44,6 +46,7 @@ from pmst_overlap_common import (
     PMST_SOURCE_FIELDS,
     TOTAL_DYN,
     compute_fog_features_pmst,
+    canonicalize_pm_concentration,
     dynamic_feature_order_for_feature_set,
     dynamic_layout_name,
     dyn_vars_for_feature_set,
@@ -102,6 +105,8 @@ def _transform_chunk(dyn: np.ndarray, feature_vars: list[str], feature_set: str)
     """
     met = dyn[:, :, :24].copy()
     zen_pm = dyn[:, :, 24:].copy()
+    zen_pm[:, :, 1] = canonicalize_pm_concentration(zen_pm[:, :, 1], "legacy_mixed")
+    zen_pm[:, :, 2] = canonicalize_pm_concentration(zen_pm[:, :, 2], "legacy_mixed")
     fields = {name: met[:, :, PMST_INDEX[name]] for name in FINAL_FEATURE_ORDER}
     met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields, feature_vars)
     dyn_27 = np.concatenate([met_new, zen_pm], axis=-1).astype(np.float32)
@@ -277,6 +282,8 @@ def main():
         "dynamic_feature_order": dynamic_feature_order_for_feature_set(args.feature_set, feature_vars),
         "dyn_layout": dynamic_layout_name(args.feature_set, feature_vars),
         "dyn_vars": int(dyn_vars),
+        "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
+        "canonical_dynamic_units": CANONICAL_DYNAMIC_UNITS,
         "fog_fe_dim": int(fog_fe_dim),
         "fe_dim": int(fog_fe_dim + 4),
         "max_vis_threshold": float(max_vis_threshold),
