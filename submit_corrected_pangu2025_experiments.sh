@@ -26,7 +26,7 @@ CORRECTED_DATA_ROOT="${CORRECTED_DATA_ROOT:-${BASELINE_DIR}/corrected_pangu2025_
 S1_QCORE_DATA_DIR="${S1_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/s1}"
 TIANJI_QCORE_DATA_DIR="${TIANJI_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/tianji}"
 IFS_QCORE_DATA_DIR="${IFS_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/ifs}"
-ERA5_QCORE_DATA_DIR="${ERA5_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/era5_2025}"
+ERA5_QCORE_DATA_DIR="${ERA5_QCORE_DATA_DIR:-${CORRECTED_DATA_ROOT}/era5_2025_q_core_no_rh2m}"
 PANGU_QCORE_DATA_DIR="${PANGU_QCORE_DATA_DIR:-${CORRECTED_DATA_ROOT}/q_core_no_rh2m}"
 PANGU_SOURCE_FULL_DATA_DIR="${PANGU_SOURCE_FULL_DATA_DIR:-${CORRECTED_DATA_ROOT}/source_full}"
 
@@ -123,8 +123,6 @@ if ! is_true "${DRY_RUN}"; then
     require_dataset qcore_s1 "${S1_QCORE_DATA_DIR}" 0 train val
     require_dataset qcore_tianji "${TIANJI_QCORE_DATA_DIR}" 1 train val test
     require_dataset qcore_ifs "${IFS_QCORE_DATA_DIR}" 1 train val test
-    require_dataset qcore_era5 "${ERA5_QCORE_DATA_DIR}" 1 train val test
-
     require_file "Pangu source-full S1 checkpoint" "${BEST_PANGU_S1_CKPT}"
     require_dataset source_full_tianji "${TIANJI_SOURCE_FULL_DATA_DIR}" 1 train val test
     require_dataset source_full_ifs "${IFS_SOURCE_FULL_DATA_DIR}" 1 train val test
@@ -177,8 +175,13 @@ source_full_data_job="$(submit pangu_source_full_data \
     --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=source_full,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_SOURCE_FULL_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" \
     sub_station_source_overlap_data.slurm)"
 
+era5_qcore_data_job="$(submit era5_qcore_data \
+    --dependency="afterok:${verify_job}" \
+    --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_QCORE_DATA_DIR}" \
+    sub_station_source_overlap_data.slurm)"
+
 audit_job="$(submit qcore_audit \
-    --dependency="afterok:${qcore_data_job}" \
+    --dependency="afterok:${qcore_data_job}:${era5_qcore_data_job}" \
     --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_QCORE_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_QCORE_DATA_DIR},IFS_DATA_DIR=${IFS_QCORE_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_QCORE_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_QCORE_DATA_DIR},AUDIT_OUT_DIR=${FAIR_EVAL_ROOT}/data_audit,EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}" \
     sub_q_core_fair_data_audit.slurm)"
 
@@ -234,6 +237,7 @@ summary_path="logs/corrected_pangu2025_${RUN_TAG}_submission.txt"
     echo "verify_job=${verify_job}"
     echo "qcore_pangu_data_job=${qcore_data_job}"
     echo "source_full_pangu_data_job=${source_full_data_job}"
+    echo "qcore_era5_data_job=${era5_qcore_data_job}"
     echo "qcore_audit_job=${audit_job}"
     echo "fair_s1_job=${fair_s1_job}"
     echo "fair_s2_jobs=${fair_s2_deps}"

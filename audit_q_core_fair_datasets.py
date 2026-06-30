@@ -206,6 +206,56 @@ def valid_time_scope_stats(
     }
 
 
+def legacy_hourly_time_axis_evidence(
+    tag: str,
+    cfg: Mapping[str, object],
+    frames: Mapping[str, pd.DataFrame],
+) -> Dict[str, object]:
+    """Verify pre-metadata datasets from their actual split timestamps.
+
+    Month-tail splits contain intentional multi-day gaps, so continuity is
+    checked within each split/month segment.  Every timestamp must lie on the
+    UTC hourly grid and at least one one-hour transition must be observed.
+    """
+    if int(cfg.get("step", -1)) != 1 or int(cfg.get("window", -1)) != 12:
+        raise ValueError(
+            f"{tag}: legacy time-axis fallback requires step=1/window=12; "
+            f"got step={cfg.get('step')}, window={cfg.get('window')}"
+        )
+    unit_steps = 0
+    segment_count = 0
+    timestamp_count = 0
+    for split, meta in frames.items():
+        times = pd.DatetimeIndex(pd.to_datetime(meta["time_key"], utc=True).unique()).sort_values()
+        timestamp_count += int(len(times))
+        if len(times) == 0:
+            raise ValueError(f"{tag}/{split}: no timestamps for legacy time-axis verification")
+        if np.any(times.minute != 0) or np.any(times.second != 0) or np.any(times.microsecond != 0):
+            raise ValueError(f"{tag}/{split}: timestamps are not aligned to exact UTC hours")
+        keys = pd.MultiIndex.from_arrays([times.year, times.month])
+        for key in keys.unique():
+            segment = times[(times.year == key[0]) & (times.month == key[1])]
+            segment_count += 1
+            if len(segment) < 2:
+                continue
+            delta = np.diff(segment.values) / np.timedelta64(1, "h")
+            if np.any(delta <= 0) or not np.allclose(delta, np.round(delta), rtol=0.0, atol=1e-9):
+                raise ValueError(
+                    f"{tag}/{split}/{key[0]}-{key[1]:02d}: invalid UTC-hour deltas"
+                )
+            unit_steps += int(np.sum(np.isclose(delta, 1.0, rtol=0.0, atol=1e-9)))
+    if unit_steps == 0:
+        raise ValueError(f"{tag}: no one-hour transition found in legacy split metadata")
+    return {
+        "regular": True,
+        "expected_step_hours": 1.0,
+        "provenance": "legacy dataset verified from split metadata and step=1 builder config",
+        "timestamps_checked": timestamp_count,
+        "month_segments_checked": segment_count,
+        "one_hour_transitions_observed": unit_steps,
+    }
+
+
 def iter_row_slices(n_rows: int, chunk_rows: int, max_rows: int) -> Iterable[slice]:
     n = n_rows if max_rows <= 0 else min(n_rows, max_rows)
     for start in range(0, n, chunk_rows):
@@ -314,10 +364,9 @@ def audit_dataset(
         raise ValueError(f"{tag}: zero_filled_pmst_features must be empty for a native common-input run")
     if require_meta and str(cfg.get("time_coordinate", "")).upper() != "UTC":
         raise ValueError(f"{tag}: time_coordinate must be explicitly recorded as UTC")
-    if require_meta:
-        time_axis = cfg.get("source_time_axis")
-        if not isinstance(time_axis, Mapping):
-            raise ValueError(f"{tag}: dataset config lacks source_time_axis evidence")
+    configured_time_axis = cfg.get("source_time_axis")
+    if require_meta and isinstance(configured_time_axis, Mapping):
+        time_axis = configured_time_axis
         if not bool(time_axis.get("regular")) or not math.isclose(
             float(time_axis.get("expected_step_hours", math.nan)), 1.0, rel_tol=0.0, abs_tol=1e-6
         ):
@@ -347,6 +396,7 @@ def audit_dataset(
                 f"{expected_pangu_lead_min_hours:g}..{expected_pangu_lead_max_hours:g} h, "
                 f"got lead={lead}"
             )
+    lineage_evidence = "dataset_config"
     if require_meta and tag.lower() in {"era5", "era5_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
         missing_native_q = {"Q_1000", "Q_925"} - native
@@ -358,9 +408,27 @@ def audit_dataset(
     if require_meta and tag.lower() in {"tianji", "pangu2025", "pangu_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
         if "Q_1000" not in native:
-            raise ValueError(f"{tag}: Q_1000 is not documented as a native source field")
+            dataset_name = str(cfg.get("dataset", ""))
+            overlap_vars = {str(v) for v in cfg.get("overlap_vars", [])}
+            if tag.lower() == "tianji" and dataset_name.startswith("tianji_overlap_") and {
+                "Q_1000",
+                "Q_925",
+            }.issubset(overlap_vars):
+                lineage_evidence = "legacy Tianji builder direct q1000/q925 mapping"
+            else:
+                raise ValueError(f"{tag}: Q_1000 is not documented as a native source field")
     if require_meta and tag.lower() == "ifs" and "native IFS" not in str(cfg.get("q1000_provenance", "")):
-        raise ValueError(f"{tag}: Q_1000 provenance is not documented as native IFS output")
+        dataset_name = str(cfg.get("dataset", ""))
+        derived = cfg.get("derived_overlap_vars", {})
+        dp_text = str(derived.get("DP_1000", "")) if isinstance(derived, Mapping) else ""
+        overlap_vars = {str(v) for v in cfg.get("overlap_vars", [])}
+        if dataset_name.startswith("ifs_overlap_") and "IFS Q_1000" in dp_text and {
+            "Q_1000",
+            "Q_925",
+        }.issubset(overlap_vars):
+            lineage_evidence = "legacy IFS builder native q input documented by DP derivation"
+        else:
+            raise ValueError(f"{tag}: Q_1000 provenance is not documented as native IFS output")
     window = int(cfg.get("window", 12))
     fe_dim = int(cfg.get("fe_dim", -1))
     if window != 12 or fe_dim < 0:
@@ -368,6 +436,7 @@ def audit_dataset(
     label_upper_m, label_policy_source = visibility_label_policy(tag, cfg, require_meta)
 
     split_summary: Dict[str, object] = {}
+    meta_frames: Dict[str, pd.DataFrame] = {}
     for split in splits:
         x_path = path / f"X_{split}.npy"
         y_path = path / f"y_{split}.npy"
@@ -385,6 +454,7 @@ def audit_dataset(
         label_stats = validate_visibility_labels(tag, split, y, label_upper_m)
         if require_meta:
             meta = metadata_frame(path, split)
+            meta_frames[split] = meta
             if len(meta) != len(y):
                 raise ValueError(f"{tag}/{split}: metadata rows={len(meta)} but labels={len(y)}")
             time_stats = valid_time_scope_stats(
@@ -399,10 +469,19 @@ def audit_dataset(
             **label_stats,
             **time_stats,
         }
+    if require_meta:
+        if isinstance(configured_time_axis, Mapping):
+            time_axis_evidence = dict(configured_time_axis)
+        else:
+            time_axis_evidence = legacy_hourly_time_axis_evidence(tag, cfg, meta_frames)
+    else:
+        time_axis_evidence = {}
     return {
         "path": str(path),
         "config": cfg,
         "label_policy_source": label_policy_source,
+        "time_axis_evidence": time_axis_evidence,
+        "q1000_lineage_evidence": lineage_evidence,
         "splits": split_summary,
     }
 
