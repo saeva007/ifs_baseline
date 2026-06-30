@@ -23,12 +23,18 @@ INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-
 
 REUSED_QCORE_DATA_ROOT="${REUSED_QCORE_DATA_ROOT:-${BASELINE_DIR}/q_core_fair_datasets/qcore_pangu2025_rerun_20260629}"
 CORRECTED_DATA_ROOT="${CORRECTED_DATA_ROOT:-${BASELINE_DIR}/corrected_pangu2025_datasets/${RUN_TAG}}"
+REUSE_PANGU_DATA_ROOT="${REUSE_PANGU_DATA_ROOT:-}"
 S1_QCORE_DATA_DIR="${S1_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/s1}"
 TIANJI_QCORE_DATA_DIR="${TIANJI_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/tianji}"
 IFS_QCORE_DATA_DIR="${IFS_QCORE_DATA_DIR:-${REUSED_QCORE_DATA_ROOT}/ifs}"
 ERA5_QCORE_DATA_DIR="${ERA5_QCORE_DATA_DIR:-${CORRECTED_DATA_ROOT}/era5_2025_q_core_no_rh2m}"
-PANGU_QCORE_DATA_DIR="${PANGU_QCORE_DATA_DIR:-${CORRECTED_DATA_ROOT}/q_core_no_rh2m}"
-PANGU_SOURCE_FULL_DATA_DIR="${PANGU_SOURCE_FULL_DATA_DIR:-${CORRECTED_DATA_ROOT}/source_full}"
+if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
+    PANGU_QCORE_DATA_DIR="${PANGU_QCORE_DATA_DIR:-${REUSE_PANGU_DATA_ROOT}/q_core_no_rh2m}"
+    PANGU_SOURCE_FULL_DATA_DIR="${PANGU_SOURCE_FULL_DATA_DIR:-${REUSE_PANGU_DATA_ROOT}/source_full}"
+else
+    PANGU_QCORE_DATA_DIR="${PANGU_QCORE_DATA_DIR:-${CORRECTED_DATA_ROOT}/q_core_no_rh2m}"
+    PANGU_SOURCE_FULL_DATA_DIR="${PANGU_SOURCE_FULL_DATA_DIR:-${CORRECTED_DATA_ROOT}/source_full}"
+fi
 
 FAIR_EVAL_ROOT="${FAIR_EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_fair_pangu2025/${RUN_TAG}}"
 BEST_EVAL_ROOT="${BEST_EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/${RUN_TAG}}"
@@ -116,9 +122,15 @@ require_dataset() {
 }
 
 if ! is_true "${DRY_RUN}"; then
-    require_file "legacy Pangu station product" "${OLD_PANGU_STATION_FILE}"
-    require_file "corrected Pangu station product" "${PANGU2025_STATION_FILE}"
     require_file "canonical target station product" "${TARGET_FILE}"
+
+    if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
+        require_dataset corrected_pangu_qcore "${PANGU_QCORE_DATA_DIR}" 1 train val test
+        require_dataset corrected_pangu_source_full "${PANGU_SOURCE_FULL_DATA_DIR}" 1 train val test
+    else
+        require_file "legacy Pangu station product" "${OLD_PANGU_STATION_FILE}"
+        require_file "corrected Pangu station product" "${PANGU2025_STATION_FILE}"
+    fi
 
     require_dataset qcore_s1 "${S1_QCORE_DATA_DIR}" 0 train val
     require_dataset qcore_tianji "${TIANJI_QCORE_DATA_DIR}" 1 train val test
@@ -160,28 +172,43 @@ echo "PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE}"
 echo "EXPECTED_PANGU_LEAD=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEAD_MAX_HOURS}h"
 echo "REUSED_QCORE_DATA_ROOT=${REUSED_QCORE_DATA_ROOT}"
 echo "CORRECTED_DATA_ROOT=${CORRECTED_DATA_ROOT}"
+echo "REUSE_PANGU_DATA_ROOT=${REUSE_PANGU_DATA_ROOT:-none}"
 
-verify_job="$(submit verify_station \
-    --export="ALL,OLD_PANGU_STATION_FILE=${OLD_PANGU_STATION_FILE},PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME},VERIFY_OUT_JSON=${VERIFY_OUT_JSON}" \
-    sub_verify_pangu_station_product.slurm)"
+if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
+    verify_job="reused_previous_verification"
+    qcore_data_job="reused:${PANGU_QCORE_DATA_DIR}"
+    source_full_data_job="reused:${PANGU_SOURCE_FULL_DATA_DIR}"
+else
+    verify_job="$(submit verify_station \
+        --export="ALL,OLD_PANGU_STATION_FILE=${OLD_PANGU_STATION_FILE},PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME},VERIFY_OUT_JSON=${VERIFY_OUT_JSON}" \
+        sub_verify_pangu_station_product.slurm)"
 
-qcore_data_job="$(submit pangu_qcore_data \
-    --dependency="afterok:${verify_job}" \
-    --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_QCORE_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" \
-    sub_station_source_overlap_data.slurm)"
+    qcore_data_job="$(submit pangu_qcore_data \
+        --dependency="afterok:${verify_job}" \
+        --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_QCORE_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" \
+        sub_station_source_overlap_data.slurm)"
 
-source_full_data_job="$(submit pangu_source_full_data \
-    --dependency="afterok:${verify_job}" \
-    --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=source_full,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_SOURCE_FULL_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" \
-    sub_station_source_overlap_data.slurm)"
+    source_full_data_job="$(submit pangu_source_full_data \
+        --dependency="afterok:${verify_job}" \
+        --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=source_full,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_SOURCE_FULL_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" \
+        sub_station_source_overlap_data.slurm)"
+fi
 
-era5_qcore_data_job="$(submit era5_qcore_data \
-    --dependency="afterok:${verify_job}" \
-    --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_QCORE_DATA_DIR}" \
-    sub_station_source_overlap_data.slurm)"
+if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
+    era5_qcore_data_job="$(submit era5_qcore_data \
+        --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_QCORE_DATA_DIR}" \
+        sub_station_source_overlap_data.slurm)"
+    audit_dependencies="${era5_qcore_data_job}"
+else
+    era5_qcore_data_job="$(submit era5_qcore_data \
+        --dependency="afterok:${verify_job}" \
+        --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=q_core_no_rh2m,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_QCORE_DATA_DIR}" \
+        sub_station_source_overlap_data.slurm)"
+    audit_dependencies="${qcore_data_job}:${era5_qcore_data_job}"
+fi
 
 audit_job="$(submit qcore_audit \
-    --dependency="afterok:${qcore_data_job}:${era5_qcore_data_job}" \
+    --dependency="afterok:${audit_dependencies}" \
     --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_QCORE_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_QCORE_DATA_DIR},IFS_DATA_DIR=${IFS_QCORE_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_QCORE_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_QCORE_DATA_DIR},AUDIT_OUT_DIR=${FAIR_EVAL_ROOT}/data_audit,EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}" \
     sub_q_core_fair_data_audit.slurm)"
 
@@ -212,8 +239,13 @@ fair_eval_job="$(submit fair_eval \
     --export="ALL,RUN_TAG=${RUN_TAG},OUT_DIR=${FAIR_EVAL_ROOT}/argmax_paired,S1_RUN_ID=${FAIR_S1_RUN_ID},TIANJI_RUN_ID=${FAIR_TIANJI_RUN_ID},IFS_RUN_ID=${FAIR_IFS_RUN_ID},PANGU2025_RUN_ID=${FAIR_PANGU_RUN_ID},ERA5_2025_RUN_ID=${FAIR_ERA5_RUN_ID},TIANJI_DATA_DIR=${TIANJI_QCORE_DATA_DIR},IFS_DATA_DIR=${IFS_QCORE_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_QCORE_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_QCORE_DATA_DIR}" \
     sub_static_rnn_q_core_fair_eval.slurm)"
 
+if [[ -n "${REUSE_PANGU_DATA_ROOT}" ]]; then
+    best_train_dependencies="${audit_job}"
+else
+    best_train_dependencies="${audit_job}:${source_full_data_job}"
+fi
 best_train_job="$(submit best_pangu_s2 \
-    --dependency="afterok:${audit_job}:${source_full_data_job}" \
+    --dependency="afterok:${best_train_dependencies}" \
     --export="ALL,EXPERIMENT=s2_pangu2025_source_full,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${BEST_PANGU_RUN_ID},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${BEST_PANGU_S1_CKPT},OVERLAP_S2_DATA_DIR=${PANGU_SOURCE_FULL_DATA_DIR},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_best_pangu_s2" \
     sub_ifs_overlap_baseline.slurm)"
 
@@ -233,6 +265,7 @@ summary_path="logs/corrected_pangu2025_${RUN_TAG}_submission.txt"
     echo "lead_provenance_requirement=metadata_or_explicit_stitched_schedule"
     echo "infer_pangu_lead12_23_from_valid_time=${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}"
     echo "reused_qcore_data_root=${REUSED_QCORE_DATA_ROOT}"
+    echo "reuse_pangu_data_root=${REUSE_PANGU_DATA_ROOT}"
     echo "corrected_data_root=${CORRECTED_DATA_ROOT}"
     echo "verify_job=${verify_job}"
     echo "qcore_pangu_data_job=${qcore_data_job}"
