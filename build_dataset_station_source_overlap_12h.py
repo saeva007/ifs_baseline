@@ -308,7 +308,10 @@ def _aligned_target_visibility(
 
 
 def _coords_for_source(source: xr.Dataset, target: xr.Dataset, stations: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    for ds in (source, target):
+    # Shared station/static/solar features must use the canonical observation
+    # coordinates for every forecast source. Source-file coordinates are only
+    # a fallback for targets without station coordinates.
+    for ds in (target, source):
         if "lat" in ds:
             lat_da = ds["lat"]
             lon_da = ds["lon"]
@@ -325,7 +328,7 @@ def _coords_for_source(source: xr.Dataset, target: xr.Dataset, stations: np.ndar
             lat = np.asarray(lat_da.values)
             lon = np.asarray(lon_da.values)
             if lat.ndim == 1 and len(lat) == len(stations):
-                return lat.astype(np.float32), lon.astype(np.float32)
+                return lat.astype(np.float64), lon.astype(np.float64)
     raise AttributeError("Could not find 1D station lat/lon coordinates in source or target dataset.")
 
 

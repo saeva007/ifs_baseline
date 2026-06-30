@@ -320,8 +320,15 @@ def main() -> None:
         new_lat_common = new_lat[new_common_pos]
         new_lon_common = new_lon[new_common_pos]
 
-        canonical_lat_error = np.abs(new_lat_aligned - target_lat)
-        canonical_lon_error = np.abs(new_lon_aligned - target_lon)
+        # The station interpolator serializes coordinates as float32. Compare
+        # against the canonical coordinates after the same storage round-trip,
+        # otherwise harmless sub-metre quantization looks like a station shift.
+        target_lat_stored = target_lat.astype(np.float32).astype(np.float64)
+        target_lon_stored = target_lon.astype(np.float32).astype(np.float64)
+        canonical_lat_error = np.abs(new_lat_aligned - target_lat_stored)
+        canonical_lon_error = np.abs(new_lon_aligned - target_lon_stored)
+        canonical_lat_raw_error = np.abs(new_lat_aligned - target_lat)
+        canonical_lon_raw_error = np.abs(new_lon_aligned - target_lon)
         if (
             float(np.max(canonical_lat_error)) > args.coord_atol_degrees
             or float(np.max(canonical_lon_error)) > args.coord_atol_degrees
@@ -385,6 +392,12 @@ def main() -> None:
             "canonical_coordinate_tolerance_degrees": args.coord_atol_degrees,
             "new_vs_target_max_lat_error_degrees": float(np.max(canonical_lat_error)),
             "new_vs_target_max_lon_error_degrees": float(np.max(canonical_lon_error)),
+            "new_vs_unquantized_target_max_lat_error_degrees": float(
+                np.max(canonical_lat_raw_error)
+            ),
+            "new_vs_unquantized_target_max_lon_error_degrees": float(
+                np.max(canonical_lon_raw_error)
+            ),
             "old_vs_new_changed_station_count": int(changed_coords.sum()),
             "old_vs_new_max_coordinate_distance_degrees": float(np.max(old_new_distance)),
             "time_axis": time_info,
