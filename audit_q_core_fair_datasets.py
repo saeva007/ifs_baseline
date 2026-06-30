@@ -399,12 +399,21 @@ def audit_dataset(
     lineage_evidence = "dataset_config"
     if require_meta and tag.lower() in {"era5", "era5_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
+        derived = {str(v) for v in cfg.get("derived_source_features", [])}
         missing_native_q = {"Q_1000", "Q_925"} - native
         if missing_native_q:
-            raise ValueError(
-                f"{tag}: ERA5 reference must use native specific humidity, not T/RH reconstruction; "
-                f"missing native fields={sorted(missing_native_q)}"
-            )
+            required_thermodynamics = {"T_1000", "RH_1000", "T_925", "RH_925"}
+            if {"Q_1000", "Q_925"}.issubset(derived) and required_thermodynamics.issubset(native):
+                lineage_evidence = (
+                    "ERA5 Q_1000/Q_925 derived from native pressure-level temperature and "
+                    "relative humidity with the documented thermodynamic conversion"
+                )
+            else:
+                raise ValueError(
+                    f"{tag}: Q provenance is incomplete; missing native Q={sorted(missing_native_q)}, "
+                    f"derived={sorted(derived)}, missing native T/RH="
+                    f"{sorted(required_thermodynamics - native)}"
+                )
     if require_meta and tag.lower() in {"tianji", "pangu2025", "pangu_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
         if "Q_1000" not in native:
