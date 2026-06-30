@@ -32,6 +32,8 @@ EXPECTED_PANGU_LEAD_MIN_HOURS="${EXPECTED_PANGU_LEAD_MIN_HOURS:-12}"
 EXPECTED_PANGU_LEAD_MAX_HOURS="${EXPECTED_PANGU_LEAD_MAX_HOURS:-23}"
 INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-1}"
 SKIP_PANGU_GRID="${SKIP_PANGU_GRID:-1}"
+ALLOW_Q1000_PHYSICAL_OUTLIERS="${ALLOW_Q1000_PHYSICAL_OUTLIERS:-0}"
+FULL_Q1000_QC="${FULL_Q1000_QC:-1}"
 
 if [[ "${SKIP_PANGU_GRID}" != "1" && "${SKIP_PANGU_GRID}" != "true" ]] && \
    ! compgen -G "${PANGU_GRID_GLOB}" >/dev/null; then
@@ -58,6 +60,12 @@ if [[ "${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" == "1" || "${INFER_PANGU_LEAD12
 fi
 if [[ "${SKIP_PANGU_GRID}" == "1" || "${SKIP_PANGU_GRID}" == "true" ]]; then
     CMD+=(--skip-pangu-grid)
+fi
+if [[ "${ALLOW_Q1000_PHYSICAL_OUTLIERS}" == "1" || "${ALLOW_Q1000_PHYSICAL_OUTLIERS}" == "true" ]]; then
+    CMD+=(--allow-q1000-physical-outliers)
+fi
+if [[ "${FULL_Q1000_QC}" == "1" || "${FULL_Q1000_QC}" == "true" ]]; then
+    CMD+=(--full-q1000-qc)
 fi
 for spec in \
     "pangu-dataset-dir=${PANGU_DATASET_DIR}" \

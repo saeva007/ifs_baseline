@@ -82,6 +82,12 @@ coordinates. For this known hourly stitched product, leads 12--23 h are
 reconstructed from the documented 00/12 UTC cycle schedule when per-time lead
 metadata are absent. `submit_corrected_pangu_q1000_checks.sh` rebuilds only the
 Pangu source-full dataset and then runs the Q1000 lineage and mechanism checks.
+The lineage job scans the complete station-level Q1000 field in bounded time
+chunks and reports physical-range rejection counts. Values outside
+`0--40 g kg-1` are excluded by the mechanism analysis rather than clipped.
+`ALLOW_Q1000_PHYSICAL_OUTLIERS=1` may downgrade only the broad-range check
+after those counts have been inspected; lead, cadence, and provenance errors
+remain fatal.
 
 ## Required decision test
 

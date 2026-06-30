@@ -67,15 +67,104 @@ def sample_dataarray(da: xr.DataArray, max_values: int) -> np.ndarray:
     return values
 
 
-def q_to_gkg(values: np.ndarray) -> Tuple[np.ndarray, str]:
+def q_scale_to_gkg(values: np.ndarray, declared_units: str = "") -> Tuple[float, str]:
     values = np.asarray(values, dtype=np.float64)
     finite = values[np.isfinite(values)]
     if not len(finite):
-        return values, "unknown"
+        return 1.0, "unknown"
+    units = re.sub(r"[\s_]+", "", str(declared_units).strip().lower())
+    if units in {"kgkg-1", "kgkg^-1", "kg/kg", "kgkg**-1", "1", "dimensionless"}:
+        return 1000.0, f"{declared_units or 'dimensionless'} declared; converted to g kg-1"
+    if units in {"gkg-1", "gkg^-1", "g/kg", "gkg**-1"}:
+        return 1.0, f"{declared_units} declared"
     p99 = float(np.nanpercentile(np.abs(finite), 99))
     if p99 < 0.2:
-        return values * 1000.0, "kg kg-1 inferred; converted to g kg-1"
-    return values, "g kg-1 inferred"
+        return 1000.0, "kg kg-1 inferred; converted to g kg-1"
+    return 1.0, "g kg-1 inferred"
+
+
+def q_to_gkg(values: np.ndarray, declared_units: str = "") -> Tuple[np.ndarray, str]:
+    scale, provenance = q_scale_to_gkg(values, declared_units)
+    return np.asarray(values, dtype=np.float64) * scale, provenance
+
+
+def q_physical_summary(values_gkg: np.ndarray) -> Dict[str, object]:
+    finite = np.asarray(values_gkg, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if not len(finite):
+        return {"n_finite": 0}
+    broad_invalid = (finite < -0.01) | (finite > 80.0)
+    analysis_invalid = (finite < 0.0) | (finite > 40.0)
+    return {
+        "n_finite": int(len(finite)),
+        "min_gkg": float(np.min(finite)),
+        "p001_gkg": float(np.quantile(finite, 0.001)),
+        "p01_gkg": float(np.quantile(finite, 0.01)),
+        "p99_gkg": float(np.quantile(finite, 0.99)),
+        "p999_gkg": float(np.quantile(finite, 0.999)),
+        "max_gkg": float(np.max(finite)),
+        "n_below_zero": int(np.sum(finite < 0.0)),
+        "n_below_minus_0p01": int(np.sum(finite < -0.01)),
+        "n_above_40": int(np.sum(finite > 40.0)),
+        "n_above_80": int(np.sum(finite > 80.0)),
+        "n_outside_analysis_range_0_40": int(np.sum(analysis_invalid)),
+        "fraction_outside_analysis_range_0_40": float(np.mean(analysis_invalid)),
+        "n_outside_broad_range_minus_0p01_80": int(np.sum(broad_invalid)),
+        "fraction_outside_broad_range_minus_0p01_80": float(np.mean(broad_invalid)),
+    }
+
+
+def scan_q_physical_summary(
+    da: xr.DataArray,
+    scale_to_gkg: float,
+    time_chunk: int = 168,
+) -> Dict[str, object]:
+    time_dim = next((dim for dim in da.dims if dim.lower() in {"time", "valid_time"}), None)
+    if time_dim is None:
+        selections = (da,)
+    else:
+        selections = (
+            da.isel({time_dim: slice(start, min(start + time_chunk, int(da.sizes[time_dim])))})
+            for start in range(0, int(da.sizes[time_dim]), time_chunk)
+        )
+    n_finite = 0
+    n_below_zero = 0
+    n_below_minus = 0
+    n_above_40 = 0
+    n_above_80 = 0
+    min_gkg = math.inf
+    max_gkg = -math.inf
+    for selection in selections:
+        values = np.asarray(selection.values, dtype=np.float64).reshape(-1)
+        values = values[np.isfinite(values)] * float(scale_to_gkg)
+        if not len(values):
+            continue
+        n_finite += int(len(values))
+        n_below_zero += int(np.sum(values < 0.0))
+        n_below_minus += int(np.sum(values < -0.01))
+        n_above_40 += int(np.sum(values > 40.0))
+        n_above_80 += int(np.sum(values > 80.0))
+        min_gkg = min(min_gkg, float(np.min(values)))
+        max_gkg = max(max_gkg, float(np.max(values)))
+    if n_finite == 0:
+        return {"n_finite": 0, "scan_scope": "full_dataarray"}
+    broad_count = n_below_minus + n_above_80
+    analysis_count = n_below_zero + n_above_40
+    return {
+        "scan_scope": "full_dataarray",
+        "time_chunk": int(time_chunk),
+        "n_finite": n_finite,
+        "min_gkg": min_gkg,
+        "max_gkg": max_gkg,
+        "n_below_zero": n_below_zero,
+        "n_below_minus_0p01": n_below_minus,
+        "n_above_40": n_above_40,
+        "n_above_80": n_above_80,
+        "n_outside_analysis_range_0_40": analysis_count,
+        "fraction_outside_analysis_range_0_40": analysis_count / n_finite,
+        "n_outside_broad_range_minus_0p01_80": broad_count,
+        "fraction_outside_broad_range_minus_0p01_80": broad_count / n_finite,
+    }
 
 
 def dewpoint_from_q_k(q_gkg: np.ndarray, pressure_hpa: float) -> np.ndarray:
@@ -163,6 +252,8 @@ def inspect_nc(
     expected_lead_min: Optional[float],
     expected_lead_max: Optional[float],
     infer_pangu_lead12_23_from_valid_time: bool,
+    allow_q1000_physical_outliers: bool,
+    full_q1000_qc: bool,
     issues: List[Dict[str, str]],
     quantiles: List[Dict[str, object]],
 ) -> Dict[str, object]:
@@ -210,17 +301,43 @@ def inspect_nc(
         dp_name = find_name(ds, ("DP_1000", "dp1000"))
         if q_name:
             q_raw = sample_dataarray(ds[q_name], max_values)
-            q_gkg, inferred = q_to_gkg(q_raw)
+            declared_units = str(ds[q_name].attrs.get("units", ""))
+            scale_to_gkg, inferred = q_scale_to_gkg(q_raw, declared_units)
+            q_gkg = q_raw * scale_to_gkg
+            physical_sample = q_physical_summary(q_gkg)
+            physical = (
+                scan_q_physical_summary(ds[q_name], scale_to_gkg)
+                if full_q1000_qc
+                else physical_sample
+            )
             report["q1000"] = {
                 "variable": q_name,
-                "declared_units": str(ds[q_name].attrs.get("units", "")),
+                "declared_units": declared_units,
                 "unit_inference": inferred,
+                "sample_raw_min": float(np.min(q_raw)) if len(q_raw) else math.nan,
+                "sample_raw_max": float(np.max(q_raw)) if len(q_raw) else math.nan,
                 "sample_min_gkg": float(np.min(q_gkg)) if len(q_gkg) else math.nan,
                 "sample_max_gkg": float(np.max(q_gkg)) if len(q_gkg) else math.nan,
+                "physical_qc_sample": physical_sample,
+                "physical_qc_decision": physical,
             }
             quantiles.extend(quantile_rows(label, stage, "Q_1000", q_gkg, "g kg-1"))
-            if len(q_gkg) and (float(np.min(q_gkg)) < -0.01 or float(np.max(q_gkg)) > 80.0):
-                issues.append({"severity": "error", "stage": stage, "message": "Q1000 sample is outside broad physical bounds"})
+            if int(physical.get("n_outside_broad_range_minus_0p01_80", 0)) > 0:
+                severity = "warning" if allow_q1000_physical_outliers else "error"
+                issues.append(
+                    {
+                        "severity": severity,
+                        "stage": stage,
+                        "message": (
+                            "Q1000 sample is outside broad physical bounds; "
+                            f"units={declared_units or 'missing'}, conversion={inferred}, "
+                            f"min={physical['min_gkg']:.6g}, max={physical['max_gkg']:.6g} g kg-1, "
+                            f"n_outside={physical['n_outside_broad_range_minus_0p01_80']}/"
+                            f"{physical['n_finite']} "
+                            f"({100.0 * physical['fraction_outside_broad_range_minus_0p01_80']:.6g}%)."
+                        ),
+                    }
+                )
             if dp_name:
                 dp = sample_dataarray(ds[dp_name], max_values)
                 if len(dp) and np.nanmedian(dp) < 100.0:
@@ -244,6 +361,8 @@ def inspect_pangu_grids(
     expected_lead_min: float,
     expected_lead_max: float,
     infer_pangu_lead12_23_from_valid_time: bool,
+    allow_q1000_physical_outliers: bool,
+    full_q1000_qc: bool,
     issues: List[Dict[str, str]],
     quantiles: List[Dict[str, object]],
 ) -> Dict[str, object]:
@@ -267,6 +386,8 @@ def inspect_pangu_grids(
             expected_lead_min,
             expected_lead_max,
             infer_pangu_lead12_23_from_valid_time,
+            allow_q1000_physical_outliers,
+            full_q1000_qc,
             issues,
             quantiles,
         )
@@ -482,6 +603,20 @@ def main() -> None:
     ap.add_argument("--expected-pangu-lead-max-hours", type=float, default=23.0)
     ap.add_argument("--infer-pangu-lead12-23-from-valid-time", action="store_true")
     ap.add_argument("--skip-pangu-grid", action="store_true")
+    ap.add_argument(
+        "--allow-q1000-physical-outliers",
+        action="store_true",
+        help=(
+            "Record Q1000 values outside -0.01..80 g kg-1 as warnings instead of errors. "
+            "Use only after inspecting the reported counts; downstream mechanism analysis "
+            "masks Q outside 0..40 g kg-1."
+        ),
+    )
+    ap.add_argument(
+        "--full-q1000-qc",
+        action="store_true",
+        help="Scan every finite Q1000 value in each inspected NetCDF using bounded time chunks.",
+    )
     ap.add_argument("--strict", action="store_true", help="Exit non-zero when any error-level issue is found.")
     args = ap.parse_args()
 
@@ -501,6 +636,8 @@ def main() -> None:
             args.expected_pangu_lead_min_hours,
             args.expected_pangu_lead_max_hours,
             args.infer_pangu_lead12_23_from_valid_time,
+            args.allow_q1000_physical_outliers,
+            args.full_q1000_qc,
             issues,
             quantiles,
         )
@@ -516,6 +653,8 @@ def main() -> None:
             args.expected_pangu_lead_min_hours,
             args.expected_pangu_lead_max_hours,
             args.infer_pangu_lead12_23_from_valid_time,
+            args.allow_q1000_physical_outliers,
+            args.full_q1000_qc,
             issues,
             quantiles,
         )
@@ -531,6 +670,8 @@ def main() -> None:
             None,
             None,
             False,
+            args.allow_q1000_physical_outliers,
+            args.full_q1000_qc,
             issues,
             quantiles,
         )
