@@ -723,6 +723,28 @@ Important outputs:
 
 ## Q1000 Extreme Verification And Multi-Source Model Reliance
 
+For the corrected canonical-station Pangu product, use the dedicated data-check
+chain. It verifies the new file against both the old Pangu product and the
+canonical Tianji station table, rebuilds only the Pangu `source_full` dataset,
+then runs the lineage/elevation audit and the complete Q1000 mechanism analysis.
+It does not train a model.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=q1000_pangu2025_canonical_20260630 \
+DRY_RUN=1 \
+bash submit_corrected_pangu_q1000_checks.sh
+
+RUN_TAG=q1000_pangu2025_canonical_20260630 \
+bash submit_corrected_pangu_q1000_checks.sh
+```
+
+The defaults use
+`pangu_station/pangu_station_2025_lead12_23h_canonical.nc`, assert leads
+12--23 h, and enable the documented 00/12 UTC stitched-schedule reconstruction.
+Override those defaults only if the new product path or lead metadata differs.
+
 Before interpreting any Q1000 result, run the metadata-backed lineage audit.
 It reads actual `valid_time-init_time`, checks hourly cadence, verifies native
 Q provenance, and reports Q1000 skill separately below 100 m, 100--500 m, and

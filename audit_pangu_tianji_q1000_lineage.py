@@ -106,7 +106,11 @@ def quantile_rows(label: str, stage: str, feature: str, values: np.ndarray, unit
     return rows
 
 
-def lead_evidence(ds: xr.Dataset, time_name: str) -> Dict[str, object]:
+def lead_evidence(
+    ds: xr.Dataset,
+    time_name: str,
+    infer_pangu_lead12_23_from_valid_time: bool = False,
+) -> Dict[str, object]:
     valid = pd.DatetimeIndex(pd.to_datetime(ds[time_name].values))
     lead: Optional[np.ndarray] = None
     provenance = "missing"
@@ -133,6 +137,10 @@ def lead_evidence(ds: xr.Dataset, time_name: str) -> Dict[str, object]:
     if lead is None and "forecast_lead_hours" in ds.attrs:
         lead = np.full(len(valid), float(ds.attrs["forecast_lead_hours"]), dtype=np.float64)
         provenance = "global attribute"
+    if lead is None and infer_pangu_lead12_23_from_valid_time:
+        hours = valid.hour.to_numpy(dtype=np.float64)
+        lead = np.where(hours < 12.0, hours + 12.0, hours)
+        provenance = "explicit stitched 00/12 UTC schedule reconstructed from valid_time hour"
     if lead is None:
         return {"available": False, "consistent": False, "provenance": provenance}
     finite = lead[np.isfinite(lead)]
@@ -152,7 +160,9 @@ def inspect_nc(
     path: str,
     max_values: int,
     expected_hourly: bool,
-    expected_lead: Optional[float],
+    expected_lead_min: Optional[float],
+    expected_lead_max: Optional[float],
+    infer_pangu_lead12_23_from_valid_time: bool,
     issues: List[Dict[str, str]],
     quantiles: List[Dict[str, object]],
 ) -> Dict[str, object]:
@@ -170,17 +180,30 @@ def inspect_nc(
             report["time_axis"] = time_summary
             if expected_hourly and not bool(time_summary["regular"]):
                 issues.append({"severity": "error", "stage": stage, "message": "valid-time axis is not hourly"})
-            lead = lead_evidence(ds, time_name)
+            lead = lead_evidence(
+                ds,
+                time_name,
+                infer_pangu_lead12_23_from_valid_time=infer_pangu_lead12_23_from_valid_time,
+            )
             report["forecast_lead"] = lead
-            if expected_lead is not None:
+            if expected_lead_min is not None or expected_lead_max is not None:
+                if expected_lead_min is None or expected_lead_max is None:
+                    raise ValueError("both expected lead bounds are required")
                 if not bool(lead.get("available")):
                     issues.append({"severity": "error", "stage": stage, "message": "forecast lead metadata is missing"})
                 elif not (
-                    math.isclose(float(lead.get("min_hours", math.nan)), expected_lead, abs_tol=1.0e-6)
-                    and math.isclose(float(lead.get("max_hours", math.nan)), expected_lead, abs_tol=1.0e-6)
+                    math.isclose(float(lead.get("min_hours", math.nan)), expected_lead_min, abs_tol=1.0e-6)
+                    and math.isclose(float(lead.get("max_hours", math.nan)), expected_lead_max, abs_tol=1.0e-6)
                 ):
                     issues.append(
-                        {"severity": "error", "stage": stage, "message": f"actual lead is not {expected_lead:g} h: {lead}"}
+                        {
+                            "severity": "error",
+                            "stage": stage,
+                            "message": (
+                                f"actual lead range is not {expected_lead_min:g}.."
+                                f"{expected_lead_max:g} h: {lead}"
+                            ),
+                        }
                     )
 
         q_name = find_name(ds, ("Q_1000", "q1000"))
@@ -218,6 +241,9 @@ def inspect_pangu_grids(
     pattern: str,
     max_files: int,
     max_values: int,
+    expected_lead_min: float,
+    expected_lead_max: float,
+    infer_pangu_lead12_23_from_valid_time: bool,
     issues: List[Dict[str, str]],
     quantiles: List[Dict[str, object]],
 ) -> Dict[str, object]:
@@ -232,14 +258,29 @@ def inspect_pangu_grids(
     reports = []
     all_times: List[np.ndarray] = []
     for path in files:
-        report = inspect_nc("Pangu", "pangu_grid", path, max_values, False, 24.0, issues, quantiles)
+        report = inspect_nc(
+            "Pangu",
+            "pangu_grid",
+            path,
+            max_values,
+            False,
+            expected_lead_min,
+            expected_lead_max,
+            infer_pangu_lead12_23_from_valid_time,
+            issues,
+            quantiles,
+        )
         reports.append(report)
         ds = open_dataset(path)
         try:
             time_name = "time" if "time" in ds.coords else "valid_time"
             token = re.search(r"lead(\d+)h", Path(path).name)
             lead = report.get("forecast_lead", {})
-            if token and bool(lead.get("available")):
+            if (
+                token
+                and bool(lead.get("available"))
+                and math.isclose(float(lead["min_hours"]), float(lead["max_hours"]), abs_tol=1.0e-6)
+            ):
                 named = float(token.group(1))
                 if not math.isclose(named, float(lead["min_hours"]), abs_tol=1.0e-6):
                     issues.append(
@@ -423,7 +464,10 @@ def paired_complete_case_metrics(
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pangu-grid-glob", default=f"{DEFAULT_BASE}/pangu_2025_china_chunks/pangu_china_2025*_lead*.nc")
-    ap.add_argument("--pangu-station-file", default=f"{DEFAULT_BASE}/ifs_baseline/pangu_station/pangu_station_2025_lead24h.nc")
+    ap.add_argument(
+        "--pangu-station-file",
+        default=f"{DEFAULT_BASE}/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h_canonical.nc",
+    )
     ap.add_argument("--tianji-file", default=f"{DEFAULT_BASE}/tianji_auto_station/merged_final_all_vars.nc")
     ap.add_argument("--pangu-dataset-dir", default="")
     ap.add_argument("--tianji-dataset-dir", default="")
@@ -434,6 +478,10 @@ def main() -> None:
     ap.add_argument("--max-values", type=int, default=200000)
     ap.add_argument("--max-dataset-rows", type=int, default=300000)
     ap.add_argument("--paired-max-rows", type=int, default=0, help="0 uses every common test row.")
+    ap.add_argument("--expected-pangu-lead-min-hours", type=float, default=12.0)
+    ap.add_argument("--expected-pangu-lead-max-hours", type=float, default=23.0)
+    ap.add_argument("--infer-pangu-lead12-23-from-valid-time", action="store_true")
+    ap.add_argument("--skip-pangu-grid", action="store_true")
     ap.add_argument("--strict", action="store_true", help="Exit non-zero when any error-level issue is found.")
     args = ap.parse_args()
 
@@ -442,21 +490,49 @@ def main() -> None:
     issues: List[Dict[str, str]] = []
     quantiles: List[Dict[str, object]] = []
     elevation_rows: List[Dict[str, object]] = []
-    report: Dict[str, object] = {
-        "method": "metadata-backed Q1000 lineage audit",
-        "pangu_grid": inspect_pangu_grids(
-            args.pangu_grid_glob, args.max_grid_files, args.max_values, issues, quantiles
-        ),
-    }
+    if args.expected_pangu_lead_min_hours > args.expected_pangu_lead_max_hours:
+        raise ValueError("expected Pangu lead minimum exceeds maximum")
+    report: Dict[str, object] = {"method": "metadata-backed Q1000 lineage audit"}
+    if not args.skip_pangu_grid:
+        report["pangu_grid"] = inspect_pangu_grids(
+            args.pangu_grid_glob,
+            args.max_grid_files,
+            args.max_values,
+            args.expected_pangu_lead_min_hours,
+            args.expected_pangu_lead_max_hours,
+            args.infer_pangu_lead12_23_from_valid_time,
+            issues,
+            quantiles,
+        )
+    else:
+        report["pangu_grid"] = {"skipped": True}
     if os.path.isfile(args.pangu_station_file):
         report["pangu_station"] = inspect_nc(
-            "Pangu", "pangu_station", args.pangu_station_file, args.max_values, True, 24.0, issues, quantiles
+            "Pangu",
+            "pangu_station",
+            args.pangu_station_file,
+            args.max_values,
+            True,
+            args.expected_pangu_lead_min_hours,
+            args.expected_pangu_lead_max_hours,
+            args.infer_pangu_lead12_23_from_valid_time,
+            issues,
+            quantiles,
         )
     else:
         issues.append({"severity": "error", "stage": "pangu_station", "message": f"missing {args.pangu_station_file}"})
     if os.path.isfile(args.tianji_file):
         report["tianji_station"] = inspect_nc(
-            "Tianji", "tianji_station", args.tianji_file, args.max_values, True, None, issues, quantiles
+            "Tianji",
+            "tianji_station",
+            args.tianji_file,
+            args.max_values,
+            True,
+            None,
+            None,
+            False,
+            issues,
+            quantiles,
         )
     else:
         issues.append({"severity": "error", "stage": "tianji_station", "message": f"missing {args.tianji_file}"})
@@ -473,6 +549,31 @@ def main() -> None:
             dataset_report[label] = inspect_model_dataset(
                 label, path, args.max_dataset_rows, issues, elevation_rows
             )
+            if label == "Pangu":
+                lead = dataset_report[label].get("source_forecast_lead")
+                if not isinstance(lead, Mapping) or not bool(lead.get("available")):
+                    issues.append(
+                        {"severity": "error", "stage": "Pangu_dataset", "message": "dataset lead evidence is missing"}
+                    )
+                elif not (
+                    math.isclose(
+                        float(lead.get("min_hours", math.nan)),
+                        args.expected_pangu_lead_min_hours,
+                        abs_tol=1.0e-6,
+                    )
+                    and math.isclose(
+                        float(lead.get("max_hours", math.nan)),
+                        args.expected_pangu_lead_max_hours,
+                        abs_tol=1.0e-6,
+                    )
+                ):
+                    issues.append(
+                        {
+                            "severity": "error",
+                            "stage": "Pangu_dataset",
+                            "message": f"dataset lead range does not match expected bounds: {lead}",
+                        }
+                    )
     report["model_datasets"] = dataset_report
     paired_df, paired_coverage = paired_complete_case_metrics(dataset_specs, args.paired_max_rows)
     paired_df.to_csv(out_dir / "q1000_paired_complete_case_elevation_metrics.csv", index=False)

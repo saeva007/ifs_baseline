@@ -45,8 +45,9 @@ below-ground 1000-hPa values are not all controlled.
 
 - Pangu is initialized from ERA5 and evaluated against ERA5 reference analysis,
   so it shares an analysis family with the reference.
-- Pangu is currently lead24h while Tianji/IFS use a 12--23 h stitched product;
-  this is not a lead-matched experiment.
+- The original local ONNX path is lead24h, whereas the updated canonical
+  station product is the separately documented 12--23 h stitched product.
+  They must not be mixed under one Pangu label.
 - The apparent Pangu advantage is concentrated mainly in June--September,
   where marginal Q is strongly controlled by the warm/moist seasonal state.
 - Positive-weight IDW interpolation cannot create a value above all neighboring
@@ -66,10 +67,21 @@ until the lineage audit passes.
 - Bulk Pangu inference defaults to all 24 initialization hours so 12 adjacent
   valid times can form an actual 12 h sequence.
 - Tianji, IFS, ERA5, and Pangu dataset builders reject non-hourly axes.
-- Pangu-2025 builds require metadata-backed lead24h evidence.
+- Pangu-2025 builds require an explicit expected lead range and either
+  per-time metadata or the narrowly scoped documented 00/12 UTC stitched schedule.
 - ERA5 q-core builds require native Q1000/Q925 provenance.
 - `audit_pangu_tianji_q1000_lineage.py` reports raw-grid, station, and model
   dataset lineage plus common-finite-sample elevation sensitivity.
+
+## Updated canonical-station product
+
+The active updated data-check path now uses
+`pangu_station_2025_lead12_23h_canonical.nc`. The corrected product is first
+verified against the legacy station file and the canonical Tianji station
+coordinates. For this known hourly stitched product, leads 12--23 h are
+reconstructed from the documented 00/12 UTC cycle schedule when per-time lead
+metadata are absent. `submit_corrected_pangu_q1000_checks.sh` rebuilds only the
+Pangu source-full dataset and then runs the Q1000 lineage and mechanism checks.
 
 ## Required decision test
 

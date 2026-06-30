@@ -45,6 +45,7 @@ MIN_PAIRS="${MIN_PAIRS:-100}"
 REQUIRE_CASE_CONTROL="${REQUIRE_CASE_CONTROL:-1}"
 DISTRIBUTION_ONLY="${DISTRIBUTION_ONLY:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+PANGU_SOURCE_LABEL="${PANGU_SOURCE_LABEL:-Pangu-2025 ${FEATURE_SET}}"
 
 case "${FEATURE_SET}" in
     source_full)
@@ -69,7 +70,7 @@ case "${FEATURE_SET}" in
         ;;
 esac
 
-SOURCES_DEFAULT="tianji=${TIANJI_DATA_DIR}|Tianji ${FEATURE_SET}|numerical;ifs=${IFS_DATA_DIR}|IFS ${FEATURE_SET}|numerical;era5_2025_source_full=${ERA5_2025_DATA_DIR}|ERA5 reference analysis ${FEATURE_SET}|reference;pangu2025_source_full=${PANGU2025_DATA_DIR}|Pangu-2025 ${FEATURE_SET}|ai"
+SOURCES_DEFAULT="tianji=${TIANJI_DATA_DIR}|Tianji ${FEATURE_SET}|numerical;ifs=${IFS_DATA_DIR}|IFS ${FEATURE_SET}|numerical;era5_2025_source_full=${ERA5_2025_DATA_DIR}|ERA5 reference analysis ${FEATURE_SET}|reference;pangu2025_source_full=${PANGU2025_DATA_DIR}|${PANGU_SOURCE_LABEL}|ai"
 SOURCES="${SOURCES:-${SOURCES_DEFAULT}}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
