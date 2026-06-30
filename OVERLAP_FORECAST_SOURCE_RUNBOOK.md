@@ -227,6 +227,22 @@ PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station
 bash submit_q_core_fair_experiment.sh
 ```
 
+The same unit defect affects every historical `source_full` dataset and its
+checkpoint, not only Pangu. Rebuild and retrain all source-full profiles and
+sources with the dedicated end-to-end launcher:
+
+```bash
+RUN_TAG=source_full_units_v2_20260701 \
+PANGU2025_STATION_FILE=/public/home/putianshu/vis_mlp/ifs_baseline/pangu_station/pangu_station_2025_lead12_23h_canonical.nc \
+bash submit_source_full_units_v2_experiment.sh
+```
+
+Its dependency graph is station verification -> three source-full S1 data
+profiles plus five S2 datasets -> canonical-unit/physical-range/layout/paired
+sample audit -> all three S1 models -> all five S2 models -> all-source argmax
+evaluation. Do not reuse historical source-full data, scalers, S1 checkpoints,
+or S2 checkpoints for this repaired result.
+
 The final evaluation always uses each source-specific S2 checkpoint with
 `argmax`. It first saves the ordinary per-source predictions, then recomputes
 all reported comparison metrics on the four-source paired test intersection.
