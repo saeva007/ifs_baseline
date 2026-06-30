@@ -13,6 +13,7 @@ import argparse
 import gc
 import glob
 import json
+import math
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -336,7 +337,10 @@ def _extract_fields(ds: xr.Dataset, t0: int, t1: int) -> Dict[str, np.ndarray]:
     return fields
 
 
-def _forecast_lead_summary(ds: xr.Dataset) -> Dict[str, object]:
+def _forecast_lead_summary(
+    ds: xr.Dataset,
+    infer_pangu_lead12_23_from_valid_time: bool = False,
+) -> Dict[str, object]:
     valid = pd.DatetimeIndex(pd.to_datetime(ds["time"].values))
     lead = None
     provenance = ""
@@ -367,6 +371,10 @@ def _forecast_lead_summary(ds: xr.Dataset) -> Dict[str, object]:
     if lead is None and "forecast_lead_hours" in ds.attrs:
         lead = np.full(len(valid), float(ds.attrs["forecast_lead_hours"]), dtype=np.float64)
         provenance = "global forecast_lead_hours attribute"
+    if lead is None and infer_pangu_lead12_23_from_valid_time:
+        hours = valid.hour.to_numpy(dtype=np.float64)
+        lead = np.where(hours < 12.0, hours + 12.0, hours)
+        provenance = "explicit stitched 00/12 UTC schedule reconstructed from valid_time hour"
     if lead is None:
         return {"available": False, "provenance": "missing"}
     finite = np.isfinite(lead)
@@ -408,6 +416,14 @@ def main() -> None:
     ap.add_argument("--expected_lead_min_hours", type=float, default=None)
     ap.add_argument("--expected_lead_max_hours", type=float, default=None)
     ap.add_argument("--allow_missing_forecast_lead", action="store_true")
+    ap.add_argument(
+        "--infer_pangu_lead12_23_from_valid_time",
+        action="store_true",
+        help=(
+            "For the legacy hourly stitched product only: reconstruct lead 12..23 h from "
+            "valid hour using 00/12 UTC initialization cycles."
+        ),
+    )
     ap.add_argument("--val_last_days", type=int, default=VAL_LAST_DAYS_DEFAULT)
     ap.add_argument("--test_last_days", type=int, default=TEST_LAST_DAYS_DEFAULT)
     ap.add_argument("--gap_hours", type=int, default=GAP_HOURS_DEFAULT)
@@ -454,7 +470,19 @@ def main() -> None:
         time_axis_summary = require_regular_time_axis(
             times, args.expected_time_step_hours, args.source_tag
         )
-    lead_summary = _forecast_lead_summary(ds_source)
+    if args.infer_pangu_lead12_23_from_valid_time and not (
+        args.expected_lead_min_hours is not None
+        and args.expected_lead_max_hours is not None
+        and math.isclose(args.expected_lead_min_hours, 12.0, rel_tol=0.0, abs_tol=1e-6)
+        and math.isclose(args.expected_lead_max_hours, 23.0, rel_tol=0.0, abs_tol=1e-6)
+    ):
+        raise ValueError(
+            "--infer_pangu_lead12_23_from_valid_time requires explicit expected lead range 12..23 h"
+        )
+    lead_summary = _forecast_lead_summary(
+        ds_source,
+        infer_pangu_lead12_23_from_valid_time=args.infer_pangu_lead12_23_from_valid_time,
+    )
     require_lead = args.source_tag.lower().replace("-", "") in {"pangu2025", "pangu_2025"}
     if require_lead and not bool(lead_summary["available"]) and not args.allow_missing_forecast_lead:
         raise ValueError(

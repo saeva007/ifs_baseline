@@ -264,8 +264,9 @@ any large data build or GPU job can start:
 - at least one old station coordinate differs from the corrected coordinate;
 - sampled interpolated meteorological values differ between old and new files;
 - valid times are unique and hourly;
-- per-time `init_time`/`forecast_lead_hours` evidence is present, internally
-  consistent, and has the declared lead range.
+- per-time `init_time`/`forecast_lead_hours` evidence is internally consistent;
+  for the legacy stitched product only, an explicit 00/12 UTC schedule may
+  reconstruct leads 12--23 h from valid-time hour.
 
 The chain then builds only two Pangu datasets (`q_core_no_rh2m` and
 `source_full`), runs the four-source q-core pairing audit, trains a fresh shared
@@ -303,15 +304,12 @@ EXPECTED_PANGU_LEAD_MAX_HOURS=23 \
 bash submit_corrected_pangu2025_experiments.sh
 ```
 
-The lead range above is an assertion, not a filename inference. If the uploaded
-canonical file was written by the legacy interpolator and therefore lacks
-`init_time/forecast_lead_hours`, the first job fails before allocating data-build
-or training resources. In that case, rerun station interpolation on the other
-cluster with the repository's current `interpolate_pangu_to_stations.py` and
-the canonical target (or `STATION_FILE=""`). This is only an interpolation
-rerun; Pangu ONNX inference is not required as long as the existing gridded
-inputs already carry their initialization/lead metadata. Do not bypass this
-failure with filename-based or manually guessed lead provenance.
+The lead range above is an assertion, not a filename inference. The corrected
+launcher defaults to `INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1` for the known
+legacy hourly stitched product. It reconstructs the documented schedule as:
+valid hours 12--23 use the same-day 00 UTC initialization, and valid hours
+00--11 use the previous-day 12 UTC initialization. Disable this option for any
+other Pangu product; such products must carry their own lead metadata.
 
 ## Required Order
 

@@ -62,6 +62,7 @@ DATA_EXTRA_ARGS="${DATA_EXTRA_ARGS:-}"
 EXPECTED_TIME_STEP_HOURS="${EXPECTED_TIME_STEP_HOURS:-1}"
 EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-}"
 EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-}"
+INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-0}"
 
 if [[ "${SOURCE_TAG}" =~ ^pangu([0-9]{4})$ ]]; then
     YEAR="${BASH_REMATCH[1]}"
@@ -120,6 +121,9 @@ if [[ -n "${EXPECTED_LEAD_MIN_HOURS}" ]]; then
 fi
 if [[ -n "${EXPECTED_LEAD_MAX_HOURS}" ]]; then
     PY_ARGS+=(--expected_lead_max_hours "${EXPECTED_LEAD_MAX_HOURS}")
+fi
+if [[ "${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" == "1" || "${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" == "true" ]]; then
+    PY_ARGS+=(--infer_pangu_lead12_23_from_valid_time)
 fi
 if [[ -n "${SOURCE_FILE}" ]]; then
     PY_ARGS+=(--source_file "${SOURCE_FILE}")

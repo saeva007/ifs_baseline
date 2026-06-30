@@ -95,7 +95,30 @@ def aligned_positions(reference: np.ndarray, candidate: np.ndarray, label: str) 
     return cand.get_indexer(ref)
 
 
-def lead_summary(ds: xr.Dataset, time_name: str) -> Dict[str, object]:
+def common_station_positions(
+    reference: np.ndarray, candidate: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return reference-ordered common keys/positions plus set differences."""
+    ref = pd.Index(reference)
+    cand = pd.Index(candidate)
+    common_mask = ref.isin(cand)
+    common = ref[common_mask]
+    if len(common) == 0:
+        raise ValueError("old and canonical products have no common station identifiers")
+    return (
+        common.to_numpy(dtype=str),
+        np.flatnonzero(common_mask),
+        cand.get_indexer(common),
+        ref.difference(cand).to_numpy(dtype=str),
+        cand.difference(ref).to_numpy(dtype=str),
+    )
+
+
+def lead_summary(
+    ds: xr.Dataset,
+    time_name: str,
+    infer_stitched_lead12_23: bool,
+) -> Dict[str, object]:
     valid = pd.DatetimeIndex(pd.to_datetime(ds[time_name].values))
     lead = None
     provenance = ""
@@ -126,10 +149,17 @@ def lead_summary(ds: xr.Dataset, time_name: str) -> Dict[str, object]:
     if lead is None and "forecast_lead_hours" in ds.attrs:
         lead = np.full(len(valid), float(ds.attrs["forecast_lead_hours"]), dtype=np.float64)
         provenance = "global forecast_lead_hours attribute"
+    if lead is None and infer_stitched_lead12_23:
+        # The legacy hourly product stitches 00/12 UTC initializations: valid
+        # hours 12..23 use the same-day 00 UTC cycle, while 00..11 use the
+        # previous-day 12 UTC cycle.  This reconstructs leads 12..23 exactly.
+        hours = valid.hour.to_numpy(dtype=np.float64)
+        lead = np.where(hours < 12.0, hours + 12.0, hours)
+        provenance = "explicit stitched 00/12 UTC schedule reconstructed from valid_time hour"
     if lead is None:
         raise ValueError(
-            "new product lacks init_time/forecast_lead_hours; re-run interpolation with "
-            "the repository version of interpolate_pangu_to_stations.py"
+            "new product lacks init_time/forecast_lead_hours; either regenerate it with the "
+            "current interpolator or explicitly enable the legacy lead12_23 stitched schedule"
         )
     if not np.isfinite(lead).all():
         raise ValueError("forecast lead contains non-finite values")
@@ -252,6 +282,7 @@ def main() -> None:
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--expected-lead-min-hours", type=float, required=True)
     ap.add_argument("--expected-lead-max-hours", type=float, required=True)
+    ap.add_argument("--infer-stitched-lead12-23", action="store_true")
     ap.add_argument("--coord-atol-degrees", type=float, default=1e-6)
     ap.add_argument("--max-sample-times", type=int, default=24)
     ap.add_argument("--max-sample-stations", type=int, default=128)
@@ -273,11 +304,21 @@ def main() -> None:
         target_keys, target_lat, target_lon, _ = station_table(target)
 
         new_to_target = aligned_positions(target_keys, new_keys, "new versus canonical target")
-        old_to_target = aligned_positions(target_keys, old_keys, "old versus canonical target")
+        (
+            common_keys,
+            target_common_pos,
+            old_common_pos,
+            old_missing_from_target,
+            old_extra_vs_target,
+        ) = common_station_positions(target_keys, old_keys)
+        new_index = pd.Index(new_keys)
+        new_common_pos = new_index.get_indexer(common_keys)
         new_lat_aligned = new_lat[new_to_target]
         new_lon_aligned = new_lon[new_to_target]
-        old_lat_aligned = old_lat[old_to_target]
-        old_lon_aligned = old_lon[old_to_target]
+        old_lat_common = old_lat[old_common_pos]
+        old_lon_common = old_lon[old_common_pos]
+        new_lat_common = new_lat[new_common_pos]
+        new_lon_common = new_lon[new_common_pos]
 
         canonical_lat_error = np.abs(new_lat_aligned - target_lat)
         canonical_lon_error = np.abs(new_lon_aligned - target_lon)
@@ -292,7 +333,7 @@ def main() -> None:
             )
 
         old_new_distance = np.hypot(
-            old_lat_aligned - new_lat_aligned, old_lon_aligned - new_lon_aligned
+            old_lat_common - new_lat_common, old_lon_common - new_lon_common
         )
         changed_coords = old_new_distance > args.coord_atol_degrees
         if not changed_coords.any():
@@ -302,7 +343,7 @@ def main() -> None:
             )
 
         new_time, time_info = time_summary(new, args.year)
-        lead = lead_summary(new, new_time)
+        lead = lead_summary(new, new_time, args.infer_stitched_lead12_23)
         if not math.isclose(
             float(lead["min_hours"]), args.expected_lead_min_hours, rel_tol=0.0, abs_tol=1e-6
         ) or not math.isclose(
@@ -313,13 +354,14 @@ def main() -> None:
                 f"{args.expected_lead_min_hours}..{args.expected_lead_max_hours} h"
             )
 
+        changed_common_pos = np.flatnonzero(changed_coords)
         differences = sampled_data_differences(
             old,
             new,
             old_station,
             new_station,
-            old_to_target,
-            new_to_target,
+            old_common_pos[changed_common_pos],
+            new_common_pos[changed_common_pos],
             args.max_sample_times,
             args.max_sample_stations,
         )
@@ -334,6 +376,12 @@ def main() -> None:
             "new_file": str(Path(args.new_file).resolve()),
             "target_file": str(Path(args.target_file).resolve()),
             "station_count": int(len(target_keys)),
+            "old_station_count": int(len(old_keys)),
+            "old_new_common_station_count": int(len(common_keys)),
+            "old_missing_canonical_station_count": int(len(old_missing_from_target)),
+            "old_missing_canonical_stations": old_missing_from_target.tolist(),
+            "old_extra_station_count": int(len(old_extra_vs_target)),
+            "old_extra_stations": old_extra_vs_target.tolist(),
             "canonical_coordinate_tolerance_degrees": args.coord_atol_degrees,
             "new_vs_target_max_lat_error_degrees": float(np.max(canonical_lat_error)),
             "new_vs_target_max_lon_error_degrees": float(np.max(canonical_lon_error)),

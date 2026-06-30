@@ -27,6 +27,7 @@ TARGET_FILE="${TARGET_FILE:-${BASE}/tianji_auto_station/merged_final_all_vars.nc
 EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:?EXPECTED_LEAD_MIN_HOURS is required}"
 EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:?EXPECTED_LEAD_MAX_HOURS is required}"
 VERIFY_OUT_JSON="${VERIFY_OUT_JSON:?VERIFY_OUT_JSON is required}"
+INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-0}"
 
 mkdir -p "${BASELINE_DIR}/logs" "$(dirname "${VERIFY_OUT_JSON}")"
 cd "${BASELINE_DIR}"
@@ -41,5 +42,8 @@ CMD=(
     --expected-lead-min-hours "${EXPECTED_LEAD_MIN_HOURS}"
     --expected-lead-max-hours "${EXPECTED_LEAD_MAX_HOURS}"
 )
+if [[ "${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" == "1" || "${INFER_PANGU_LEAD12_23_FROM_VALID_TIME}" == "true" ]]; then
+    CMD+=(--infer-stitched-lead12-23)
+fi
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"
