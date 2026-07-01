@@ -42,6 +42,8 @@ from pmst_overlap_common import (
     FEATURE_SET_CHOICES,
     FINAL_FEATURE_ORDER,
     OVERLAP_CANONICAL,
+    PM_CONCENTRATION_MAX_UGM3,
+    PM_QC_POLICY_VERSION,
     PMST_INDEX,
     PMST_SOURCE_FIELDS,
     TOTAL_DYN,
@@ -53,6 +55,7 @@ from pmst_overlap_common import (
     resolve_pmst_feature_set,
     scatter_overlap_fields,
     select_dynamic_layout,
+    sanitize_pm_concentration,
     source_full_profile_features,
 )
 
@@ -63,6 +66,8 @@ STATIC_VEG = 6  # 5 + 1
 SOURCE_FE_DIM = 36
 SOURCE_EXPECTED_ROW = SOURCE_BASE_DYN + STATIC_VEG + SOURCE_FE_DIM
 DEFAULT_S1_MAX_VIS_THRESHOLD = 90000.0
+PM_SOURCE_INDICES = {"PM10_ugm3": 25, "PM25_ugm3": 26}
+PM_HISTOGRAM_BINS = 10000
 
 
 def _output_dims(feature_set: str, feature_vars: list[str]) -> tuple[int, int, int, int]:
@@ -98,15 +103,66 @@ def resolve_s1_feature_vars(args: argparse.Namespace) -> list[str]:
     return resolve_pmst_feature_set(args.feature_set, PMST_SOURCE_FIELDS)
 
 
-def _transform_chunk(dyn: np.ndarray, feature_vars: list[str], feature_set: str) -> tuple[np.ndarray, np.ndarray]:
+def _estimate_training_pm_fill_values(src_path: str, chunk: int) -> tuple[dict[str, float], dict[str, dict[str, float | int]]]:
+    """Estimate deterministic training-only medians with a 1 ug m-3 histogram."""
+    X = np.load(src_path, mmap_mode="r")
+    if len(X.shape) != 2 or X.shape[1] != SOURCE_EXPECTED_ROW:
+        raise ValueError(f"{src_path}: expected shape [N,{SOURCE_EXPECTED_ROW}], got {X.shape}")
+    hist = {name: np.zeros(PM_HISTOGRAM_BINS, dtype=np.int64) for name in PM_SOURCE_INDICES}
+    total = {name: 0 for name in PM_SOURCE_INDICES}
+    invalid = {name: 0 for name in PM_SOURCE_INDICES}
+    for i in range(0, len(X), chunk):
+        block = np.asarray(X[i : min(i + chunk, len(X)), :SOURCE_BASE_DYN], dtype=np.float32)
+        dyn = block.reshape(-1, WINDOW, SOURCE_DYN_VARS)
+        for name, idx in PM_SOURCE_INDICES.items():
+            values = canonicalize_pm_concentration(dyn[:, :, idx], "legacy_mixed")
+            valid = np.isfinite(values) & (values >= 0.0) & (values <= PM_CONCENTRATION_MAX_UGM3)
+            total[name] += int(values.size)
+            invalid[name] += int((~valid).sum())
+            if valid.any():
+                counts, _ = np.histogram(
+                    values[valid],
+                    bins=PM_HISTOGRAM_BINS,
+                    range=(0.0, PM_CONCENTRATION_MAX_UGM3),
+                )
+                hist[name] += counts.astype(np.int64, copy=False)
+    fills: dict[str, float] = {}
+    stats: dict[str, dict[str, float | int]] = {}
+    for name in PM_SOURCE_INDICES:
+        valid_n = int(hist[name].sum())
+        if valid_n == 0:
+            raise ValueError(f"{src_path}: {name} has no valid values in [0,{PM_CONCENTRATION_MAX_UGM3:g}]")
+        target = (valid_n - 1) // 2
+        bin_idx = int(np.searchsorted(np.cumsum(hist[name]), target + 1, side="left"))
+        fill = (bin_idx + 0.5) * (PM_CONCENTRATION_MAX_UGM3 / PM_HISTOGRAM_BINS)
+        fills[name] = float(fill)
+        stats[name] = {
+            "values_checked": int(total[name]),
+            "invalid_values": int(invalid[name]),
+            "invalid_fraction": float(invalid[name]) / max(int(total[name]), 1),
+            "training_median_ugm3": float(fill),
+        }
+    return fills, stats
+
+
+def _transform_chunk(
+    dyn: np.ndarray,
+    feature_vars: list[str],
+    feature_set: str,
+    pm_fill_values: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
     """
     dyn: (N, 12, 27) full dynamic from source (24 met + zenith + pm10 + pm2p5).
     Returns selected dynamic layout and fog FE based only on that layout.
     """
     met = dyn[:, :, :24].copy()
     zen_pm = dyn[:, :, 24:].copy()
-    zen_pm[:, :, 1] = canonicalize_pm_concentration(zen_pm[:, :, 1], "legacy_mixed")
-    zen_pm[:, :, 2] = canonicalize_pm_concentration(zen_pm[:, :, 2], "legacy_mixed")
+    zen_pm[:, :, 1] = sanitize_pm_concentration(
+        zen_pm[:, :, 1], "legacy_mixed", fill_value=pm_fill_values["PM10_ugm3"]
+    )
+    zen_pm[:, :, 2] = sanitize_pm_concentration(
+        zen_pm[:, :, 2], "legacy_mixed", fill_value=pm_fill_values["PM25_ugm3"]
+    )
     fields = {name: met[:, :, PMST_INDEX[name]] for name in FINAL_FEATURE_ORDER}
     met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields, feature_vars)
     dyn_27 = np.concatenate([met_new, zen_pm], axis=-1).astype(np.float32)
@@ -116,7 +172,14 @@ def _transform_chunk(dyn: np.ndarray, feature_vars: list[str], feature_set: str)
     return dyn_new, fe_base
 
 
-def transform_file(src_path: str, dst_path: str, chunk: int, feature_vars: list[str], feature_set: str) -> int:
+def transform_file(
+    src_path: str,
+    dst_path: str,
+    chunk: int,
+    feature_vars: list[str],
+    feature_set: str,
+    pm_fill_values: dict[str, float],
+) -> int:
     X = np.load(src_path, mmap_mode="r")
     if len(X.shape) != 2 or X.shape[1] != SOURCE_EXPECTED_ROW:
         raise ValueError(f"{src_path}: expected shape [N,{SOURCE_EXPECTED_ROW}], got {X.shape}")
@@ -127,7 +190,7 @@ def transform_file(src_path: str, dst_path: str, chunk: int, feature_vars: list[
         sl = slice(i, min(i + chunk, n))
         block = np.array(X[sl], dtype=np.float32)
         dyn = block[:, :SOURCE_BASE_DYN].reshape(-1, WINDOW, SOURCE_DYN_VARS)
-        dyn_new, fe_base = _transform_chunk(dyn, feature_vars, feature_set)
+        dyn_new, fe_base = _transform_chunk(dyn, feature_vars, feature_set, pm_fill_values)
         if dyn_new.shape[-1] != dyn_vars or fe_base.shape[1] != fog_fe_dim:
             raise RuntimeError("Unexpected compact output layout while transforming S1 data.")
         out_block = np.empty((block.shape[0], row_dim), dtype=np.float32)
@@ -209,6 +272,11 @@ def main():
     feature_vars = resolve_s1_feature_vars(args)
     dyn_vars, dyn_dim, fog_fe_dim, row_dim = _output_dims(args.feature_set, feature_vars)
     max_vis_threshold, label_policy_source = source_max_vis_threshold(args.source_dir)
+    train_source_path = os.path.join(args.source_dir, "X_train.npy")
+    if not os.path.isfile(train_source_path):
+        raise FileNotFoundError(f"Training split is required to fit PM imputation: {train_source_path}")
+    pm_fill_values, pm_training_qc = _estimate_training_pm_fill_values(train_source_path, args.chunk_rows)
+    print(f"[PM-QC] policy={PM_QC_POLICY_VERSION} train_fill_values={pm_fill_values}", flush=True)
 
     if args.merge_train_val:
         xt = os.path.join(args.source_dir, "X_train.npy")
@@ -232,7 +300,7 @@ def main():
                 sl = slice(i, min(i + args.chunk_rows, n_src))
                 block = np.array(X[sl], dtype=np.float32)
                 dyn = block[:, :SOURCE_BASE_DYN].reshape(-1, WINDOW, SOURCE_DYN_VARS)
-                dyn_new, fe_base = _transform_chunk(dyn, feature_vars, args.feature_set)
+                dyn_new, fe_base = _transform_chunk(dyn, feature_vars, args.feature_set, pm_fill_values)
                 out_block = np.empty((block.shape[0], row_dim), dtype=np.float32)
                 out_block[:, :dyn_dim] = dyn_new.reshape(-1, dyn_dim)
                 out_block[:, dyn_dim : dyn_dim + STATIC_VEG] = block[
@@ -256,7 +324,9 @@ def main():
                 print(f"[SKIP] missing {src_x}", flush=True)
                 continue
             dst_x = os.path.join(args.out_dir, x_name)
-            n = transform_file(src_x, dst_x, args.chunk_rows, feature_vars, args.feature_set)
+            n = transform_file(
+                src_x, dst_x, args.chunk_rows, feature_vars, args.feature_set, pm_fill_values
+            )
             print(f"[OK] {x_name} -> {dst_x} (N={n})", flush=True)
             y_name = f"y_{tag}.npy"
             copy_if_exists(args.source_dir, y_name, args.out_dir)
@@ -284,6 +354,11 @@ def main():
         "dyn_vars": int(dyn_vars),
         "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
         "canonical_dynamic_units": CANONICAL_DYNAMIC_UNITS,
+        "pm_qc_policy": PM_QC_POLICY_VERSION,
+        "pm_valid_range_ugm3": [0.0, PM_CONCENTRATION_MAX_UGM3],
+        "pm_imputation_fit_split": "train",
+        "pm_training_fill_values_ugm3": pm_fill_values,
+        "pm_training_qc": pm_training_qc,
         "fog_fe_dim": int(fog_fe_dim),
         "fe_dim": int(fog_fe_dim + 4),
         "max_vis_threshold": float(max_vis_threshold),

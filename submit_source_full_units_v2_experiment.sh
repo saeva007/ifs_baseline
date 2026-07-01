@@ -12,6 +12,7 @@ CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 RUN_TAG="${RUN_TAG:-source_full_units_v2_$(date +%Y%m%d_%H%M%S)}"
 DRY_RUN="${DRY_RUN:-0}"
 RESUME_FROM_AUDIT="${RESUME_FROM_AUDIT:-0}"
+REBUILD_S1_ONLY="${REBUILD_S1_ONLY:-0}"
 DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/source_full_units_v2_datasets/${RUN_TAG}}"
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/${RUN_TAG}}"
 
@@ -86,8 +87,18 @@ if [[ ! "${RUN_TAG}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "ERROR: invalid RUN_TAG=${RUN_TAG}" >&2
     exit 2
 fi
+if is_true "${RESUME_FROM_AUDIT}" && is_true "${REBUILD_S1_ONLY}"; then
+    echo "ERROR: choose only one of RESUME_FROM_AUDIT=1 and REBUILD_S1_ONLY=1." >&2
+    exit 2
+fi
 if ! is_true "${DRY_RUN}"; then
-    if is_true "${RESUME_FROM_AUDIT}"; then
+    if is_true "${REBUILD_S1_ONLY}"; then
+        require_dataset_files tianji "${TIANJI_DIR}" 1 train val test
+        require_dataset_files t2nd "${T2ND_DIR}" 1 train val test
+        require_dataset_files ifs "${IFS_DIR}" 1 train val test
+        require_dataset_files pangu2025 "${PANGU_DIR}" 1 train val test
+        require_dataset_files era5_2025 "${ERA5_DIR}" 1 train val test
+    elif is_true "${RESUME_FROM_AUDIT}"; then
         require_dataset_files s1_tianji "${S1_TIANJI_DIR}" 0 train val
         require_dataset_files s1_ifs "${S1_IFS_DIR}" 0 train val
         require_dataset_files s1_pangu2025 "${S1_PANGU_DIR}" 0 train val
@@ -118,10 +129,19 @@ fi
 echo "Canonical source-full experiment RUN_TAG=${RUN_TAG}"
 echo "DATA_ROOT=${DATA_ROOT}"
 echo "RESUME_FROM_AUDIT=${RESUME_FROM_AUDIT}"
+echo "REBUILD_S1_ONLY=${REBUILD_S1_ONLY}"
 
 sources="tianji=${TIANJI_DIR};t2nd=${T2ND_DIR};ifs=${IFS_DIR};pangu2025=${PANGU_DIR};era5_2025=${ERA5_DIR}"
 s1_profiles="tianji=${S1_TIANJI_DIR};ifs=${S1_IFS_DIR};pangu2025=${S1_PANGU_DIR}"
-if is_true "${RESUME_FROM_AUDIT}"; then
+if is_true "${REBUILD_S1_ONLY}"; then
+    verify_job="reused_existing_verification"
+    s1_tianji_data_job="$(submit s1_tianji_pm_qc_rebuild --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji,OUT_DIR=${S1_TIANJI_DIR}" sub_s1_overlap_data.slurm)"
+    s1_ifs_data_job="$(submit s1_ifs_pm_qc_rebuild --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs,OUT_DIR=${S1_IFS_DIR}" sub_s1_overlap_data.slurm)"
+    s1_pangu_data_job="$(submit s1_pangu_pm_qc_rebuild --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu2025,OUT_DIR=${S1_PANGU_DIR}" sub_s1_overlap_data.slurm)"
+    rebuilt_s1_deps="$(join_colon "${s1_tianji_data_job}" "${s1_ifs_data_job}" "${s1_pangu_data_job}")"
+    all_data_deps="reused_s2_rebuilt_s1:${rebuilt_s1_deps}"
+    audit_job="$(submit data_audit --dependency="afterok:${rebuilt_s1_deps}" --export="ALL,SOURCES=${sources},S1_PROFILES=${s1_profiles},AUDIT_OUT_DIR=${AUDIT_DIR}" sub_source_full_canonical_audit.slurm)"
+elif is_true "${RESUME_FROM_AUDIT}"; then
     verify_job="reused_existing_verification"
     all_data_deps="reused_existing_datasets"
     audit_job="$(submit data_audit --export="ALL,SOURCES=${sources},S1_PROFILES=${s1_profiles},AUDIT_OUT_DIR=${AUDIT_DIR}" sub_source_full_canonical_audit.slurm)"
@@ -165,7 +185,7 @@ era5_s2_job="$(train_s2 era5_s2 "${s1_tianji_job}" s2_era5_2025_source_full "${E
 s2_deps="$(join_colon "${tianji_s2_job}" "${t2nd_s2_job}" "${ifs_s2_job}" "${pangu_s2_job}" "${era5_s2_job}")"
 eval_job="$(submit argmax_eval --dependency="afterok:${s2_deps}" --export="ALL,EVAL_SCENARIO=figure1_all_sources,OUT_ROOT=${EVAL_ROOT},TIANJI_DATA_DIR=${TIANJI_DIR},IFS_DATA_DIR=${IFS_DIR},T2ND_DATA_DIR=${T2ND_DIR},PANGU2025_DATA_DIR=${PANGU_DIR},ERA5_2025_DATA_DIR=${ERA5_DIR},TIANJI_CKPT=${CKPT_DIR}/${TIANJI_RUN_ID}_S2_PhaseB_best_score.pt,IFS_CKPT=${CKPT_DIR}/${IFS_RUN_ID}_S2_PhaseB_best_score.pt,T2ND_CKPT=${CKPT_DIR}/${T2ND_RUN_ID}_S2_PhaseB_best_score.pt,PANGU2025_CKPT=${CKPT_DIR}/${PANGU_RUN_ID}_S2_PhaseB_best_score.pt,ERA5_2025_CKPT=${CKPT_DIR}/${ERA5_RUN_ID}_S2_PhaseB_best_score.pt,THRESHOLD_MODE=argmax,STRICT_META=1" sub_static_rnn_source_full_argmax_eval.slurm)"
 
-if is_true "${RESUME_FROM_AUDIT}"; then
+if is_true "${RESUME_FROM_AUDIT}" || is_true "${REBUILD_S1_ONLY}"; then
     manifest="logs/source_full_units_v2_${RUN_TAG}_resume_$(date +%Y%m%d_%H%M%S)_submission.txt"
 else
     manifest="logs/source_full_units_v2_${RUN_TAG}_submission.txt"
@@ -173,7 +193,9 @@ fi
 {
     echo "run_tag=${RUN_TAG}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
+    echo "pm_qc_policy=pm_invalid_outside_0_10000_to_train_median_v1_20260701"
     echo "resume_from_audit=${RESUME_FROM_AUDIT}"
+    echo "rebuild_s1_only=${REBUILD_S1_ONLY}"
     echo "data_root=${DATA_ROOT}"
     echo "verify_job=${verify_job}"
     echo "data_jobs=${all_data_deps}"

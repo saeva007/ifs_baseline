@@ -22,6 +22,7 @@ INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-
 ALLOW_EXISTING_RUN="${ALLOW_EXISTING_RUN:-0}"
 ALLOW_UNVERIFIED_PANGU_LEAD="${ALLOW_UNVERIFIED_PANGU_LEAD:-0}"
 RESUME_FROM_AUDIT="${RESUME_FROM_AUDIT:-0}"
+REBUILD_S1_ONLY="${REBUILD_S1_ONLY:-0}"
 
 case "${PANGU2025_STATION_FILE}" in
     /path/to/*|PATH_TO_*|REPLACE_ME*)
@@ -106,8 +107,12 @@ if [[ -z "${PANGU2025_STATION_FILE}" ]]; then
     PANGU2025_STATION_FILE="${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc"
 fi
 
-if is_true "${RESUME_FROM_AUDIT}" && is_true "${BUILD_PANGU_STATION}"; then
-    echo "ERROR: RESUME_FROM_AUDIT=1 reuses completed datasets and cannot be combined with BUILD_PANGU_STATION=1." >&2
+if is_true "${RESUME_FROM_AUDIT}" && is_true "${REBUILD_S1_ONLY}"; then
+    echo "ERROR: choose only one of RESUME_FROM_AUDIT=1 and REBUILD_S1_ONLY=1." >&2
+    exit 2
+fi
+if { is_true "${RESUME_FROM_AUDIT}" || is_true "${REBUILD_S1_ONLY}"; } && is_true "${BUILD_PANGU_STATION}"; then
+    echo "ERROR: dataset reuse modes cannot be combined with BUILD_PANGU_STATION=1." >&2
     exit 2
 fi
 
@@ -124,10 +129,10 @@ if ! is_true "${DRY_RUN}" && ! is_true "${ALLOW_EXISTING_RUN}"; then
             existing+=("${path}")
         fi
     done
-    if ! is_true "${RESUME_FROM_AUDIT}" && [[ -e "${DATA_ROOT}" ]]; then
+    if ! is_true "${RESUME_FROM_AUDIT}" && ! is_true "${REBUILD_S1_ONLY}" && [[ -e "${DATA_ROOT}" ]]; then
         existing+=("${DATA_ROOT}")
     fi
-    if is_true "${RESUME_FROM_AUDIT}"; then
+    if is_true "${RESUME_FROM_AUDIT}" || is_true "${REBUILD_S1_ONLY}"; then
         if [[ -e "${EVAL_ROOT}/argmax_paired/q_core_paired_common_metrics.csv" ]]; then
             existing+=("${EVAL_ROOT}/argmax_paired/q_core_paired_common_metrics.csv")
         fi
@@ -150,13 +155,14 @@ echo "EXPECTED_PANGU_LEAD=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEA
 echo "DATA_ROOT=${DATA_ROOT}"
 echo "S1_RUN_ID=${S1_RUN_ID}"
 echo "RESUME_FROM_AUDIT=${RESUME_FROM_AUDIT}"
+echo "REBUILD_S1_ONLY=${REBUILD_S1_ONLY}"
 
 pangu_station_dep=""
 if is_true "${BUILD_PANGU_STATION}"; then
     echo "ERROR: BUILD_PANGU_STATION=1 is disabled for the canonical stitched product." >&2
     echo "Provide PANGU2025_STATION_FILE=${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc." >&2
     exit 2
-elif ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
+elif ! is_true "${DRY_RUN}" && ! is_true "${RESUME_FROM_AUDIT}" && ! is_true "${REBUILD_S1_ONLY}" && [[ ! -s "${PANGU2025_STATION_FILE}" ]]; then
     echo "ERROR: Pangu-2025 station file is missing or empty: ${PANGU2025_STATION_FILE}" >&2
     echo "Set PANGU2025_STATION_FILE to the verified canonical 12--23 h station product." >&2
     exit 2
@@ -186,7 +192,22 @@ require_dataset_files() {
     done
 }
 
-if is_true "${RESUME_FROM_AUDIT}"; then
+if is_true "${REBUILD_S1_ONLY}"; then
+    if ! is_true "${DRY_RUN}"; then
+        require_dataset_files tianji "${TIANJI_DATA_DIR}" 1 train val test
+        require_dataset_files ifs "${IFS_DATA_DIR}" 1 train val test
+        require_dataset_files pangu2025 "${PANGU2025_DATA_DIR}" 1 train val test
+        require_dataset_files era5_2025 "${ERA5_2025_DATA_DIR}" 1 train val test
+    fi
+    s1_data_job="$(submit s1_data_pm_qc_rebuild \
+        --export="ALL,FEATURE_SET=${FEATURE_SET},OUT_DIR=${S1_DATA_DIR}" \
+        sub_s1_overlap_data.slurm)"
+    data_deps="reused_s2_rebuilt_s1:${s1_data_job}"
+    audit_job="$(submit data_audit \
+        --dependency="afterok:${s1_data_job}" \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR},EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}" \
+        sub_q_core_fair_data_audit.slurm)"
+elif is_true "${RESUME_FROM_AUDIT}"; then
     if ! is_true "${DRY_RUN}"; then
         require_dataset_files s1 "${S1_DATA_DIR}" 0 train val
         require_dataset_files tianji "${TIANJI_DATA_DIR}" 1 train val test
@@ -256,13 +277,15 @@ eval_job="$(submit paired_eval \
     --export="ALL,RUN_TAG=${RUN_TAG},S1_RUN_ID=${S1_RUN_ID},TIANJI_RUN_ID=${TIANJI_RUN_ID},IFS_RUN_ID=${IFS_RUN_ID},PANGU2025_RUN_ID=${PANGU2025_RUN_ID},ERA5_2025_RUN_ID=${ERA5_2025_RUN_ID},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU2025_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_2025_DATA_DIR}" \
     sub_static_rnn_q_core_fair_eval.slurm)"
 
-if is_true "${RESUME_FROM_AUDIT}"; then
+if is_true "${RESUME_FROM_AUDIT}" || is_true "${REBUILD_S1_ONLY}"; then
     summary_path="logs/q_core_fair_${RUN_TAG}_resume_$(date +%Y%m%d_%H%M%S)_submission.txt"
 else
     summary_path="logs/q_core_fair_${RUN_TAG}_submission.txt"
 fi
 {
-    if is_true "${RESUME_FROM_AUDIT}"; then
+    if is_true "${REBUILD_S1_ONLY}"; then
+        echo "experiment_status=scheduled_rebuild_s1_then_resume"
+    elif is_true "${RESUME_FROM_AUDIT}"; then
         echo "experiment_status=scheduled_resume_from_audit"
     else
         echo "experiment_status=scheduled"
@@ -275,10 +298,12 @@ fi
     echo "lead_time_scope=pangu_tianji_ifs_12_to_23h"
     echo "expected_pangu_lead_hours=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEAD_MAX_HOURS}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
+    echo "pm_qc_policy=pm_invalid_outside_0_10000_to_train_median_v1_20260701"
     echo "era5_role=reference_analysis"
     echo "pangu_station_file=${PANGU2025_STATION_FILE}"
     echo "data_root=${DATA_ROOT}"
     echo "resume_from_audit=${RESUME_FROM_AUDIT}"
+    echo "rebuild_s1_only=${REBUILD_S1_ONLY}"
     echo "data_jobs=${data_deps}"
     echo "audit_job=${audit_job}"
     echo "s1_train_job=${s1_train_job}"

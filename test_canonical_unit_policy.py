@@ -16,6 +16,7 @@ from pmst_overlap_common import (  # noqa: E402
     PMST_INDEX,
     canonicalize_pm_concentration,
     canonicalize_pmst_field,
+    sanitize_pm_concentration,
     scatter_overlap_fields,
 )
 
@@ -35,6 +36,16 @@ class CanonicalUnitPolicyTest(unittest.TestCase):
     def test_existing_ugm3_is_unchanged(self):
         values = np.array([0.0, 50.0, 100.0], dtype=np.float32)
         np.testing.assert_allclose(canonicalize_pm_concentration(values, "ug m-3"), values)
+
+    def test_pm_qc_replaces_impossible_and_missing_values(self):
+        values = np.array([20.0, 100.0, 20000.0, -999.0, np.nan], dtype=np.float32)
+        got = sanitize_pm_concentration(values, "ug m-3")
+        np.testing.assert_allclose(got, [20.0, 100.0, 60.0, 60.0, 60.0])
+
+    def test_pm_qc_accepts_training_only_fill_value(self):
+        legacy = np.array([100000.0, 2.0e7], dtype=np.float32)
+        got = sanitize_pm_concentration(legacy, "legacy_mixed", fill_value=75.5)
+        np.testing.assert_allclose(got, [100.0, 75.5])
 
     def test_mslp_hpa_and_pa_both_become_pa(self):
         hpa = np.array([1000.0, 1010.0], dtype=np.float32)

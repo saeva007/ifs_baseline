@@ -12,6 +12,8 @@ from typing import Dict, Iterable, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from pmst_overlap_common import PM_QC_POLICY_VERSION
+
 
 EXPECTED_POLICY = "pmst_canonical_units_v2_20260630"
 REQUIRED_UNITS = {
@@ -160,6 +162,10 @@ def audit_dataset(
     cfg = load_config(path)
     if str(cfg.get("canonical_unit_policy", "")) != EXPECTED_POLICY:
         raise ValueError(f"{tag}: missing canonical unit policy {EXPECTED_POLICY}")
+    if tag.startswith("s1_") and str(cfg.get("pm_qc_policy", "")) != PM_QC_POLICY_VERSION:
+        raise ValueError(
+            f"{tag}: missing S1 PM QC policy {PM_QC_POLICY_VERSION}; rebuild this S1 profile"
+        )
     units = cfg.get("canonical_dynamic_units")
     if not isinstance(units, Mapping):
         raise ValueError(f"{tag}: canonical_dynamic_units is missing")

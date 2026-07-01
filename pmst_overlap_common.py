@@ -176,6 +176,8 @@ FEATURE_SET_CHOICES: Tuple[str, ...] = (
 )
 
 CANONICAL_UNIT_POLICY_VERSION = "pmst_canonical_units_v2_20260630"
+PM_QC_POLICY_VERSION = "pm_invalid_outside_0_10000_to_train_median_v1_20260701"
+PM_CONCENTRATION_MAX_UGM3 = 10000.0
 CANONICAL_DYNAMIC_UNITS: Dict[str, str] = {
     "T2M": "K",
     "MSLP": "Pa",
@@ -223,6 +225,30 @@ def canonicalize_pm_concentration(values: np.ndarray, declared_units: str = "") 
     else:
         scale = 1.0
     return (arr * scale).astype(np.float32)
+
+
+def sanitize_pm_concentration(
+    values: np.ndarray,
+    declared_units: str = "",
+    *,
+    fill_value: float | None = None,
+    max_valid_ugm3: float = PM_CONCENTRATION_MAX_UGM3,
+) -> np.ndarray:
+    """Canonicalize PM, reject impossible/fill values, and return finite data.
+
+    Values outside ``[0, max_valid_ugm3]`` are missing data, not atmospheric
+    extremes.  Dataset builders may pass a training-only median so validation
+    and test data never determine their own imputation value.
+    """
+    arr = canonicalize_pm_concentration(values, declared_units)
+    valid = np.isfinite(arr) & (arr >= 0.0) & (arr <= float(max_valid_ugm3))
+    if fill_value is None:
+        fill = float(np.median(arr[valid])) if valid.any() else 0.0
+    else:
+        fill = float(fill_value)
+        if not math.isfinite(fill) or not (0.0 <= fill <= float(max_valid_ugm3)):
+            raise ValueError(f"invalid PM fill_value={fill_value!r}")
+    return np.where(valid, arr, fill).astype(np.float32)
 
 
 def canonicalize_pmst_field(name: str, values: np.ndarray) -> np.ndarray:
@@ -902,14 +928,10 @@ def append_pm10_channel(
         linear_idx_grid = time_pos[:, None] * ns_pm10 + sid_pos[None, :]
         if ok_mask.any():
             pm10_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
-        pm10_ug = canonicalize_pm_concentration(
+        pm10_ug = sanitize_pm_concentration(
             pm10_grid,
             str(pm10_da.attrs.get("units", "")),
         )
-        med = np.nanmedian(pm10_ug)
-        if not np.isfinite(med):
-            med = 0.0
-        pm10_ug = np.where(np.isfinite(pm10_ug), pm10_ug, med).astype(np.float32)
     return np.concatenate([x_dyn_25, pm10_ug[..., None]], axis=-1).astype(np.float32)
 
 
@@ -990,14 +1012,10 @@ def append_pm25_channel(
         linear_idx_grid = time_pos[:, None] * ns_pm25 + sid_pos[None, :]
         if ok_mask.any():
             pm25_grid[ok_mask] = base[linear_idx_grid[ok_mask]].astype(np.float32)
-        pm25_ug = canonicalize_pm_concentration(
+        pm25_ug = sanitize_pm_concentration(
             pm25_grid,
             str(pm25_da.attrs.get("units", "")),
         )
-        med = np.nanmedian(pm25_ug)
-        if not np.isfinite(med):
-            med = 0.0
-        pm25_ug = np.where(np.isfinite(pm25_ug), pm25_ug, med).astype(np.float32)
     return np.concatenate([x_dyn_26, pm25_ug[..., None]], axis=-1).astype(np.float32)
 
 

@@ -20,6 +20,8 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from pmst_overlap_common import PM_QC_POLICY_VERSION
+
 
 EXPECTED_ORDER = [
     "T2M",
@@ -369,6 +371,11 @@ def audit_dataset(
         raise ValueError(
             f"{tag}: canonical_unit_policy={unit_policy!r}, expected {EXPECTED_UNIT_POLICY!r}; "
             "this dataset predates the PM/MSLP unit repair and must be rebuilt"
+        )
+    if tag.startswith("s1_") and str(cfg.get("pm_qc_policy", "")) != PM_QC_POLICY_VERSION:
+        raise ValueError(
+            f"{tag}: pm_qc_policy={cfg.get('pm_qc_policy')!r}, expected "
+            f"{PM_QC_POLICY_VERSION!r}; rebuild S1 to reject impossible PM fill values"
         )
     declared_units = cfg.get("canonical_dynamic_units")
     if not isinstance(declared_units, Mapping):
