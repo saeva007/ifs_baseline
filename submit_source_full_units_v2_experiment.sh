@@ -165,7 +165,11 @@ era5_s2_job="$(train_s2 era5_s2 "${s1_tianji_job}" s2_era5_2025_source_full "${E
 s2_deps="$(join_colon "${tianji_s2_job}" "${t2nd_s2_job}" "${ifs_s2_job}" "${pangu_s2_job}" "${era5_s2_job}")"
 eval_job="$(submit argmax_eval --dependency="afterok:${s2_deps}" --export="ALL,EVAL_SCENARIO=figure1_all_sources,OUT_ROOT=${EVAL_ROOT},TIANJI_DATA_DIR=${TIANJI_DIR},IFS_DATA_DIR=${IFS_DIR},T2ND_DATA_DIR=${T2ND_DIR},PANGU2025_DATA_DIR=${PANGU_DIR},ERA5_2025_DATA_DIR=${ERA5_DIR},TIANJI_CKPT=${CKPT_DIR}/${TIANJI_RUN_ID}_S2_PhaseB_best_score.pt,IFS_CKPT=${CKPT_DIR}/${IFS_RUN_ID}_S2_PhaseB_best_score.pt,T2ND_CKPT=${CKPT_DIR}/${T2ND_RUN_ID}_S2_PhaseB_best_score.pt,PANGU2025_CKPT=${CKPT_DIR}/${PANGU_RUN_ID}_S2_PhaseB_best_score.pt,ERA5_2025_CKPT=${CKPT_DIR}/${ERA5_RUN_ID}_S2_PhaseB_best_score.pt,THRESHOLD_MODE=argmax,STRICT_META=1" sub_static_rnn_source_full_argmax_eval.slurm)"
 
-manifest="logs/source_full_units_v2_${RUN_TAG}_submission.txt"
+if is_true "${RESUME_FROM_AUDIT}"; then
+    manifest="logs/source_full_units_v2_${RUN_TAG}_resume_$(date +%Y%m%d_%H%M%S)_submission.txt"
+else
+    manifest="logs/source_full_units_v2_${RUN_TAG}_submission.txt"
+fi
 {
     echo "run_tag=${RUN_TAG}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
