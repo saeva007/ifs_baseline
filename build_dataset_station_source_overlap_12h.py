@@ -475,20 +475,25 @@ def main() -> None:
         time_axis_summary = require_regular_time_axis(
             times, args.expected_time_step_hours, args.source_tag
         )
-    if args.infer_pangu_lead12_23_from_valid_time and not (
-        args.expected_lead_min_hours is not None
-        and args.expected_lead_max_hours is not None
-        and math.isclose(args.expected_lead_min_hours, 12.0, rel_tol=0.0, abs_tol=1e-6)
-        and math.isclose(args.expected_lead_max_hours, 23.0, rel_tol=0.0, abs_tol=1e-6)
-    ):
-        raise ValueError(
-            "--infer_pangu_lead12_23_from_valid_time requires explicit expected lead range 12..23 h"
-        )
+    require_lead = args.source_tag.lower().replace("-", "") in {"pangu2025", "pangu_2025"}
+    if args.infer_pangu_lead12_23_from_valid_time:
+        if not require_lead:
+            raise ValueError("--infer_pangu_lead12_23_from_valid_time is valid only for Pangu-2025")
+        if args.expected_lead_min_hours is None:
+            args.expected_lead_min_hours = 12.0
+        if args.expected_lead_max_hours is None:
+            args.expected_lead_max_hours = 23.0
+        if not (
+            math.isclose(args.expected_lead_min_hours, 12.0, rel_tol=0.0, abs_tol=1e-6)
+            and math.isclose(args.expected_lead_max_hours, 23.0, rel_tol=0.0, abs_tol=1e-6)
+        ):
+            raise ValueError(
+                "Pangu stitched valid-time inference is fixed to the documented 12..23 h range"
+            )
     lead_summary = _forecast_lead_summary(
         ds_source,
         infer_pangu_lead12_23_from_valid_time=args.infer_pangu_lead12_23_from_valid_time,
     )
-    require_lead = args.source_tag.lower().replace("-", "") in {"pangu2025", "pangu_2025"}
     if require_lead and not bool(lead_summary["available"]) and not args.allow_missing_forecast_lead:
         raise ValueError(
             "Pangu-2025 source has no per-time forecast lead metadata. "

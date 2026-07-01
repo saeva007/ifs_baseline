@@ -114,15 +114,24 @@ fi
 
 PY_ARGS=(--source_kind "${SOURCE_KIND}" --source_tag "${SOURCE_TAG}" --year "${YEAR}" --target_file "${TARGET_FILE}" --feature_set "${FEATURE_SET}" --out_dir "${OUT_DIR}")
 PY_ARGS+=(--expected_time_step_hours "${EXPECTED_TIME_STEP_HOURS}")
-if [[ "${SOURCE_TAG}" == "pangu2025" ]]; then
+if [[ "${SOURCE_TAG}" == "pangu2025" || "${SOURCE_TAG}" == "pangu_2025" || "${SOURCE_TAG}" == "pangu-2025" ]]; then
     if [[ "$(basename "${SOURCE_FILE}")" == *lead12_23h* ]]; then
-        EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-12}"
-        EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-23}"
-        INFER_PANGU_LEAD12_23_FROM_VALID_TIME="${INFER_PANGU_LEAD12_23_FROM_VALID_TIME:-1}"
+        # Treat the canonical stitched product as one atomic policy. Do not
+        # allow stale exported variables from another job to split this tuple.
+        EXPECTED_LEAD_MIN_HOURS="12"
+        EXPECTED_LEAD_MAX_HOURS="23"
+        INFER_PANGU_LEAD12_23_FROM_VALID_TIME="1"
     else
-        EXPECTED_LEAD_MIN_HOURS="${EXPECTED_LEAD_MIN_HOURS:-24}"
-        EXPECTED_LEAD_MAX_HOURS="${EXPECTED_LEAD_MAX_HOURS:-24}"
+        EXPECTED_LEAD_MIN_HOURS="24"
+        EXPECTED_LEAD_MAX_HOURS="24"
+        INFER_PANGU_LEAD12_23_FROM_VALID_TIME="0"
     fi
+else
+    # --export=ALL may carry Pangu-only variables from the login shell into an
+    # ERA5 job. They must never affect a non-Pangu source.
+    EXPECTED_LEAD_MIN_HOURS=""
+    EXPECTED_LEAD_MAX_HOURS=""
+    INFER_PANGU_LEAD12_23_FROM_VALID_TIME="0"
 fi
 if [[ -n "${EXPECTED_LEAD_MIN_HOURS}" ]]; then
     PY_ARGS+=(--expected_lead_min_hours "${EXPECTED_LEAD_MIN_HOURS}")

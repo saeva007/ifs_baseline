@@ -11,6 +11,7 @@ BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 RUN_TAG="${RUN_TAG:-source_full_units_v2_$(date +%Y%m%d_%H%M%S)}"
 DRY_RUN="${DRY_RUN:-0}"
+RESUME_FROM_AUDIT="${RESUME_FROM_AUDIT:-0}"
 DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/source_full_units_v2_datasets/${RUN_TAG}}"
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/${RUN_TAG}}"
 
@@ -66,16 +67,42 @@ submit() {
 join_colon() { local IFS=:; echo "$*"; }
 require_file() { [[ -s "$2" ]] || { echo "ERROR: $1 missing or empty: $2" >&2; exit 2; }; }
 
+require_dataset_files() {
+    local label="$1" dir="$2" require_meta="$3"
+    shift 3
+    local split path
+    require_file "${label} dataset config" "${dir}/dataset_build_config.json"
+    for split in "$@"; do
+        require_file "${label} X_${split}" "${dir}/X_${split}.npy"
+        require_file "${label} y_${split}" "${dir}/y_${split}.npy"
+        if is_true "${require_meta}"; then
+            path="${dir}/meta_${split}.csv"
+            require_file "${label} meta_${split}" "${path}"
+        fi
+    done
+}
+
 if [[ ! "${RUN_TAG}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "ERROR: invalid RUN_TAG=${RUN_TAG}" >&2
     exit 2
 fi
 if ! is_true "${DRY_RUN}"; then
-    require_file "old Pangu station product" "${OLD_PANGU_STATION_FILE}"
-    require_file "canonical Pangu station product" "${PANGU2025_STATION_FILE}"
-    require_file "canonical target" "${TARGET_FILE}"
-    require_file "T2ND RH2M station product" "${T2ND_RH2M_FILE}"
-    [[ ! -e "${DATA_ROOT}" ]] || { echo "ERROR: DATA_ROOT exists: ${DATA_ROOT}" >&2; exit 2; }
+    if is_true "${RESUME_FROM_AUDIT}"; then
+        require_dataset_files s1_tianji "${S1_TIANJI_DIR}" 0 train val
+        require_dataset_files s1_ifs "${S1_IFS_DIR}" 0 train val
+        require_dataset_files s1_pangu2025 "${S1_PANGU_DIR}" 0 train val
+        require_dataset_files tianji "${TIANJI_DIR}" 1 train val test
+        require_dataset_files t2nd "${T2ND_DIR}" 1 train val test
+        require_dataset_files ifs "${IFS_DIR}" 1 train val test
+        require_dataset_files pangu2025 "${PANGU_DIR}" 1 train val test
+        require_dataset_files era5_2025 "${ERA5_DIR}" 1 train val test
+    else
+        require_file "old Pangu station product" "${OLD_PANGU_STATION_FILE}"
+        require_file "canonical Pangu station product" "${PANGU2025_STATION_FILE}"
+        require_file "canonical target" "${TARGET_FILE}"
+        require_file "T2ND RH2M station product" "${T2ND_RH2M_FILE}"
+        [[ ! -e "${DATA_ROOT}" ]] || { echo "ERROR: DATA_ROOT exists: ${DATA_ROOT}" >&2; exit 2; }
+    fi
     for ckpt in \
         "${S1_TIANJI_CKPT}" "${S1_IFS_CKPT}" "${S1_PANGU_CKPT}" \
         "${CKPT_DIR}/${TIANJI_RUN_ID}_S2_PhaseB_best_score.pt" \
@@ -90,25 +117,32 @@ fi
 
 echo "Canonical source-full experiment RUN_TAG=${RUN_TAG}"
 echo "DATA_ROOT=${DATA_ROOT}"
+echo "RESUME_FROM_AUDIT=${RESUME_FROM_AUDIT}"
 
-verify_job="$(submit verify_station \
-    --export="ALL,OLD_PANGU_STATION_FILE=${OLD_PANGU_STATION_FILE},PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1,VERIFY_OUT_JSON=${VERIFY_JSON}" \
-    sub_verify_pangu_station_product.slurm)"
-
-data_dependency=(--dependency="afterok:${verify_job}")
-s1_tianji_data_job="$(submit s1_tianji_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji,OUT_DIR=${S1_TIANJI_DIR}" sub_s1_overlap_data.slurm)"
-s1_ifs_data_job="$(submit s1_ifs_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs,OUT_DIR=${S1_IFS_DIR}" sub_s1_overlap_data.slurm)"
-s1_pangu_data_job="$(submit s1_pangu_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu2025,OUT_DIR=${S1_PANGU_DIR}" sub_s1_overlap_data.slurm)"
-tianji_data_job="$(submit tianji_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,OUT_DIR=${TIANJI_DIR}" sub_tianji_overlap_data.slurm)"
-t2nd_data_job="$(submit t2nd_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,OUT_DIR=${T2ND_DIR},RH2M_OVERRIDE_FILE=${T2ND_RH2M_FILE},RH2M_SOURCE_TAG=T2ND_rh2m" sub_tianji_overlap_data.slurm)"
-ifs_data_job="$(submit ifs_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,YEAR=2025,OUT_DIR=${IFS_DIR}" sub_ifs_data.slurm)"
-pangu_data_job="$(submit pangu_data "${data_dependency[@]}" --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=source_full,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1" sub_station_source_overlap_data.slurm)"
-era5_data_job="$(submit era5_data "${data_dependency[@]}" --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=source_full,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_DIR}" sub_station_source_overlap_data.slurm)"
-
-all_data_deps="$(join_colon "${s1_tianji_data_job}" "${s1_ifs_data_job}" "${s1_pangu_data_job}" "${tianji_data_job}" "${t2nd_data_job}" "${ifs_data_job}" "${pangu_data_job}" "${era5_data_job}")"
 sources="tianji=${TIANJI_DIR};t2nd=${T2ND_DIR};ifs=${IFS_DIR};pangu2025=${PANGU_DIR};era5_2025=${ERA5_DIR}"
 s1_profiles="tianji=${S1_TIANJI_DIR};ifs=${S1_IFS_DIR};pangu2025=${S1_PANGU_DIR}"
-audit_job="$(submit data_audit --dependency="afterok:${all_data_deps}" --export="ALL,SOURCES=${sources},S1_PROFILES=${s1_profiles},AUDIT_OUT_DIR=${AUDIT_DIR}" sub_source_full_canonical_audit.slurm)"
+if is_true "${RESUME_FROM_AUDIT}"; then
+    verify_job="reused_existing_verification"
+    all_data_deps="reused_existing_datasets"
+    audit_job="$(submit data_audit --export="ALL,SOURCES=${sources},S1_PROFILES=${s1_profiles},AUDIT_OUT_DIR=${AUDIT_DIR}" sub_source_full_canonical_audit.slurm)"
+else
+    verify_job="$(submit verify_station \
+        --export="ALL,OLD_PANGU_STATION_FILE=${OLD_PANGU_STATION_FILE},PANGU2025_STATION_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1,VERIFY_OUT_JSON=${VERIFY_JSON}" \
+        sub_verify_pangu_station_product.slurm)"
+
+    data_dependency=(--dependency="afterok:${verify_job}")
+    s1_tianji_data_job="$(submit s1_tianji_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=tianji,OUT_DIR=${S1_TIANJI_DIR}" sub_s1_overlap_data.slurm)"
+    s1_ifs_data_job="$(submit s1_ifs_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=ifs,OUT_DIR=${S1_IFS_DIR}" sub_s1_overlap_data.slurm)"
+    s1_pangu_data_job="$(submit s1_pangu_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,SOURCE_FULL_PROFILE=pangu2025,OUT_DIR=${S1_PANGU_DIR}" sub_s1_overlap_data.slurm)"
+    tianji_data_job="$(submit tianji_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,OUT_DIR=${TIANJI_DIR}" sub_tianji_overlap_data.slurm)"
+    t2nd_data_job="$(submit t2nd_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,OUT_DIR=${T2ND_DIR},RH2M_OVERRIDE_FILE=${T2ND_RH2M_FILE},RH2M_SOURCE_TAG=T2ND_rh2m" sub_tianji_overlap_data.slurm)"
+    ifs_data_job="$(submit ifs_data "${data_dependency[@]}" --export="ALL,FEATURE_SET=source_full,YEAR=2025,OUT_DIR=${IFS_DIR}" sub_ifs_data.slurm)"
+    pangu_data_job="$(submit pangu_data "${data_dependency[@]}" --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=source_full,SOURCE_FILE=${PANGU2025_STATION_FILE},TARGET_FILE=${TARGET_FILE},OUT_DIR=${PANGU_DIR},EXPECTED_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS},INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1" sub_station_source_overlap_data.slurm)"
+    era5_data_job="$(submit era5_data "${data_dependency[@]}" --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=source_full,TARGET_FILE=${TARGET_FILE},OUT_DIR=${ERA5_DIR}" sub_station_source_overlap_data.slurm)"
+
+    all_data_deps="$(join_colon "${s1_tianji_data_job}" "${s1_ifs_data_job}" "${s1_pangu_data_job}" "${tianji_data_job}" "${t2nd_data_job}" "${ifs_data_job}" "${pangu_data_job}" "${era5_data_job}")"
+    audit_job="$(submit data_audit --dependency="afterok:${all_data_deps}" --export="ALL,SOURCES=${sources},S1_PROFILES=${s1_profiles},AUDIT_OUT_DIR=${AUDIT_DIR}" sub_source_full_canonical_audit.slurm)"
+fi
 
 train_s1() {
     local label="$1" experiment="$2" run_id="$3" data_dir="$4"
@@ -135,6 +169,7 @@ manifest="logs/source_full_units_v2_${RUN_TAG}_submission.txt"
 {
     echo "run_tag=${RUN_TAG}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
+    echo "resume_from_audit=${RESUME_FROM_AUDIT}"
     echo "data_root=${DATA_ROOT}"
     echo "verify_job=${verify_job}"
     echo "data_jobs=${all_data_deps}"
