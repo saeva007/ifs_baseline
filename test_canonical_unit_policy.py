@@ -13,6 +13,7 @@ if importlib.util.find_spec("pvlib") is None:
     sys.modules["pvlib"] = pvlib
 
 from pmst_overlap_common import (  # noqa: E402
+    LEGACY_PM_1E12_UNITS,
     PMST_INDEX,
     canonicalize_pm_concentration,
     canonicalize_pmst_field,
@@ -32,6 +33,11 @@ class CanonicalUnitPolicyTest(unittest.TestCase):
         legacy = np.array([0.0, 50000.0, 100000.0], dtype=np.float32)
         got = canonicalize_pm_concentration(legacy, "legacy_mixed")
         np.testing.assert_allclose(got, [0.0, 50.0, 100.0], rtol=1e-6)
+
+    def test_explicit_legacy_provenance_does_not_depend_on_chunk_median(self):
+        legacy_low_pollution_chunk = np.array([1000.0, 5000.0, 9000.0], dtype=np.float32)
+        got = canonicalize_pm_concentration(legacy_low_pollution_chunk, LEGACY_PM_1E12_UNITS)
+        np.testing.assert_allclose(got, [1.0, 5.0, 9.0], rtol=1e-6)
 
     def test_existing_ugm3_is_unchanged(self):
         values = np.array([0.0, 50.0, 100.0], dtype=np.float32)

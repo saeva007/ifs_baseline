@@ -298,7 +298,7 @@ fi
     echo "lead_time_scope=pangu_tianji_ifs_12_to_23h"
     echo "expected_pangu_lead_hours=${EXPECTED_PANGU_LEAD_MIN_HOURS}..${EXPECTED_PANGU_LEAD_MAX_HOURS}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
-    echo "pm_qc_policy=pm_invalid_outside_0_10000_to_train_median_v1_20260701"
+    echo "pm_qc_policy=pm_explicit_legacy_scale_then_train_median_qc_v2_20260701"
     echo "era5_role=reference_analysis"
     echo "pangu_station_file=${PANGU2025_STATION_FILE}"
     echo "data_root=${DATA_ROOT}"

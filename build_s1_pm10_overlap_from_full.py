@@ -41,6 +41,7 @@ from pmst_overlap_common import (
     COMMON_CORE_PMST_FEATURES,
     FEATURE_SET_CHOICES,
     FINAL_FEATURE_ORDER,
+    LEGACY_PM_1E12_UNITS,
     OVERLAP_CANONICAL,
     PM_CONCENTRATION_MAX_UGM3,
     PM_QC_POLICY_VERSION,
@@ -115,7 +116,7 @@ def _estimate_training_pm_fill_values(src_path: str, chunk: int) -> tuple[dict[s
         block = np.asarray(X[i : min(i + chunk, len(X)), :SOURCE_BASE_DYN], dtype=np.float32)
         dyn = block.reshape(-1, WINDOW, SOURCE_DYN_VARS)
         for name, idx in PM_SOURCE_INDICES.items():
-            values = canonicalize_pm_concentration(dyn[:, :, idx], "legacy_mixed")
+            values = canonicalize_pm_concentration(dyn[:, :, idx], LEGACY_PM_1E12_UNITS)
             valid = np.isfinite(values) & (values >= 0.0) & (values <= PM_CONCENTRATION_MAX_UGM3)
             total[name] += int(values.size)
             invalid[name] += int((~valid).sum())
@@ -158,10 +159,10 @@ def _transform_chunk(
     met = dyn[:, :, :24].copy()
     zen_pm = dyn[:, :, 24:].copy()
     zen_pm[:, :, 1] = sanitize_pm_concentration(
-        zen_pm[:, :, 1], "legacy_mixed", fill_value=pm_fill_values["PM10_ugm3"]
+        zen_pm[:, :, 1], LEGACY_PM_1E12_UNITS, fill_value=pm_fill_values["PM10_ugm3"]
     )
     zen_pm[:, :, 2] = sanitize_pm_concentration(
-        zen_pm[:, :, 2], "legacy_mixed", fill_value=pm_fill_values["PM25_ugm3"]
+        zen_pm[:, :, 2], LEGACY_PM_1E12_UNITS, fill_value=pm_fill_values["PM25_ugm3"]
     )
     fields = {name: met[:, :, PMST_INDEX[name]] for name in FINAL_FEATURE_ORDER}
     met_new = scatter_overlap_fields(met.shape[0], met.shape[1], fields, feature_vars)
@@ -357,6 +358,7 @@ def main():
         "pm_qc_policy": PM_QC_POLICY_VERSION,
         "pm_valid_range_ugm3": [0.0, PM_CONCENTRATION_MAX_UGM3],
         "pm_imputation_fit_split": "train",
+        "pm_source_conversion": "historical kg m-3 * 1e12 divided by 1e3 to canonical ug m-3",
         "pm_training_fill_values_ugm3": pm_fill_values,
         "pm_training_qc": pm_training_qc,
         "fog_fe_dim": int(fog_fe_dim),

@@ -176,8 +176,9 @@ FEATURE_SET_CHOICES: Tuple[str, ...] = (
 )
 
 CANONICAL_UNIT_POLICY_VERSION = "pmst_canonical_units_v2_20260630"
-PM_QC_POLICY_VERSION = "pm_invalid_outside_0_10000_to_train_median_v1_20260701"
+PM_QC_POLICY_VERSION = "pm_explicit_legacy_scale_then_train_median_qc_v2_20260701"
 PM_CONCENTRATION_MAX_UGM3 = 10000.0
+LEGACY_PM_1E12_UNITS = "legacy_kgm3_times_1e12"
 CANONICAL_DYNAMIC_UNITS: Dict[str, str] = {
     "T2M": "K",
     "MSLP": "Pa",
@@ -211,7 +212,11 @@ def canonicalize_pm_concentration(values: np.ndarray, declared_units: str = "") 
     positive = arr[np.isfinite(arr) & (arr > 0.0)]
     median_abs = float(np.median(positive)) if positive.size else math.nan
     units = re.sub(r"[\s_µμ]+", "", str(declared_units).strip().lower())
-    if not math.isfinite(median_abs) or median_abs == 0.0:
+    if units == "legacykgm3times1e12":
+        # The historical S1 notebook used kg m-3 * 1e12.  Its provenance is
+        # known, so never infer this scale independently for each chunk.
+        scale = 1.0e-3
+    elif not math.isfinite(median_abs) or median_abs == 0.0:
         scale = 1.0
     elif median_abs < 1.0e-3:
         # Raw CAMS mass concentration in kg m-3, including legacy files whose

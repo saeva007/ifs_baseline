@@ -193,7 +193,7 @@ fi
 {
     echo "run_tag=${RUN_TAG}"
     echo "canonical_unit_policy=pmst_canonical_units_v2_20260630"
-    echo "pm_qc_policy=pm_invalid_outside_0_10000_to_train_median_v1_20260701"
+    echo "pm_qc_policy=pm_explicit_legacy_scale_then_train_median_qc_v2_20260701"
     echo "resume_from_audit=${RESUME_FROM_AUDIT}"
     echo "rebuild_s1_only=${REBUILD_S1_ONLY}"
     echo "data_root=${DATA_ROOT}"
