@@ -124,16 +124,65 @@ class HybridBuilderTest(unittest.TestCase):
             audit_cmd = cmd + ["--audit-only"]
             subprocess.run(audit_cmd, check=True, capture_output=True, text=True)
 
-    def test_metadata_mismatch_is_rejected(self) -> None:
+    def test_different_order_and_partial_overlap_are_aligned(self) -> None:
         with workspace_temp_dir() as root:
             rng = np.random.default_rng(5)
+            dyn = rng.normal(size=(6, WINDOW, len(EXPECTED_ORDER))).astype(np.float32)
+            y = np.asarray([0, 1, 2, 2, 1, 0], dtype=np.float32)
+            pangu = write_source(root, "pangu", dyn, y, canonical_pangu=True)
+            tianji = write_source(root, "tianji", dyn, y, canonical_pangu=False)
+            permutation = np.asarray([4, 1, 5, 0, 3, 2])
+            meta = pd.read_csv(tianji / "meta_train.csv")
+            meta = meta.iloc[permutation].reset_index(drop=True)
+            meta.loc[0, "station_id"] = 99999
+            meta.to_csv(tianji / "meta_train.csv", index=False)
+            np.save(tianji / "X_train.npy", np.load(tianji / "X_train.npy")[permutation])
+            np.save(tianji / "y_train.npy", np.load(tianji / "y_train.npy")[permutation])
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
+                "--pangu-dir",
+                str(pangu),
+                "--tianji-dir",
+                str(tianji),
+                "--out-root",
+                str(root / "out"),
+                "--splits",
+                "train",
+                "--masks",
+                "000,111",
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            expected_pangu_rows = np.asarray([0, 1, 2, 3, 5])
+            expected_tianji_rows = np.asarray([3, 1, 5, 4, 2])
+            self.assertTrue(
+                np.array_equal(
+                    np.load(root / "out" / "mtw_000" / "X_train.npy"),
+                    np.load(pangu / "X_train.npy")[expected_pangu_rows],
+                )
+            )
+            self.assertTrue(
+                np.array_equal(
+                    np.load(root / "out" / "mtw_111" / "X_train.npy"),
+                    np.load(tianji / "X_train.npy")[expected_tianji_rows],
+                )
+            )
+            with (root / "out" / "hybrid_factorial_manifest.json").open("r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(manifest["source_pair_coverage"]["train"]["common_rows"], 5)
+            self.assertEqual(manifest["source_pair_coverage"]["train"]["pangu_excluded_rows"], 1)
+            self.assertEqual(manifest["source_pair_coverage"]["train"]["tianji_excluded_rows"], 1)
+
+    def test_common_key_label_mismatch_is_rejected(self) -> None:
+        with workspace_temp_dir() as root:
+            rng = np.random.default_rng(6)
             dyn = rng.normal(size=(4, WINDOW, len(EXPECTED_ORDER))).astype(np.float32)
             y = np.asarray([0, 1, 2, 2], dtype=np.float32)
             pangu = write_source(root, "pangu", dyn, y, canonical_pangu=True)
             tianji = write_source(root, "tianji", dyn, y, canonical_pangu=False)
-            meta = pd.read_csv(tianji / "meta_train.csv")
-            meta.loc[0, "station_id"] = 99999
-            meta.to_csv(tianji / "meta_train.csv", index=False)
+            donor_y = np.load(tianji / "y_train.npy")
+            donor_y[0] = 999.0
+            np.save(tianji / "y_train.npy", donor_y)
             cmd = [
                 sys.executable,
                 str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
@@ -150,7 +199,7 @@ class HybridBuilderTest(unittest.TestCase):
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("metadata/order differ", proc.stderr + proc.stdout)
+            self.assertIn("labels", proc.stderr + proc.stdout)
 
 
 class ArtifactAndAleTest(unittest.TestCase):

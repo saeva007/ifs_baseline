@@ -14,9 +14,9 @@ import argparse
 import hashlib
 import json
 import math
-import shutil
 import sys
 import types
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -50,6 +50,23 @@ SHARED_DYNAMIC = ("ZENITH", "PM10_ugm3", "PM25_ugm3")
 STATIC_DIM = 6
 CYCLICAL_DIM = 4
 DEFAULT_SPLITS = ("train", "val", "test")
+
+
+@dataclass(frozen=True)
+class PairAlignment:
+    keys: pd.DataFrame
+    pangu_rows: np.ndarray
+    tianji_rows: np.ndarray
+    pangu_source_rows: int
+    tianji_source_rows: int
+
+    @property
+    def n(self) -> int:
+        return int(len(self.keys))
+
+    @property
+    def digest(self) -> str:
+        return row_alignment_hash(self.keys)
 
 
 def parse_args() -> argparse.Namespace:
@@ -160,6 +177,40 @@ def row_alignment_hash(keys: pd.DataFrame) -> str:
     return h.hexdigest()
 
 
+def key_index(keys: pd.DataFrame) -> pd.MultiIndex:
+    return pd.MultiIndex.from_frame(keys[["time", "station_id"]])
+
+
+def positions_for_keys(source_keys: pd.DataFrame, wanted_keys: pd.DataFrame, label: str) -> np.ndarray:
+    lookup = pd.Series(np.arange(len(source_keys), dtype=np.int64), index=key_index(source_keys))
+    positions = lookup.reindex(key_index(wanted_keys))
+    if positions.isna().any():
+        examples = wanted_keys.loc[positions.isna(), ["time", "station_id"]].head(3).to_dict("records")
+        raise ValueError(f"{label}: aligned keys are absent from the source metadata; examples={examples}")
+    return positions.to_numpy(dtype=np.int64)
+
+
+def align_source_pair(pangu_dir: Path, tianji_dir: Path, split: str, limit_rows: int) -> PairAlignment:
+    p_meta = canonical_meta(pangu_dir / f"meta_{split}.csv")
+    t_meta = canonical_meta(tianji_dir / f"meta_{split}.csv")
+    t_index = key_index(t_meta)
+    common_mask = key_index(p_meta).isin(t_index)
+    pangu_rows = np.flatnonzero(common_mask).astype(np.int64)
+    if limit_rows > 0:
+        pangu_rows = pangu_rows[: int(limit_rows)]
+    keys = p_meta.iloc[pangu_rows].reset_index(drop=True)
+    if keys.empty:
+        raise ValueError(f"{split}: Pangu and Tianji have no common (time, station_id) rows")
+    tianji_rows = positions_for_keys(t_meta, keys, f"{split}/Tianji")
+    return PairAlignment(
+        keys=keys,
+        pangu_rows=pangu_rows,
+        tianji_rows=tianji_rows,
+        pangu_source_rows=len(p_meta),
+        tianji_source_rows=len(t_meta),
+    )
+
+
 def assert_close(name: str, left: np.ndarray, right: np.ndarray, rtol: float, atol: float) -> None:
     if left.shape != right.shape:
         raise ValueError(f"{name}: shape mismatch {left.shape} != {right.shape}")
@@ -189,19 +240,24 @@ def verify_source_pair(
     chunk_rows: int,
     rtol: float,
     atol: float,
-) -> Tuple[int, str]:
-    p_meta = canonical_meta(pangu_dir / f"meta_{split}.csv", limit_rows)
-    t_meta = canonical_meta(tianji_dir / f"meta_{split}.csv", limit_rows)
-    if not p_meta.equals(t_meta):
-        raise ValueError(f"{split}: Pangu and Tianji metadata/order differ; hybrids require exact paired rows")
-    n = len(p_meta)
-    p_y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[:n]
-    t_y = np.load(tianji_dir / f"y_{split}.npy", mmap_mode="r")[:n]
+) -> PairAlignment:
+    alignment = align_source_pair(pangu_dir, tianji_dir, split, limit_rows)
+    n = alignment.n
+    p_y_all = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")
+    t_y_all = np.load(tianji_dir / f"y_{split}.npy", mmap_mode="r")
+    p_y = p_y_all[alignment.pangu_rows]
+    t_y = t_y_all[alignment.tianji_rows]
     assert_close(f"{split}: labels", p_y, t_y, rtol=0.0, atol=1.0e-6)
 
     p_x = np.load(pangu_dir / f"X_{split}.npy", mmap_mode="r")
     t_x = np.load(tianji_dir / f"X_{split}.npy", mmap_mode="r")
-    if p_x.shape[0] < n or t_x.shape[0] < n or p_x.shape[1:] != t_x.shape[1:]:
+    if (
+        p_x.shape[0] != alignment.pangu_source_rows
+        or t_x.shape[0] != alignment.tianji_source_rows
+        or len(p_y_all) != alignment.pangu_source_rows
+        or len(t_y_all) != alignment.tianji_source_rows
+        or p_x.shape[1:] != t_x.shape[1:]
+    ):
         raise ValueError(f"{split}: feature matrix shapes differ: {p_x.shape} vs {t_x.shape}")
     dyn = int(cfg["dyn_vars"])
     window = int(cfg["window"])
@@ -216,14 +272,16 @@ def verify_source_pair(
     shared_cols += list(range(expected_width - CYCLICAL_DIM, expected_width))
     for start in range(0, n, chunk_rows):
         end = min(start + chunk_rows, n)
+        p_rows = alignment.pangu_rows[start:end]
+        t_rows = alignment.tianji_rows[start:end]
         assert_close(
             f"{split}: shared source-independent columns rows {start}:{end}",
-            np.asarray(p_x[start:end, shared_cols]),
-            np.asarray(t_x[start:end, shared_cols]),
+            np.asarray(p_x[p_rows][:, shared_cols]),
+            np.asarray(t_x[t_rows][:, shared_cols]),
             rtol,
             atol,
         )
-    return n, row_alignment_hash(p_meta)
+    return alignment
 
 
 def build_one_split(
@@ -233,13 +291,14 @@ def build_one_split(
     split: str,
     mask: str,
     cfg: Mapping[str, object],
-    n: int,
+    alignment: PairAlignment,
     chunk_rows: int,
     rtol: float,
     atol: float,
 ) -> Dict[str, object]:
     p_x = np.load(pangu_dir / f"X_{split}.npy", mmap_mode="r")
     t_x = np.load(tianji_dir / f"X_{split}.npy", mmap_mode="r")
+    n = alignment.n
     out_path = out_dir / f"X_{split}.npy"
     if out_path.exists():
         raise FileExistsError(f"Refusing to overwrite {out_path}")
@@ -257,8 +316,8 @@ def build_one_split(
 
     for start in range(0, n, chunk_rows):
         end = min(start + chunk_rows, n)
-        base_rows = np.asarray(p_x[start:end], dtype=np.float32)
-        donor_rows = np.asarray(t_x[start:end], dtype=np.float32)
+        base_rows = np.asarray(p_x[alignment.pangu_rows[start:end]], dtype=np.float32)
+        donor_rows = np.asarray(t_x[alignment.tianji_rows[start:end]], dtype=np.float32)
         hybrid = base_rows[:, :dyn_width].reshape(-1, window, dyn).copy()
         if donor_idx:
             donor_dyn = donor_rows[:, :dyn_width].reshape(-1, window, dyn)
@@ -281,11 +340,9 @@ def build_one_split(
             assert_close(f"{split}/{mask}: endpoint identity", rows, expected, rtol, atol)
     out_x.flush()
     del out_x
-    shutil.copy2(pangu_dir / f"y_{split}.npy", out_dir / f"y_{split}.npy")
-    if n != int(np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r").shape[0]):
-        y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[:n]
-        np.save(out_dir / f"y_{split}.npy", np.asarray(y))
-    meta = pd.read_csv(pangu_dir / f"meta_{split}.csv").iloc[:n]
+    y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[alignment.pangu_rows]
+    np.save(out_dir / f"y_{split}.npy", np.asarray(y))
+    meta = pd.read_csv(pangu_dir / f"meta_{split}.csv").iloc[alignment.pangu_rows]
     meta.to_csv(out_dir / f"meta_{split}.csv", index=False)
     return {
         "split": split,
@@ -294,6 +351,9 @@ def build_one_split(
         "replaced_groups": mask_groups(mask),
         "replaced_features": [order[i] for i in donor_idx],
         "endpoint_max_abs_diff": max_abs_endpoint if mask in {"000", "111"} else None,
+        "pangu_source_rows": alignment.pangu_source_rows,
+        "tianji_source_rows": alignment.tianji_source_rows,
+        "common_rows": n,
     }
 
 
@@ -303,6 +363,7 @@ def config_for_mask(
     tianji_dir: Path,
     mask: str,
     split_hashes: Mapping[str, str],
+    split_alignment: Mapping[str, Mapping[str, int]],
     limit_rows: int,
 ) -> Dict[str, object]:
     cfg = dict(base_cfg)
@@ -321,6 +382,8 @@ def config_for_mask(
             "base_dataset_dir": str(pangu_dir),
             "donor_dataset_dir": str(tianji_dir),
             "row_alignment_sha256": dict(split_hashes),
+            "row_alignment_policy": "ordered intersection of canonical (valid_time, station_id) keys in Pangu row order",
+            "source_pair_coverage": {key: dict(value) for key, value in split_alignment.items()},
             "recomputed_fog_features": True,
             "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
             "pm_qc_policy": PM_QC_POLICY_VERSION,
@@ -349,6 +412,17 @@ def audit_outputs(
     window = int(base_cfg["window"])
     dyn_width = dyn * window
     rows: List[Dict[str, object]] = []
+    alignment_cache: Dict[str, Tuple[pd.DataFrame, np.ndarray, np.ndarray]] = {}
+    reference_mask = masks[0]
+    for split in splits:
+        reference_meta = canonical_meta(out_root / f"mtw_{reference_mask}" / f"meta_{split}.csv")
+        base_meta = canonical_meta(pangu_dir / f"meta_{split}.csv")
+        donor_meta = canonical_meta(tianji_dir / f"meta_{split}.csv")
+        alignment_cache[split] = (
+            reference_meta,
+            positions_for_keys(base_meta, reference_meta, f"audit {split}/Pangu"),
+            positions_for_keys(donor_meta, reference_meta, f"audit {split}/Tianji"),
+        )
     for mask in masks:
         data_dir = out_root / f"mtw_{mask}"
         cfg = require_layout(data_dir)
@@ -361,11 +435,11 @@ def audit_outputs(
             t = np.load(tianji_dir / f"X_{split}.npy", mmap_mode="r")
             n = len(x)
             out_meta = canonical_meta(data_dir / f"meta_{split}.csv")
-            base_meta = canonical_meta(pangu_dir / f"meta_{split}.csv", n)
-            if not out_meta.equals(base_meta):
-                raise ValueError(f"audit {mask}/{split}: metadata differ from the Pangu base")
+            reference_meta, p_rows, t_rows = alignment_cache[split]
+            if not out_meta.equals(reference_meta):
+                raise ValueError(f"audit {mask}/{split}: output metadata differ across hybrid masks")
             out_y = np.load(data_dir / f"y_{split}.npy", mmap_mode="r")
-            base_y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[:n]
+            base_y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[p_rows]
             assert_close(f"audit {mask}/{split}: labels", np.asarray(out_y), np.asarray(base_y), 0.0, atol)
             fe_dim = int(cfg["fe_dim"])
             fog_dim = fe_dim - CYCLICAL_DIM
@@ -373,10 +447,12 @@ def audit_outputs(
             fog_start = static_start + STATIC_DIM
             for start in range(0, n, chunk_rows):
                 end = min(start + chunk_rows, n)
+                p_chunk = np.asarray(p[p_rows[start:end]])
+                t_chunk = np.asarray(t[t_rows[start:end]])
                 hybrid_dyn = np.asarray(x[start:end, :dyn_width]).reshape(end - start, window, dyn)
-                expected_dyn = np.asarray(p[start:end, :dyn_width]).reshape(end - start, window, dyn).copy()
+                expected_dyn = p_chunk[:, :dyn_width].reshape(end - start, window, dyn).copy()
                 if selected_idx:
-                    donor_dyn = np.asarray(t[start:end, :dyn_width]).reshape(end - start, window, dyn)
+                    donor_dyn = t_chunk[:, :dyn_width].reshape(end - start, window, dyn)
                     donor_columns = sorted(selected_idx)
                     expected_dyn[:, :, donor_columns] = donor_dyn[:, :, donor_columns]
                 assert_close(
@@ -400,7 +476,7 @@ def audit_outputs(
                 assert_close(
                     f"audit {mask}/{split} static/cyclical rows {start}:{end}",
                     np.asarray(x[start:end, shared_tail_cols]),
-                    np.asarray(p[start:end, shared_tail_cols]),
+                    p_chunk[:, shared_tail_cols],
                     rtol,
                     atol,
                 )
@@ -408,7 +484,7 @@ def audit_outputs(
                     assert_close(
                         f"audit {mask}/{split} full endpoint rows {start}:{end}",
                         np.asarray(x[start:end]),
-                        np.asarray(p[start:end]),
+                        p_chunk,
                         rtol,
                         atol,
                     )
@@ -416,7 +492,7 @@ def audit_outputs(
                     assert_close(
                         f"audit {mask}/{split} full endpoint rows {start}:{end}",
                         np.asarray(x[start:end]),
-                        np.asarray(t[start:end]),
+                        t_chunk,
                         rtol,
                         atol,
                     )
@@ -465,8 +541,10 @@ def main() -> None:
     incomplete.write_text("hybrid factorial build in progress\n", encoding="utf-8")
     split_rows: Dict[str, int] = {}
     split_hashes: Dict[str, str] = {}
+    alignments: Dict[str, PairAlignment] = {}
+    split_alignment: Dict[str, Dict[str, int]] = {}
     for split in splits:
-        n, digest = verify_source_pair(
+        alignment = verify_source_pair(
             pangu_dir,
             tianji_dir,
             split,
@@ -476,14 +554,24 @@ def main() -> None:
             args.rtol,
             args.atol,
         )
-        split_rows[split] = n
-        split_hashes[split] = digest
+        alignments[split] = alignment
+        split_rows[split] = alignment.n
+        split_hashes[split] = alignment.digest
+        split_alignment[split] = {
+            "pangu_source_rows": alignment.pangu_source_rows,
+            "tianji_source_rows": alignment.tianji_source_rows,
+            "common_rows": alignment.n,
+            "pangu_excluded_rows": alignment.pangu_source_rows - alignment.n,
+            "tianji_excluded_rows": alignment.tianji_source_rows - alignment.n,
+        }
 
     build_records: List[Dict[str, object]] = []
     for mask in masks:
         out_dir = out_root / f"mtw_{mask}"
         out_dir.mkdir(parents=True, exist_ok=False)
-        cfg = config_for_mask(p_cfg, pangu_dir, tianji_dir, mask, split_hashes, args.limit_rows)
+        cfg = config_for_mask(
+            p_cfg, pangu_dir, tianji_dir, mask, split_hashes, split_alignment, args.limit_rows
+        )
         for split in splits:
             build_records.append(
                 build_one_split(
@@ -493,7 +581,7 @@ def main() -> None:
                     split,
                     mask,
                     p_cfg,
-                    split_rows[split],
+                    alignments[split],
                     args.chunk_rows,
                     args.rtol,
                     args.atol,
@@ -512,6 +600,8 @@ def main() -> None:
         "out_root": str(out_root),
         "masks": masks,
         "split_rows": split_rows,
+        "row_alignment_policy": "ordered source-key intersection in Pangu row order",
+        "source_pair_coverage": split_alignment,
         "row_alignment_sha256": split_hashes,
         "build_records": build_records,
         "audit": audit,
