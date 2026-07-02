@@ -265,6 +265,11 @@ class SourceEval:
     thresholds: Dict[str, float]
     threshold_source: str
     val_metrics: Dict[str, float]
+    val_probs: np.ndarray
+    val_preds: np.ndarray
+    val_targets: np.ndarray
+    val_raw_vis: np.ndarray
+    val_meta: Optional[pd.DataFrame]
     test_probs: np.ndarray
     test_preds: np.ndarray
     test_targets: np.ndarray
@@ -1583,6 +1588,11 @@ def evaluate_one_source(
     test_loader = make_loader(test_ds, args.batch_size, args.num_workers)
 
     threshold_source = args.threshold_mode
+    val_probs = np.zeros((0, 3), dtype=np.float32)
+    val_preds = np.zeros((0,), dtype=np.int64)
+    val_targets = np.zeros((0,), dtype=np.int64)
+    val_raw = np.zeros((0,), dtype=np.float32)
+    val_meta: Optional[pd.DataFrame] = None
     if args.skip_validation_inference:
         if args.threshold_mode == "val_search":
             raise ValueError("--skip_validation_inference cannot be used with --threshold_mode val_search.")
@@ -1605,7 +1615,7 @@ def evaluate_one_source(
             val_metrics = {"n": 0}
             threshold_mode_for_pred = "argmax"
     else:
-        val_ds, _ = make_dataset(
+        val_ds, val_meta = make_dataset(
             train_mod,
             spec.data_dir,
             "val",
@@ -1622,7 +1632,7 @@ def evaluate_one_source(
         )
         val_loader = make_loader(val_ds, args.batch_size, args.num_workers)
         print(f"[{source}] running validation inference: N={len(val_ds)}", flush=True)
-        val_logits, val_targets, _ = collect_logits(model, val_loader, device)
+        val_logits, val_targets, val_raw = collect_logits(model, val_loader, device)
         if args.threshold_mode == "checkpoint":
             # Checkpoint thresholds were selected from uncalibrated validation
             # probabilities by the trainer, so keep the probability scale unchanged.
@@ -1668,6 +1678,13 @@ def evaluate_one_source(
             val_preds = predict_from_probs(val_probs, "argmax", 0.5, 0.5)
             val_metrics = compute_metrics(val_targets, val_preds, probs=val_probs)
             threshold_mode_for_pred = "argmax"
+        if len(val_targets) and len(val_preds) != len(val_targets):
+            val_preds = predict_from_probs(
+                val_probs,
+                threshold_mode_for_pred,
+                thresholds.get("fog", 0.5),
+                thresholds.get("mist", 0.5),
+            )
 
     print(
         f"[{source}] temperature={temperature:.4f}, thresholds={thresholds}, "
@@ -1697,6 +1714,11 @@ def evaluate_one_source(
         thresholds=thresholds,
         threshold_source=threshold_source,
         val_metrics=val_metrics,
+        val_probs=val_probs,
+        val_preds=val_preds,
+        val_targets=val_targets,
+        val_raw_vis=val_raw,
+        val_meta=val_meta,
         test_probs=test_probs,
         test_preds=test_preds,
         test_targets=test_targets,
@@ -2312,7 +2334,17 @@ def split_feature_names(value: str) -> List[str]:
     return out
 
 
-def dynamic_feature_lookup(dyn_vars_count: int) -> Dict[str, int]:
+def dynamic_feature_lookup(
+    dyn_vars_count: int,
+    dynamic_feature_order: Optional[Sequence[str]] = None,
+) -> Dict[str, int]:
+    if dynamic_feature_order:
+        order = [str(value) for value in dynamic_feature_order]
+        if len(order) != int(dyn_vars_count):
+            raise ValueError(
+                f"dynamic_feature_order length {len(order)} != dyn_vars_count {dyn_vars_count}"
+            )
+        return {name: i for i, name in enumerate(order)}
     if int(dyn_vars_count) == 18:
         compact = [
             "T2M",
@@ -2574,7 +2606,7 @@ def run_feature_replacement_experiment(
     ):
         print("[feature-swap] skipped: source layouts differ.", flush=True)
         return pd.DataFrame()
-    lookup = dynamic_feature_lookup(base_eval.dyn_vars_count)
+    lookup = dynamic_feature_lookup(base_eval.dyn_vars_count, base_eval.dynamic_feature_order)
     features = choose_replacement_features(args, lookup)
     if not features:
         return pd.DataFrame()
@@ -2729,6 +2761,16 @@ def write_independent_source_outputs(
             sample["p_clear"] = eval_obj.test_probs[:, 2]
             sample["correct"] = eval_obj.test_preds == eval_obj.test_targets
             sample.to_csv(out_dir / f"per_sample_{source}.csv", index=False)
+        if not args.no_per_sample_csv and eval_obj.val_meta is not None and len(eval_obj.val_targets):
+            sample_val = eval_obj.val_meta.reset_index(drop=True).copy()
+            sample_val["y_cls"] = eval_obj.val_targets
+            sample_val["vis_raw_m"] = eval_obj.val_raw_vis
+            sample_val["pred"] = eval_obj.val_preds
+            sample_val["p_fog"] = eval_obj.val_probs[:, 0]
+            sample_val["p_mist"] = eval_obj.val_probs[:, 1]
+            sample_val["p_clear"] = eval_obj.val_probs[:, 2]
+            sample_val["correct"] = eval_obj.val_preds == eval_obj.val_targets
+            sample_val.to_csv(out_dir / f"per_sample_val_{source}.csv", index=False)
 
     if all(source in evals for source in BEST_EFFORT_ENSEMBLE_MEMBERS):
         try:

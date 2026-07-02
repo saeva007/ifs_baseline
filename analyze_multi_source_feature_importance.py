@@ -485,6 +485,7 @@ def evaluate_importance(
     cli: argparse.Namespace,
     date_draws: Optional[np.ndarray],
     repeat_draws: Optional[np.ndarray],
+    donor_cache: Dict[Tuple[str, str, str, int], Tuple[np.ndarray, float, float]],
 ) -> Tuple[pd.DataFrame, Dict[str, float], Dict[Tuple[str, str, str, str], np.ndarray]]:
     dates = pd.to_datetime(meta.get("time", pd.Series(np.arange(len(meta)))), errors="coerce").dt.strftime("%Y-%m-%d")
     dates = dates.fillna(pd.Series(np.arange(len(meta))).astype(str)).to_numpy()
@@ -514,17 +515,24 @@ def evaluate_importance(
                 stable_group = zlib.crc32(f"{group['block']}::{group['feature']}".encode("utf-8"))
                 seed = int(cli.seed + stable_group + mode_i * 1009 + repeat * 97)
                 rng = np.random.default_rng(seed)
-                if mode == "marginal":
-                    donor, moved_fraction, fallback_fraction = marginal_donor(len(rows), rng)
+                donor_key = (str(group["block"]), str(group["feature"]), mode, repeat)
+                if donor_key in donor_cache:
+                    donor, moved_fraction, fallback_fraction = donor_cache[donor_key]
+                    if len(donor) != len(rows):
+                        raise RuntimeError(f"Shared donor map length mismatch for {donor_key}")
                 else:
-                    donor, moved_fraction, fallback_fraction = stratified_donor(
-                        meta,
-                        rows,
-                        source_eval.dynamic_feature_order,
-                        eval_args.window,
-                        members,
-                        rng,
-                    )
+                    if mode == "marginal":
+                        donor, moved_fraction, fallback_fraction = marginal_donor(len(rows), rng)
+                    else:
+                        donor, moved_fraction, fallback_fraction = stratified_donor(
+                            meta,
+                            rows,
+                            source_eval.dynamic_feature_order,
+                            eval_args.window,
+                            members,
+                            rng,
+                        )
+                    donor_cache[donor_key] = (donor.copy(), moved_fraction, fallback_fraction)
                 permuted = rows.copy()
                 permuted[:, columns] = rows[donor][:, columns]
                 probs = ev.predict_static_rows_for_swap(permuted, source_eval, train_mod, eval_args, ev.resolve_device(cli.device))
@@ -728,6 +736,7 @@ def write_method_note(out_dir: Path, cli: argparse.Namespace, labels: Dict[str, 
         "This analysis estimates model reliance, not causal importance. Each dynamic variable is permuted as its complete 12 h sequence on the same paired valid-time/station sample for every source-trained model.",
         "",
         "The primary result is marginal grouped permutation importance. The secondary result permutes within season, six-hour UTC bin, coarse geographic cell, and an available non-target moisture-state quartile. This stratified analysis is a dependence-aware sensitivity check, not an exact implementation of the random-forest conditional permutation algorithm.",
+        f"For every group, mode, and repeat, the donor map is generated once from the aligned reference source ({cli.reference_source}) and reused unchanged for every source model.",
         "",
         "Low-visibility CSI is the primary endpoint. Recall and precision identify whether a decrease is caused by missed events or false alarms, and low-visibility Brier score checks the probabilistic response. Positive importance always means degraded performance after permutation.",
         "",
@@ -810,6 +819,7 @@ def main() -> None:
     baseline_records: List[Dict[str, object]] = []
     group_manifest_records: List[Dict[str, object]] = []
     group_counts: Dict[str, Dict[str, int]] = {}
+    donor_cache: Dict[Tuple[str, str, str, int], Tuple[np.ndarray, float, float]] = {}
     for tag in source_order:
         source_eval = source_evals[tag]
         x_test = np.load(Path(source_eval.spec.data_dir) / "X_test.npy", mmap_mode="r")
@@ -885,6 +895,7 @@ def main() -> None:
             cli,
             date_draws,
             repeat_draws,
+            donor_cache,
         )
         all_results.append(result)
         all_draws[tag] = source_draws
@@ -924,6 +935,7 @@ def main() -> None:
                 "sampling": "uniform without replacement on common valid-time/station rows",
                 "shared_dynamic_features": shared_dynamic,
                 "permutation_modes": cli.modes,
+                "donor_map_policy": f"generated once from reference_source={cli.reference_source} and reused across aligned source models",
                 "group_scope": cli.group_scope,
                 "max_groups": cli.max_groups,
                 "group_counts": group_counts,

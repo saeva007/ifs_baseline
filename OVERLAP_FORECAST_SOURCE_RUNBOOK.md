@@ -253,6 +253,93 @@ dependence. Use `q_core_paired_common_metrics.csv` and
 `overall_metrics.csv` retains unpaired full-source diagnostics and should not
 be used for source attribution.
 
+### Paper-grade q-core hybrid source attribution
+
+The paired q-core score table identifies a performance gap but does not by
+itself identify its source. Use `submit_q_core_hybrid_factorial.sh` to run the
+controlled Pangu-base/Tianji-donor factorial. The three source packages are:
+
+- `M`: `Q_1000,DP_1000,Q_925,DP_925,RH_925`;
+- `T`: `T2M,MSLP`;
+- `W`: `U10,V10,WSPD10,WDIR10,U_925,V_925,WSPD925`.
+
+Masks are written in `MTW` order, so `000` is the recomputed Pangu endpoint,
+`111` is the recomputed Tianji endpoint, and `100` replaces only the complete
+moisture package. Every replacement covers the full 12 h sequence. The builder
+recomputes all fog-derived features, preserves the shared zenith/PM/static/time
+columns, and requires `000` and `111` to reproduce their source matrices. A
+source row, label, unit-policy, PM-policy, lead-provenance, or shared-column
+mismatch stops the chain before training.
+
+Always pass the already-audited canonical q-core root explicitly. Commas are
+not used inside exported seed/mask lists because Slurm treats them as
+`--export` separators.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+# Inspect the full dependency graph without submitting anything.
+RUN_TAG=qcore_hybrid_mtw_v1_20260702 \
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_units_v2_20260701 \
+DRY_RUN=1 \
+bash submit_q_core_hybrid_factorial.sh
+
+# Full paper experiment: 3 shared q-core S1 anchors + 24 hybrid S2 models,
+# 3 common-core S1/S2 controls, a 27-model artifact gate, endpoint grouped
+# permutation + ALE diagnostics, 3 seed evaluations, and one joint analysis.
+RUN_TAG=qcore_hybrid_mtw_v1_20260702 \
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_units_v2_20260701 \
+SEEDS=42:2025:20260702 \
+MASKS=000:001:010:011:100:101:110:111 \
+OBS_ROOT=/path/to/hourly/station/csv/root \
+bash submit_q_core_hybrid_factorial.sh
+```
+
+Use a separate tag for the required 2000-row end-to-end smoke test. The short
+step counts are inherited by every submitted training job:
+
+```bash
+RUN_TAG=qcore_hybrid_mtw_smoke_20260702 \
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_units_v2_20260701 \
+SEEDS=42 RUN_IMPORTANCE=0 RUN_ALE=0 \
+LIMIT_ROWS=2000 LIMIT_SAMPLES=2000 \
+RUN_COMMON_CORE=0 BOOTSTRAP_ITERS=20 \
+LOWVIS_RNN_S1_STEPS=20 LOWVIS_RNN_S2_A_STEPS=20 LOWVIS_RNN_S2_B_STEPS=40 \
+bash submit_q_core_hybrid_factorial.sh
+```
+
+The formal analysis uses Low-vis AP plus test CSI/recall at a common FPR chosen
+only from validation data. It writes per-seed and seed-mean metrics, reliability
+bins and a reliability figure, exact Shapley contributions, second-order interactions, UTC-date block
+bootstrap intervals, Shapley efficiency checks, and compressed event
+case-control samples under
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<run_tag>/analysis/`.
+Point AP is exact. To keep the 1000 date-block resamples tractable over all 24
+models, bootstrap AP uses 4096 fixed score bins and the analysis stops if this
+approximation differs from exact point AP by more than `5e-4`.
+The same chain also runs endpoint grouped permutation/model-reliance analysis
+for `000` and `111` under `feature_importance/seed_<seed>/`. With `OBS_ROOT`
+set, `observation_anchored_source_quality.csv` evaluates T2M, WSPD10 and MSLP
+against station observations. `q_reference_analysis_quality_and_extreme_placement.csv`
+compares Q1000/Q925 with the paired ERA5 reference analysis using both exact
+reference thresholds and quantile-matched event placement; ERA5 is never
+labelled as truth.
+Before evaluation, `artifact_audit/primary_training_artifact_audit.*` must
+verify all 3 S1 + 24 S2 checkpoint/scaler/config triplets, including seed,
+dataset path, window, and the 12000/40000 S2 step protocol. Endpoint trajectory
+ALE tables and plots are written under `ale/seed_<seed>/` and aggregated into
+`analysis/q_core_trajectory_ale_*`; these are within-model response diagnostics,
+not source-substitution effects.
+`rh2m_dpd_information_package_*` compares the matched Tianji common-core model
+against the Tianji `111` q-core endpoint and must be described as the value of
+the added `RH2M+DPD` information package, not a general causal effect.
+
+`moisture_followup_gate.json` permits the nested 1000/925-hPa moisture split
+only when moisture is the largest Low-vis AP Shapley contribution, its paired
+date-block interval excludes zero, and all three seed effects are positive. If
+the gate fails, retain the null result and investigate the winning package;
+do not continue to a moisture-only claim.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do

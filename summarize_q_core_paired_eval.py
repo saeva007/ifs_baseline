@@ -112,6 +112,34 @@ def parse_sources(text: str) -> Dict[str, str]:
     return out
 
 
+def read_evaluator_build_configs(eval_dir: Path) -> Dict[str, Dict[str, object]]:
+    path = eval_dir / "run_config.json"
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        configs = payload.get("build_configs", {}) if isinstance(payload, dict) else {}
+        return {str(tag): cfg for tag, cfg in configs.items() if isinstance(cfg, dict)}
+    except Exception as exc:
+        print(f"[WARN] could not read evaluator provenance from {path}: {exc}")
+        return {}
+
+
+def pangu_lead_caveat(build_configs: Mapping[str, Mapping[str, object]], reference: str) -> str:
+    cfg = build_configs.get(reference, {})
+    lead = cfg.get("source_forecast_lead", {}) if isinstance(cfg, Mapping) else {}
+    if isinstance(lead, Mapping):
+        lo, hi = lead.get("min_hours"), lead.get("max_hours")
+        if lo is not None and hi is not None:
+            return f"Pangu-2025 lead provenance from dataset metadata: {float(lo):g}--{float(hi):g} h."
+    inputs = cfg.get("source_inputs") if isinstance(cfg, Mapping) else None
+    return (
+        "Pangu-2025 lead provenance was not present in dataset_build_config.json; "
+        f"do not infer a 24 h product from the source name alone (source_inputs={inputs!r})."
+    )
+
+
 def normalize_station(values: pd.Series) -> pd.Series:
     return values.astype(str).str.strip().str.replace(r"\.0$", "", regex=True).str.upper()
 
@@ -326,6 +354,7 @@ def main() -> None:
     if args.reference not in labels:
         raise KeyError(f"Reference {args.reference!r} is not in --sources")
     frames = {tag: load_source(eval_dir, tag) for tag in labels}
+    build_configs = read_evaluator_build_configs(eval_dir)
     common, aligned = align_sources(frames)
     metrics_df = metric_rows(aligned, labels)
     metrics_df.to_csv(eval_dir / "q_core_paired_common_metrics.csv", index=False)
@@ -369,10 +398,19 @@ def main() -> None:
             "paired test samples",
         ],
         "interpretation_caveats": [
-            "Pangu-2025 uses a 24 h ONNX product while Tianji/IFS use their existing 12 <= lead_hour < 24 stitching convention.",
+            pangu_lead_caveat(build_configs, args.reference),
             "ERA5 is a reference analysis, not an operational forecast source.",
             "Results are a common-input product comparison, not pure forecast-source causal attribution.",
         ],
+        "source_dataset_provenance": {
+            tag: {
+                "source_inputs": build_configs.get(tag, {}).get("source_inputs"),
+                "source_forecast_lead": build_configs.get(tag, {}).get("source_forecast_lead"),
+                "canonical_unit_policy": build_configs.get(tag, {}).get("canonical_unit_policy"),
+                "pm_qc_policy": build_configs.get(tag, {}).get("pm_qc_policy"),
+            }
+            for tag in labels
+        },
         "reference": args.reference,
         "paired_common_rows": int(len(common)),
         "source_rows": {tag: int(len(frame)) for tag, frame in frames.items()},
