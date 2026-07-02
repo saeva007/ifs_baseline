@@ -22,8 +22,6 @@ export LD_LIBRARY_PATH=/public/home/xichen/ncydata/dtk/dtk-24.04.1/.hyhal/lib:$L
 export CONDA_NO_PLUGINS=true
 export CONDA_SOLVER=classic
 source /public/home/putianshu/vis_mlp/ifs_baseline/activate_eval_torch_runtime.sh
-export LD_LIBRARY_PATH=/public/home/xichen/.conda/envs/py310_ppy/openssl/lib:$LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/public/home/xichen/ncydata/panpy_test_liud/hipnn/lib/release/:$LD_LIBRARY_PATH
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
