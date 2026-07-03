@@ -16,7 +16,13 @@ import numpy as np
 import pandas as pd
 
 from analyze_q_core_ale import centered_curve
-from analyze_q_core_hybrid_factorial import SampleSet, adaptive_ap_histograms, pair_interactions, shapley_values
+from analyze_q_core_hybrid_factorial import (
+    SampleSet,
+    adaptive_ap_histograms,
+    make_figures,
+    pair_interactions,
+    shapley_values,
+)
 from build_q_core_hybrid_factorial import EXPECTED_ORDER, GROUPS
 from pmst_overlap_common import (
     CANONICAL_UNIT_POLICY_VERSION,
@@ -225,6 +231,49 @@ class ArtifactAndAleTest(unittest.TestCase):
         )
         self.assertEqual(bins, 8192)
         self.assertLessEqual(error, 5.0e-4)
+
+    def test_figure_handles_point_estimate_outside_bootstrap_interval(self) -> None:
+        with workspace_temp_dir() as out_dir:
+            metrics = pd.DataFrame(
+                [
+                    {
+                        "mask": f"{value:03b}",
+                        "low_vis_ap": 0.4 + 0.01 * value,
+                        "low_vis_csi_matched_fpr": 0.3 + 0.005 * value,
+                        "low_vis_recall_matched_fpr": 0.5 + 0.005 * value,
+                    }
+                    for value in range(8)
+                ]
+            )
+            reliability = pd.DataFrame(
+                [
+                    {"mask": mask, "bin": idx, "n": 10, "mean_probability": 0.1 + 0.2 * idx, "observed_frequency": 0.12 + 0.18 * idx}
+                    for mask in ("000", "111")
+                    for idx in range(4)
+                ]
+            )
+            shapley = pd.DataFrame(
+                {
+                    "metric": ["low_vis_ap"] * 3,
+                    "group": ["M", "T", "W"],
+                    "group_label": ["Moisture", "Thermal/pressure", "Wind"],
+                    "shapley_mean": [0.01, 0.02, -0.01],
+                }
+            )
+            bootstrap = pd.DataFrame(
+                {
+                    "metric": ["low_vis_ap"] * 3,
+                    "effect": ["shapley"] * 3,
+                    "term": ["M", "T", "W"],
+                    "ci_low": [0.03, 0.01, -0.03],
+                    "ci_high": [0.05, 0.04, 0.01],
+                }
+            )
+            events = pd.DataFrame({"case_category": ["both_hit", "both_miss", "tianji_hit_pangu_miss"]})
+            make_figures(metrics, reliability, shapley, bootstrap, events, out_dir)
+            self.assertTrue((out_dir / "fig_q_core_hybrid_factorial_mechanism.png").is_file())
+            self.assertTrue((out_dir / "fig_q_core_hybrid_factorial_mechanism.pdf").is_file())
+            self.assertTrue((out_dir / "fig_q_core_hybrid_factorial_mechanism.svg").is_file())
 
     def test_formal_artifact_gate_accepts_27_complete_triplets(self) -> None:
         with workspace_temp_dir() as root:

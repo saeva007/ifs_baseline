@@ -1148,7 +1148,15 @@ def make_figures(
     except Exception as exc:
         print(f"[WARN] figures skipped: {exc}")
         return
-    plt.rcParams.update({"font.size": 8.5, "axes.spines.top": False, "axes.spines.right": False})
+    plt.rcParams.update(
+        {
+            "font.size": 8.5,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "svg.fonttype": "none",
+            "pdf.fonttype": 42,
+        }
+    )
     aggregate = metrics.groupby("mask", sort=True)[list(PRIMARY_METRICS)].mean().reset_index()
     fig, axes = plt.subplots(2, 2, figsize=(10.0, 7.4), constrained_layout=True)
     ax = axes[0, 0]
@@ -1166,12 +1174,19 @@ def make_figures(
     ci = boot[(boot["metric"] == "low_vis_ap") & (boot["effect"] == "shapley")].set_index("term")
     y = np.arange(len(plot))
     means = plot["shapley_mean"].to_numpy(dtype=float)
-    lower = np.asarray([means[i] - float(ci.loc[group, "ci_low"]) for i, group in enumerate(plot["group"])])
-    upper = np.asarray([float(ci.loc[group, "ci_high"]) - means[i] for i, group in enumerate(plot["group"])])
-    ax.barh(y, means, xerr=np.vstack([lower, upper]), color="#2878B5", alpha=0.9)
+    ci_low = np.asarray([float(ci.loc[group, "ci_low"]) for group in plot["group"]])
+    ci_high = np.asarray([float(ci.loc[group, "ci_high"]) for group in plot["group"]])
+    ax.barh(y, means, color="#2878B5", alpha=0.82, label="Point estimate")
+    for y_pos, low, high in zip(y, ci_low, ci_high):
+        if np.isfinite(low) and np.isfinite(high):
+            left, right = sorted((low, high))
+            ax.hlines(y_pos, left, right, color="#17202A", linewidth=1.4, zorder=4)
+            ax.plot([left, right], [y_pos, y_pos], linestyle="none", marker="|", markersize=6, color="#17202A", zorder=5)
     ax.axvline(0.0, color="black", lw=0.8)
     ax.set_yticks(y, plot["group_label"])
     ax.set_xlabel("Exact Shapley contribution to Low-vis AP")
+    ax.plot([], [], color="#17202A", marker="|", label="95% UTC-date bootstrap CI")
+    ax.legend(frameon=False, fontsize=7)
 
     ax = axes[1, 0]
     endpoint = aggregate[aggregate["mask"].isin(["000", "111"])].set_index("mask")
@@ -1190,6 +1205,8 @@ def make_figures(
     ax.set_yticks(np.arange(len(counts)), counts.index.str.replace("_", " "))
     ax.set_xlabel("True Low-vis event samples")
     ax.set_title("Matched-FPR event case control")
+    for panel_label, ax in zip("abcd", axes.ravel()):
+        ax.text(-0.12, 1.04, panel_label, transform=ax.transAxes, fontsize=9, fontweight="bold", va="bottom")
     for ext in ("png", "pdf", "svg"):
         fig.savefig(out_dir / f"fig_q_core_hybrid_factorial_mechanism.{ext}", dpi=300)
     plt.close(fig)
