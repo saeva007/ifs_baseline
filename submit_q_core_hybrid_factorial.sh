@@ -227,7 +227,7 @@ if [[ "${RUN_EVAL}" == "1" ]]; then
             deps="${deps}:${ALE_JOBS[${seed}]}"
         fi
         dep="$(dependency_arg "${deps}")"
-        eval_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=evaluate_seed,SEED=${seed},SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},LIMIT_SAMPLES=${LIMIT_SAMPLES},INCLUDE_COMMON_CORE=${RUN_COMMON_CORE},COMMON_CORE_DATA_DIR=${COMMON_CORE_DATA_DIR}")
+        eval_args=(--job-name="qcore_eval_s${seed}" --export="ALL,RUN_TAG=${RUN_TAG},MODE=evaluate_seed,SEED=${seed},SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},LIMIT_SAMPLES=${LIMIT_SAMPLES},INCLUDE_COMMON_CORE=${RUN_COMMON_CORE},COMMON_CORE_DATA_DIR=${COMMON_CORE_DATA_DIR}")
         [[ -z "${dep}" ]] || eval_args+=("${dep}")
         EVAL_JOBS[${seed}]=$(submit "eval_seed${seed}" "${eval_args[@]}" sub_q_core_hybrid_factorial_eval.slurm)
     done
@@ -237,7 +237,7 @@ if [[ "${RUN_EVAL}" == "1" ]]; then
         eval_deps="${eval_deps:+${eval_deps}:}${EVAL_JOBS[${seed}]}"
     done
     dep="$(dependency_arg "${eval_deps}")"
-    analysis_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=analyze,SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},BOOTSTRAP_MAX_ROWS=${BOOTSTRAP_MAX_ROWS},OBS_ROOT=${OBS_ROOT},ERA5_DATA_DIR=${ERA5_DATA_DIR},REQUIRE_ALE=${RUN_ALE}")
+    analysis_args=(--job-name="qcore_analysis" --export="ALL,RUN_TAG=${RUN_TAG},MODE=analyze,SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},BOOTSTRAP_MAX_ROWS=${BOOTSTRAP_MAX_ROWS},OBS_ROOT=${OBS_ROOT},ERA5_DATA_DIR=${ERA5_DATA_DIR},REQUIRE_ALE=${RUN_ALE}")
     [[ -z "${dep}" ]] || analysis_args+=("${dep}")
     analysis_job=$(submit analysis "${analysis_args[@]}" sub_q_core_hybrid_factorial_eval.slurm)
 else
