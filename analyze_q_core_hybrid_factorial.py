@@ -57,6 +57,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--bootstrap-iters", type=int, default=1000)
     ap.add_argument("--bootstrap-seed", type=int, default=20260702)
     ap.add_argument("--bootstrap-max-rows", type=int, default=0, help="Optional deterministic paired-row cap; 0 uses all rows.")
+    ap.add_argument("--ap-hist-initial-bins", type=int, default=4096)
+    ap.add_argument("--ap-hist-max-bins", type=int, default=65536)
+    ap.add_argument("--ap-hist-max-error", type=float, default=5.0e-4)
     ap.add_argument("--ece-bins", type=int, default=15)
     ap.add_argument("--event-features", default=",".join(EVENT_FEATURES))
     ap.add_argument("--obs-root", default="")
@@ -476,6 +479,9 @@ def common_core_availability_analysis(
     iterations: int,
     rng_seed: int,
     max_rows: int,
+    ap_hist_initial_bins: int,
+    ap_hist_max_bins: int,
+    ap_hist_max_error: float,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     if not common_val:
         return pd.DataFrame(), pd.DataFrame()
@@ -514,39 +520,19 @@ def common_core_availability_analysis(
     dates = ref.frame["time_utc"].dt.strftime("%Y-%m-%d").to_numpy()
     unique_dates, date_codes = np.unique(dates, return_inverse=True)
     n_dates = len(unique_dates)
-    ap_bins = 4096
-
-    def precompute(sample: SampleSet, threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        y_low = sample.y <= 1
-        score_bin = np.clip((sample.score * (ap_bins - 1)).astype(np.int32), 0, ap_bins - 1)
-        positive = np.zeros((n_dates, ap_bins), dtype=np.int32)
-        negative = np.zeros((n_dates, ap_bins), dtype=np.int32)
-        np.add.at(positive, (date_codes[y_low], score_bin[y_low]), 1)
-        np.add.at(negative, (date_codes[~y_low], score_bin[~y_low]), 1)
-        pred = sample.score >= threshold
-        confusion = np.zeros((n_dates, 4), dtype=np.int64)
-        np.add.at(confusion[:, 0], date_codes[y_low & pred], 1)
-        np.add.at(confusion[:, 1], date_codes[~y_low & pred], 1)
-        np.add.at(confusion[:, 2], date_codes[y_low & ~pred], 1)
-        np.add.at(confusion[:, 3], date_codes[~y_low & ~pred], 1)
-        return positive, negative, confusion
-
-    def ap_hist(positive: np.ndarray, negative: np.ndarray) -> float:
-        pos = np.asarray(positive, dtype=np.float64)[::-1]
-        neg = np.asarray(negative, dtype=np.float64)[::-1]
-        total = float(pos.sum())
-        if total <= 0:
-            return math.nan
-        tp, fp = np.cumsum(pos), np.cumsum(neg)
-        precision = np.divide(tp, tp + fp, out=np.ones_like(tp), where=(tp + fp) > 0)
-        return float(np.sum(pos / total * precision))
-
-    precomputed: Dict[Tuple[int, str], Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    histogram_samples: Dict[Tuple[int, str], SampleSet] = {}
     for seed in seeds:
-        precomputed[(seed, "q_core")] = precompute(working_q[seed], thresholds[(seed, "q_core")])
-        precomputed[(seed, "common_core_plus_rh2m_dpd")] = precompute(
-            working_c[seed], thresholds[(seed, "common_core_plus_rh2m_dpd")]
-        )
+        histogram_samples[(seed, "q_core")] = working_q[seed]
+        histogram_samples[(seed, "common_core_plus_rh2m_dpd")] = working_c[seed]
+    precomputed, _ap_bins, _max_ap_error = adaptive_ap_histograms(
+        histogram_samples,
+        thresholds,
+        date_codes,
+        n_dates,
+        ap_hist_initial_bins,
+        ap_hist_max_bins,
+        ap_hist_max_error,
+    )
     draws: List[Dict[str, object]] = []
     for iteration in range(iterations):
         date_weights = np.bincount(
@@ -559,7 +545,7 @@ def common_core_availability_analysis(
                 for label in ("q_core", "common_core_plus_rh2m_dpd"):
                     positive, negative, confusion = precomputed[(seed, label)]
                     if metric == "low_vis_ap":
-                        values[label] = ap_hist(date_weights @ positive, date_weights @ negative)
+                        values[label] = ap_from_histogram(date_weights @ positive, date_weights @ negative)
                     else:
                         tp, fp, fn, _tn = date_weights @ confusion
                         values[label] = (
@@ -593,6 +579,62 @@ def subset_sample(sample: SampleSet, idx: np.ndarray) -> SampleSet:
     return SampleSet(sample.frame.iloc[idx].reset_index(drop=True), sample.y[idx], sample.score[idx], sample.pred[idx])
 
 
+def ap_from_histogram(positive: np.ndarray, negative: np.ndarray) -> float:
+    positive = np.asarray(positive, dtype=np.float64)[::-1]
+    negative = np.asarray(negative, dtype=np.float64)[::-1]
+    total_positive = float(positive.sum())
+    if total_positive <= 0:
+        return math.nan
+    tp = np.cumsum(positive)
+    fp = np.cumsum(negative)
+    precision = np.divide(tp, tp + fp, out=np.ones_like(tp), where=(tp + fp) > 0)
+    return float(np.sum((positive / total_positive) * precision))
+
+
+def adaptive_ap_histograms(
+    samples: Mapping[object, SampleSet],
+    thresholds: Mapping[object, float],
+    date_codes: np.ndarray,
+    n_dates: int,
+    initial_bins: int,
+    max_bins: int,
+    max_error: float,
+) -> Tuple[Dict[object, Tuple[np.ndarray, np.ndarray, np.ndarray]], int, float]:
+    if initial_bins < 2 or max_bins < initial_bins:
+        raise ValueError(f"Invalid AP histogram bin range: {initial_bins}..{max_bins}")
+    if max_error <= 0:
+        raise ValueError("AP histogram maximum error must be positive")
+    bins = int(initial_bins)
+    while True:
+        precomputed: Dict[object, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        largest_error = 0.0
+        for key, sample in samples.items():
+            y_low = sample.y <= 1
+            score_bin = np.clip((sample.score * (bins - 1)).astype(np.int32), 0, bins - 1)
+            positive = np.zeros((n_dates, bins), dtype=np.int32)
+            negative = np.zeros((n_dates, bins), dtype=np.int32)
+            np.add.at(positive, (date_codes[y_low], score_bin[y_low]), 1)
+            np.add.at(negative, (date_codes[~y_low], score_bin[~y_low]), 1)
+            pred = sample.score >= thresholds[key]
+            confusion = np.zeros((n_dates, 4), dtype=np.int64)
+            np.add.at(confusion[:, 0], date_codes[y_low & pred], 1)
+            np.add.at(confusion[:, 1], date_codes[~y_low & pred], 1)
+            np.add.at(confusion[:, 2], date_codes[y_low & ~pred], 1)
+            np.add.at(confusion[:, 3], date_codes[~y_low & ~pred], 1)
+            exact_ap = average_precision_binary(y_low.astype(np.int64), sample.score)
+            approximate_ap = ap_from_histogram(positive.sum(axis=0), negative.sum(axis=0))
+            largest_error = max(largest_error, abs(exact_ap - approximate_ap))
+            precomputed[key] = positive, negative, confusion
+        if largest_error <= max_error:
+            return precomputed, bins, largest_error
+        if bins >= max_bins:
+            raise RuntimeError(
+                f"Bootstrap AP histogram approximation error {largest_error:.6g} exceeds "
+                f"{max_error:.6g} at maximum {bins} bins"
+            )
+        bins = min(bins * 2, max_bins)
+
+
 def bootstrap_effects(
     test: Mapping[Tuple[int, str], SampleSet],
     seeds: Sequence[int],
@@ -601,6 +643,9 @@ def bootstrap_effects(
     iterations: int,
     rng_seed: int,
     max_rows: int,
+    ap_hist_initial_bins: int,
+    ap_hist_max_bins: int,
+    ap_hist_max_error: float,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     reference = test[(seeds[0], "000")]
     n = len(reference.y)
@@ -614,42 +659,15 @@ def bootstrap_effects(
     dates = reference.frame["time_utc"].dt.strftime("%Y-%m-%d").to_numpy()
     unique_dates, date_codes = np.unique(dates, return_inverse=True)
     n_dates = len(unique_dates)
-    ap_bins = 4096
-
-    def ap_from_hist(positive: np.ndarray, negative: np.ndarray) -> float:
-        positive = np.asarray(positive, dtype=np.float64)[::-1]
-        negative = np.asarray(negative, dtype=np.float64)[::-1]
-        total_positive = float(positive.sum())
-        if total_positive <= 0:
-            return math.nan
-        tp = np.cumsum(positive)
-        fp = np.cumsum(negative)
-        precision = np.divide(tp, tp + fp, out=np.ones_like(tp), where=(tp + fp) > 0)
-        return float(np.sum((positive / total_positive) * precision))
-
-    precomputed: Dict[Tuple[int, str], Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    max_ap_approximation_error = 0.0
-    for key, sample in working.items():
-        y_low = sample.y <= 1
-        score_bin = np.clip((sample.score * (ap_bins - 1)).astype(np.int32), 0, ap_bins - 1)
-        positive = np.zeros((n_dates, ap_bins), dtype=np.int32)
-        negative = np.zeros((n_dates, ap_bins), dtype=np.int32)
-        np.add.at(positive, (date_codes[y_low], score_bin[y_low]), 1)
-        np.add.at(negative, (date_codes[~y_low], score_bin[~y_low]), 1)
-        pred = sample.score >= thresholds[key]
-        confusion = np.zeros((n_dates, 4), dtype=np.int64)
-        np.add.at(confusion[:, 0], date_codes[y_low & pred], 1)   # TP
-        np.add.at(confusion[:, 1], date_codes[~y_low & pred], 1)  # FP
-        np.add.at(confusion[:, 2], date_codes[y_low & ~pred], 1)  # FN
-        np.add.at(confusion[:, 3], date_codes[~y_low & ~pred], 1) # TN
-        exact_ap = average_precision_binary(y_low.astype(np.int64), sample.score)
-        approximate_ap = ap_from_hist(positive.sum(axis=0), negative.sum(axis=0))
-        max_ap_approximation_error = max(max_ap_approximation_error, abs(exact_ap - approximate_ap))
-        precomputed[key] = positive, negative, confusion
-    if max_ap_approximation_error > 5.0e-4:
-        raise RuntimeError(
-            f"Bootstrap AP histogram approximation error {max_ap_approximation_error:.6g} exceeds 5e-4"
-        )
+    precomputed, ap_bins, max_ap_approximation_error = adaptive_ap_histograms(
+        working,
+        thresholds,
+        date_codes,
+        n_dates,
+        ap_hist_initial_bins,
+        ap_hist_max_bins,
+        ap_hist_max_error,
+    )
 
     draws: List[Dict[str, object]] = []
     gap_draws: List[Dict[str, object]] = []
@@ -664,7 +682,7 @@ def bootstrap_effects(
                 positive_draw = date_weights @ positive
                 negative_draw = date_weights @ negative
                 tp, fp, fn, _tn = date_weights @ confusion
-                seed_metrics["low_vis_ap"].append(ap_from_hist(positive_draw, negative_draw))
+                seed_metrics["low_vis_ap"].append(ap_from_histogram(positive_draw, negative_draw))
                 seed_metrics["low_vis_csi_matched_fpr"].append(safe_div(float(tp), float(tp + fp + fn)))
                 seed_metrics["low_vis_recall_matched_fpr"].append(safe_div(float(tp), float(tp + fn)))
             for metric in PRIMARY_METRICS:
@@ -1219,6 +1237,9 @@ def main() -> None:
         args.bootstrap_iters,
         args.bootstrap_seed,
         args.bootstrap_max_rows,
+        args.ap_hist_initial_bins,
+        args.ap_hist_max_bins,
+        args.ap_hist_max_error,
     )
     availability_point, availability_ci = common_core_availability_analysis(
         common_val,
@@ -1230,6 +1251,9 @@ def main() -> None:
         args.bootstrap_iters,
         args.bootstrap_seed,
         args.bootstrap_max_rows,
+        args.ap_hist_initial_bins,
+        args.ap_hist_max_bins,
+        args.ap_hist_max_error,
     )
     shapley_ci = bootstrap[(bootstrap["effect"] == "shapley")][["metric", "term", "ci_low", "ci_high"]].rename(
         columns={"term": "group"}
@@ -1329,8 +1353,12 @@ def main() -> None:
             "seed": args.bootstrap_seed,
             "unit": "UTC_valid_date",
             "max_rows": args.bootstrap_max_rows,
-            "low_vis_ap_method": "4096-bin score histogram per UTC date; exact point AP is reported separately",
-            "acceptance": "analysis stops if histogram AP differs from exact point AP by more than 5e-4",
+            "low_vis_ap_method": "adaptive score histogram per UTC date; exact point AP is reported separately",
+            "ap_histogram_initial_bins": args.ap_hist_initial_bins,
+            "ap_histogram_max_bins": args.ap_hist_max_bins,
+            "ap_histogram_selected_bins": int(bootstrap["ap_histogram_bins"].max()),
+            "ap_point_approximation_max_abs_error": float(bootstrap["ap_point_approximation_max_abs_error"].max()),
+            "acceptance": f"analysis stops if histogram AP differs from exact point AP by more than {args.ap_hist_max_error:g}",
         },
         "event_case_control": event_info,
         "observation_anchored_source_quality": observation_quality_info,

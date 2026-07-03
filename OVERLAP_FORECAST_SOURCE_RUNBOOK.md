@@ -315,8 +315,9 @@ bootstrap intervals, Shapley efficiency checks, and compressed event
 case-control samples under
 `paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<run_tag>/analysis/`.
 Point AP is exact. To keep the 1000 date-block resamples tractable over all 24
-models, bootstrap AP uses 4096 fixed score bins and the analysis stops if this
-approximation differs from exact point AP by more than `5e-4`.
+models, bootstrap AP starts with 4096 score bins and doubles the resolution up
+to 65536 bins when needed; the analysis still stops if the selected histogram
+differs from exact point AP by more than `5e-4`.
 The same chain also runs endpoint grouped permutation/model-reliance analysis
 for `000` and `111` under `feature_importance/seed_<seed>/`. With `OBS_ROOT`
 set, `observation_anchored_source_quality.csv` evaluates T2M, WSPD10 and MSLP

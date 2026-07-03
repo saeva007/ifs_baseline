@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from analyze_q_core_ale import centered_curve
-from analyze_q_core_hybrid_factorial import pair_interactions, shapley_values
+from analyze_q_core_hybrid_factorial import SampleSet, adaptive_ap_histograms, pair_interactions, shapley_values
 from build_q_core_hybrid_factorial import EXPECTED_ORDER, GROUPS
 from pmst_overlap_common import (
     CANONICAL_UNIT_POLICY_VERSION,
@@ -206,6 +206,25 @@ class ArtifactAndAleTest(unittest.TestCase):
     def test_centered_ale_has_weighted_zero_mean(self) -> None:
         curve = centered_curve(np.asarray([0.1, -0.02, 0.04]), np.asarray([10, 20, 30]))
         self.assertAlmostEqual(float(np.average(curve, weights=[10, 20, 30])), 0.0, places=12)
+
+    def test_ap_histogram_resolution_adapts_without_relaxing_error(self) -> None:
+        sample = SampleSet(
+            frame=pd.DataFrame(index=np.arange(2)),
+            y=np.asarray([0, 2], dtype=np.int64),
+            score=np.asarray([0.50023, 0.50013], dtype=np.float64),
+            pred=np.asarray([0, 2], dtype=np.int64),
+        )
+        _precomputed, bins, error = adaptive_ap_histograms(
+            {"sample": sample},
+            {"sample": 0.5},
+            np.asarray([0, 0], dtype=np.int64),
+            1,
+            4096,
+            8192,
+            5.0e-4,
+        )
+        self.assertEqual(bins, 8192)
+        self.assertLessEqual(error, 5.0e-4)
 
     def test_formal_artifact_gate_accepts_27_complete_triplets(self) -> None:
         with workspace_temp_dir() as root:
