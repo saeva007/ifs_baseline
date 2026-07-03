@@ -26,7 +26,9 @@ S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-40000}"
 ALLOW_SMOKE="${ALLOW_SMOKE:-0}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${EVAL_ROOT}/artifact_audit"
-source "${BASELINE_DIR}/activate_eval_torch_runtime.sh"
+# This verifier reads JSON/CSV paths only.  Use the stable data-analysis
+# Python without importing Torch/HIP on the CPU audit partition.
+source "${BASELINE_DIR}/activate_torch_runtime.sh"
 CMD=(python "${BASELINE_DIR}/verify_q_core_hybrid_artifacts.py" \
   --run-tag "${RUN_TAG}" \
   --checkpoint-dir "${CKPT_DIR}" \
