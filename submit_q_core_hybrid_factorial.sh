@@ -73,7 +73,9 @@ if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
 fi
 
 dataset_dyn() {
-    python -c 'import json,sys; print(int(json.load(open(sys.argv[1] + "/dataset_build_config.json", encoding="utf-8"))["dyn_vars"]))' "$1"
+    # Keep this login-node preflight compatible with both the cluster's legacy
+    # `python` command and Python 3; the JSON field is numeric/ASCII.
+    python -c 'import json,sys; print(int(json.load(open(sys.argv[1] + "/dataset_build_config.json"))["dyn_vars"]))' "$1"
 }
 
 artifact_triplet_complete() {
