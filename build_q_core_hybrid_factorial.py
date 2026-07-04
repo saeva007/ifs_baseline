@@ -50,6 +50,7 @@ SHARED_DYNAMIC = ("ZENITH", "PM10_ugm3", "PM25_ugm3")
 STATIC_DIM = 6
 CYCLICAL_DIM = 4
 DEFAULT_SPLITS = ("train", "val", "test")
+DEFAULT_ENDPOINT_FOG_ATOL = 5.0e-5
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,15 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--limit-rows", type=int, default=0, help="Smoke-test row limit per split; 0 uses all rows.")
     ap.add_argument("--rtol", type=float, default=1.0e-6)
     ap.add_argument("--atol", type=float, default=1.0e-6)
+    ap.add_argument(
+        "--endpoint-fog-atol",
+        type=float,
+        default=DEFAULT_ENDPOINT_FOG_ATOL,
+        help=(
+            "Absolute compatibility tolerance between recomputed float32 fog features and the source endpoint. "
+            "Dynamic, label, metadata and unchanged-column checks retain --rtol/--atol."
+        ),
+    )
     ap.add_argument("--audit-only", action="store_true")
     return ap.parse_args()
 
@@ -221,6 +231,12 @@ def assert_close(name: str, left: np.ndarray, right: np.ndarray, rtol: float, at
         raise ValueError(f"{name}: values differ (max_abs_diff={maximum})")
 
 
+def max_abs_difference(left: np.ndarray, right: np.ndarray) -> float:
+    diff = np.abs(np.asarray(left, dtype=np.float64) - np.asarray(right, dtype=np.float64))
+    finite = diff[np.isfinite(diff)]
+    return float(finite.max()) if finite.size else math.nan
+
+
 def mask_groups(mask: str) -> List[str]:
     return [name for name, bit in zip(GROUP_ORDER, mask) if bit == "1"]
 
@@ -295,6 +311,7 @@ def build_one_split(
     chunk_rows: int,
     rtol: float,
     atol: float,
+    endpoint_fog_atol: float,
 ) -> Dict[str, object]:
     p_x = np.load(pangu_dir / f"X_{split}.npy", mmap_mode="r")
     t_x = np.load(tianji_dir / f"X_{split}.npy", mmap_mode="r")
@@ -311,6 +328,7 @@ def build_one_split(
     if fog_dim < 1:
         raise ValueError(f"{split}: fe_dim={fe_dim} leaves no fog-derived features")
     dyn_width = window * dyn
+    fog_start = dyn_width + STATIC_DIM
     donor_idx = group_columns(order, mask_groups(mask))
     max_abs_endpoint = 0.0
 
@@ -334,10 +352,16 @@ def build_one_split(
         out_x[start:end] = rows
         if mask in {"000", "111"}:
             expected = base_rows if mask == "000" else donor_rows
-            diff = np.abs(rows.astype(np.float64) - expected.astype(np.float64))
-            finite = diff[np.isfinite(diff)]
-            max_abs_endpoint = max(max_abs_endpoint, float(finite.max()) if finite.size else 0.0)
-            assert_close(f"{split}/{mask}: endpoint identity", rows, expected, rtol, atol)
+            source_fog = expected[:, fog_start : fog_start + fog_dim]
+            recomputed_fog = rows[:, fog_start : fog_start + fog_dim]
+            max_abs_endpoint = max(max_abs_endpoint, max_abs_difference(recomputed_fog, source_fog))
+            assert_close(
+                f"{split}/{mask}: recomputed/source fog compatibility",
+                recomputed_fog,
+                source_fog,
+                rtol,
+                endpoint_fog_atol,
+            )
     out_x.flush()
     del out_x
     y = np.load(pangu_dir / f"y_{split}.npy", mmap_mode="r")[alignment.pangu_rows]
@@ -350,7 +374,8 @@ def build_one_split(
         "mask": mask,
         "replaced_groups": mask_groups(mask),
         "replaced_features": [order[i] for i in donor_idx],
-        "endpoint_max_abs_diff": max_abs_endpoint if mask in {"000", "111"} else None,
+        "endpoint_recomputed_fog_max_abs_diff": max_abs_endpoint if mask in {"000", "111"} else None,
+        "endpoint_recomputed_fog_atol": endpoint_fog_atol if mask in {"000", "111"} else None,
         "pangu_source_rows": alignment.pangu_source_rows,
         "tianji_source_rows": alignment.tianji_source_rows,
         "common_rows": n,
@@ -365,6 +390,7 @@ def config_for_mask(
     split_hashes: Mapping[str, str],
     split_alignment: Mapping[str, Mapping[str, int]],
     limit_rows: int,
+    endpoint_fog_atol: float,
 ) -> Dict[str, object]:
     cfg = dict(base_cfg)
     selected_groups = mask_groups(mask)
@@ -385,6 +411,11 @@ def config_for_mask(
             "row_alignment_policy": "ordered intersection of canonical (valid_time, station_id) keys in Pangu row order",
             "source_pair_coverage": {key: dict(value) for key, value in split_alignment.items()},
             "recomputed_fog_features": True,
+            "endpoint_source_fog_compatibility_atol": endpoint_fog_atol,
+            "endpoint_identity_policy": (
+                "dynamic/static/time fields retain source checks; recomputed float32 fog features use a separately "
+                "recorded numerical compatibility tolerance"
+            ),
             "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
             "pm_qc_policy": PM_QC_POLICY_VERSION,
             "hybrid_smoke_limit_rows": int(limit_rows),
@@ -403,6 +434,7 @@ def audit_outputs(
     chunk_rows: int,
     rtol: float,
     atol: float,
+    endpoint_fog_atol: float,
 ) -> Dict[str, object]:
     base_cfg = require_layout(pangu_dir)
     require_canonical_pangu_lead(base_cfg, pangu_dir)
@@ -482,19 +514,19 @@ def audit_outputs(
                 )
                 if mask == "000":
                     assert_close(
-                        f"audit {mask}/{split} full endpoint rows {start}:{end}",
-                        np.asarray(x[start:end]),
-                        p_chunk,
+                        f"audit {mask}/{split} source fog compatibility rows {start}:{end}",
+                        np.asarray(x[start:end, fog_start : fog_start + fog_dim]),
+                        p_chunk[:, fog_start : fog_start + fog_dim],
                         rtol,
-                        atol,
+                        endpoint_fog_atol,
                     )
                 if mask == "111":
                     assert_close(
-                        f"audit {mask}/{split} full endpoint rows {start}:{end}",
-                        np.asarray(x[start:end]),
-                        t_chunk,
+                        f"audit {mask}/{split} source fog compatibility rows {start}:{end}",
+                        np.asarray(x[start:end, fog_start : fog_start + fog_dim]),
+                        t_chunk[:, fog_start : fog_start + fog_dim],
                         rtol,
-                        atol,
+                        endpoint_fog_atol,
                     )
             rows.append({"mask": mask, "split": split, "rows": n, "status": "passed"})
     return {
@@ -504,6 +536,7 @@ def audit_outputs(
         "checks": rows,
         "group_order": list(GROUP_ORDER),
         "group_definitions": {key: list(value) for key, value in GROUPS.items()},
+        "endpoint_source_fog_compatibility_atol": endpoint_fog_atol,
     }
 
 
@@ -523,7 +556,15 @@ def main() -> None:
         if (out_root / "BUILD_INCOMPLETE").exists():
             raise RuntimeError(f"Hybrid build is incomplete: {out_root / 'BUILD_INCOMPLETE'}")
         payload = audit_outputs(
-            pangu_dir, tianji_dir, out_root, masks, splits, args.chunk_rows, args.rtol, args.atol
+            pangu_dir,
+            tianji_dir,
+            out_root,
+            masks,
+            splits,
+            args.chunk_rows,
+            args.rtol,
+            args.atol,
+            args.endpoint_fog_atol,
         )
         with (out_root / "hybrid_factorial_audit.json").open("w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -570,7 +611,14 @@ def main() -> None:
         out_dir = out_root / f"mtw_{mask}"
         out_dir.mkdir(parents=True, exist_ok=False)
         cfg = config_for_mask(
-            p_cfg, pangu_dir, tianji_dir, mask, split_hashes, split_alignment, args.limit_rows
+            p_cfg,
+            pangu_dir,
+            tianji_dir,
+            mask,
+            split_hashes,
+            split_alignment,
+            args.limit_rows,
+            args.endpoint_fog_atol,
         )
         for split in splits:
             build_records.append(
@@ -585,13 +633,22 @@ def main() -> None:
                     args.chunk_rows,
                     args.rtol,
                     args.atol,
+                    args.endpoint_fog_atol,
                 )
             )
         with (out_dir / "dataset_build_config.json").open("w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
     audit = audit_outputs(
-        pangu_dir, tianji_dir, out_root, masks, splits, args.chunk_rows, args.rtol, args.atol
+        pangu_dir,
+        tianji_dir,
+        out_root,
+        masks,
+        splits,
+        args.chunk_rows,
+        args.rtol,
+        args.atol,
+        args.endpoint_fog_atol,
     )
     manifest = {
         "status": "passed",

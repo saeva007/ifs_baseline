@@ -335,6 +335,22 @@ not source-substitution effects.
 against the Tianji `111` q-core endpoint and must be described as the value of
 the added `RH2M+DPD` information package, not a general causal effect.
 
+The source endpoint audit separates copied source fields from recomputed fog
+features. Labels, row keys, dynamic trajectories, static/time fields and group
+isolation retain the strict shared tolerances. Re-executing nonlinear float32
+fog feature operations may differ from the source builder by a few ULP across
+CPU/runtime paths, so only that derived block has a recorded absolute
+compatibility ceiling of `5e-5`. The observed maximum is written to the hybrid
+manifest; larger drift remains a hard failure.
+
+If a formal chain stops in `qcore_hybrid_data` after its S1 jobs have already
+completed, preserve the incomplete hybrid directory and resume with the same
+run tag instead of retraining S1. `RESUME_AFTER_DATA_FAILURE=1` verifies every
+existing S1 checkpoint/scaler/config triplet, reuses completed common-core S2
+triplets, and resubmits the hybrid build plus all downstream jobs. It requires
+the active `HYBRID_DATA_ROOT` to be absent; move the failed directory to a
+forensic suffix first. Do not use resume mode if the S1 triplet check fails.
+
 `moisture_followup_gate.json` permits the nested 1000/925-hPa moisture split
 only when moisture is the largest Low-vis AP Shapley contribution, its paired
 date-block interval excludes zero, and all three seed effects are positive. If

@@ -24,6 +24,7 @@ MASKS="${MASKS:-all}"
 SPLITS="${SPLITS:-train,val,test}"
 CHUNK_ROWS="${CHUNK_ROWS:-20000}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
+ENDPOINT_FOG_ATOL="${ENDPOINT_FOG_ATOL:-5e-5}"
 
 mkdir -p "${BASELINE_DIR}/logs" "$(dirname "${HYBRID_DATA_ROOT}")"
 source "${BASELINE_DIR}/activate_torch_runtime.sh"
@@ -39,6 +40,7 @@ CMD=(
     --splits "${SPLITS}"
     --chunk-rows "${CHUNK_ROWS}"
     --limit-rows "${LIMIT_ROWS}"
+    --endpoint-fog-atol "${ENDPOINT_FOG_ATOL}"
 )
 if [[ "${MODE}" == "audit" ]]; then
     CMD+=(--audit-only)

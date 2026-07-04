@@ -22,6 +22,7 @@ RUN_COMMON_CORE="${RUN_COMMON_CORE:-1}"
 RUN_EVAL="${RUN_EVAL:-1}"
 RUN_IMPORTANCE="${RUN_IMPORTANCE:-1}"
 RUN_ALE="${RUN_ALE:-1}"
+RESUME_AFTER_DATA_FAILURE="${RESUME_AFTER_DATA_FAILURE:-0}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
@@ -71,6 +72,54 @@ if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
     require_dataset common_core_tianji "${COMMON_CORE_DATA_DIR}" train val test
 fi
 
+dataset_dyn() {
+    python -c 'import json,sys; print(int(json.load(open(sys.argv[1] + "/dataset_build_config.json", encoding="utf-8"))["dyn_vars"]))' "$1"
+}
+
+artifact_triplet_complete() {
+    local run_id="$1" stage="$2" dyn="$3" checkpoint_tag
+    if [[ "${stage}" == "s1" ]]; then
+        checkpoint_tag="S1_best_score"
+    else
+        checkpoint_tag="S2_PhaseB_best_score"
+    fi
+    [[ -s "${CKPT_DIR}/${run_id}_${checkpoint_tag}.pt" \
+        && -s "${CKPT_DIR}/robust_scaler_${run_id}_${stage}_w12_dyn${dyn}_pm.pkl" \
+        && -s "${CKPT_DIR}/${run_id}_static_rnn_config.json" ]]
+}
+
+require_artifact_triplet() {
+    local run_id="$1" stage="$2" dyn="$3"
+    if ! artifact_triplet_complete "${run_id}" "${stage}" "${dyn}"; then
+        echo "ERROR: resume requested but completed ${stage} checkpoint/scaler/config triplet is missing: ${run_id}" >&2
+        exit 2
+    fi
+}
+
+S1_DYN="$(dataset_dyn "${S1_DATA_DIR}")"
+COMMON_S1_DYN=""
+COMMON_S2_DYN=""
+if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
+    COMMON_S1_DYN="$(dataset_dyn "${COMMON_CORE_S1_DATA_DIR}")"
+    COMMON_S2_DYN="$(dataset_dyn "${COMMON_CORE_DATA_DIR}")"
+fi
+
+if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
+    if [[ -e "${HYBRID_DATA_ROOT}" ]]; then
+        echo "ERROR: resume requires a clean HYBRID_DATA_ROOT; preserve/move the incomplete directory first: ${HYBRID_DATA_ROOT}" >&2
+        exit 2
+    fi
+    IFS=':' read -ra RESUME_SEED_ARRAY <<< "${SEEDS//,/:}"
+    for seed_raw in "${RESUME_SEED_ARRAY[@]}"; do
+        seed="${seed_raw//[[:space:]]/}"
+        require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25" s1 "${S1_DYN}"
+        if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
+            require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25" s1 "${COMMON_S1_DYN}"
+        fi
+    done
+    echo "[RESUME] verified completed S1 triplets; S1 jobs will not be resubmitted"
+fi
+
 submit() {
     local label="$1"; shift
     if [[ "${DRY_RUN}" == "1" ]]; then
@@ -100,6 +149,7 @@ echo "SOURCE_DATA_ROOT=${SOURCE_DATA_ROOT}"
 echo "HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT}"
 echo "SEEDS=${SEEDS}"
 echo "MASKS=${MASKS}"
+echo "RESUME_AFTER_DATA_FAILURE=${RESUME_AFTER_DATA_FAILURE}"
 
 base_audit_job=$(submit base_audit \
     --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit" \
@@ -128,14 +178,22 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
     seed="${seed_raw//[[:space:]]/}"
     [[ "${seed}" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid seed ${seed}" >&2; exit 2; }
     s1_run_id="exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25"
-    s1_args=(--export="ALL,EXPERIMENT=s1_q_core_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
-    [[ -z "${base_dep}" ]] || s1_args+=("${base_dep}")
-    S1_JOBS[${seed}]=$(submit "s1_seed${seed}" "${s1_args[@]}" sub_ifs_overlap_baseline.slurm)
+    if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
+        S1_JOBS[${seed}]=""
+    else
+        s1_args=(--export="ALL,EXPERIMENT=s1_q_core_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
+        [[ -z "${base_dep}" ]] || s1_args+=("${base_dep}")
+        S1_JOBS[${seed}]=$(submit "s1_seed${seed}" "${s1_args[@]}" sub_ifs_overlap_baseline.slurm)
+    fi
 
     if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
         common_s1_run_id="exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25"
-        common_s1_args=(--export="ALL,EXPERIMENT=s1_common_core,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${common_s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${COMMON_CORE_S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_common_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
-        COMMON_S1_JOBS[${seed}]=$(submit "common_s1_seed${seed}" "${common_s1_args[@]}" sub_ifs_overlap_baseline.slurm)
+        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
+            COMMON_S1_JOBS[${seed}]=""
+        else
+            common_s1_args=(--export="ALL,EXPERIMENT=s1_common_core,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${common_s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${COMMON_CORE_S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_common_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
+            COMMON_S1_JOBS[${seed}]=$(submit "common_s1_seed${seed}" "${common_s1_args[@]}" sub_ifs_overlap_baseline.slurm)
+        fi
     fi
 done
 
@@ -147,7 +205,10 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
         mask="${mask_raw//[[:space:]]/}"
         [[ "${mask}" =~ ^[01]{3}$ ]] || { echo "ERROR: invalid mask ${mask}" >&2; exit 2; }
         run_id="exp_qcore_hybrid_${RUN_TAG}_mtw${mask}_seed${seed}_pm10_pm25"
-        deps="${hybrid_audit_job}:${S1_JOBS[${seed}]}"
+        deps="${hybrid_audit_job}"
+        if [[ -n "${S1_JOBS[${seed}]}" ]]; then
+            deps="${deps}:${S1_JOBS[${seed}]}"
+        fi
         dep="$(dependency_arg "${deps}")"
         s2_args=(--export="ALL,EXPERIMENT=s2_pangu2025_q_core_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mtw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mtw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
         [[ -z "${dep}" ]] || s2_args+=("${dep}")
@@ -158,10 +219,18 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
         common_s1_run_id="exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25"
         common_s1_ckpt="${CKPT_DIR}/${common_s1_run_id}_S1_best_score.pt"
         common_run_id="exp_qcore_hybrid_${RUN_TAG}_tianji_common_core_seed${seed}_pm10_pm25"
-        dep="$(dependency_arg "${COMMON_S1_JOBS[${seed}]}")"
-        common_s2_args=(--export="ALL,EXPERIMENT=s2_tianji_common_core,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${common_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${COMMON_CORE_DATA_DIR},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${common_s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_common_s2_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
-        [[ -z "${dep}" ]] || common_s2_args+=("${dep}")
-        COMMON_S2_JOBS[${seed}]=$(submit "common_s2_seed${seed}" "${common_s2_args[@]}" sub_ifs_overlap_baseline.slurm)
+        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]] && artifact_triplet_complete "${common_run_id}" s2 "${COMMON_S2_DYN}"; then
+            COMMON_S2_JOBS[${seed}]=""
+            echo "[RESUME] reusing completed common-core S2 triplet: ${common_run_id}"
+        else
+            dep=""
+            if [[ -n "${COMMON_S1_JOBS[${seed}]}" ]]; then
+                dep="$(dependency_arg "${COMMON_S1_JOBS[${seed}]}")"
+            fi
+            common_s2_args=(--export="ALL,EXPERIMENT=s2_tianji_common_core,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${common_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${COMMON_CORE_DATA_DIR},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${common_s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_common_s2_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
+            [[ -z "${dep}" ]] || common_s2_args+=("${dep}")
+            COMMON_S2_JOBS[${seed}]=$(submit "common_s2_seed${seed}" "${common_s2_args[@]}" sub_ifs_overlap_baseline.slurm)
+        fi
     fi
 done
 
@@ -218,7 +287,9 @@ if [[ "${RUN_EVAL}" == "1" ]]; then
             deps="${deps:+${deps}:}${S2_JOBS[${seed}_${mask}]}"
         done
         if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
-            deps="${deps}:${COMMON_S2_JOBS[${seed}]}"
+            if [[ -n "${COMMON_S2_JOBS[${seed}]}" ]]; then
+                deps="${deps}:${COMMON_S2_JOBS[${seed}]}"
+            fi
         fi
         if [[ "${RUN_IMPORTANCE}" == "1" ]]; then
             deps="${deps}:${IMPORTANCE_JOBS[${seed}]}"
@@ -254,6 +325,7 @@ if [[ "${DRY_RUN}" != "1" ]]; then
         echo "hybrid_data_root=${HYBRID_DATA_ROOT}"
         echo "seeds=${SEEDS}"
         echo "masks=${MASKS}"
+        echo "resume_after_data_failure=${RESUME_AFTER_DATA_FAILURE}"
         echo "base_audit_job=${base_audit_job}"
         echo "hybrid_build_job=${hybrid_build_job}"
         echo "hybrid_audit_job=${hybrid_audit_job}"

@@ -84,6 +84,50 @@ def write_source(root: Path, name: str, dyn: np.ndarray, y: np.ndarray, canonica
 
 
 class HybridBuilderTest(unittest.TestCase):
+    def test_endpoint_fog_roundoff_has_separate_bounded_tolerance(self) -> None:
+        with workspace_temp_dir() as root:
+            rng = np.random.default_rng(71)
+            n, dyn_n = 8, len(EXPECTED_ORDER)
+            dyn = rng.normal(size=(n, WINDOW, dyn_n)).astype(np.float32)
+            y = np.asarray([0, 1, 2, 2, 0, 1, 2, 2], dtype=np.float32)
+            pangu = write_source(root, "pangu", dyn, y, canonical_pangu=True)
+            tianji = write_source(root, "tianji", dyn, y, canonical_pangu=False)
+            fog_start = WINDOW * dyn_n + STATIC_DIM
+
+            source_x = np.load(pangu / "X_train.npy")
+            source_x[0, fog_start] += np.float32(6.0e-6)
+            np.save(pangu / "X_train.npy", source_x)
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
+                "--pangu-dir",
+                str(pangu),
+                "--tianji-dir",
+                str(tianji),
+                "--out-root",
+                str(root / "accepted"),
+                "--splits",
+                "train",
+                "--masks",
+                "000",
+                "--chunk-rows",
+                "3",
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            with (root / "accepted" / "hybrid_factorial_manifest.json").open("r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            observed = manifest["build_records"][0]["endpoint_recomputed_fog_max_abs_diff"]
+            self.assertGreater(observed, 5.0e-6)
+            self.assertLess(observed, 5.0e-5)
+
+            source_x[0, fog_start] += np.float32(1.0e-3)
+            np.save(pangu / "X_train.npy", source_x)
+            rejected = cmd.copy()
+            rejected[rejected.index(str(root / "accepted"))] = str(root / "rejected")
+            proc = subprocess.run(rejected, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("recomputed/source fog compatibility", proc.stderr + proc.stdout)
+
     def test_factorial_endpoints_and_group_isolation(self) -> None:
         with workspace_temp_dir() as root:
             rng = np.random.default_rng(17)
