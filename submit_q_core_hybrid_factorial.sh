@@ -72,39 +72,28 @@ if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
     require_dataset common_core_tianji "${COMMON_CORE_DATA_DIR}" train val test
 fi
 
-dataset_dyn() {
-    # Keep this login-node preflight compatible with both the cluster's legacy
-    # `python` command and Python 3; the JSON field is numeric/ASCII.
-    python -c 'import json,sys; print(int(json.load(open(sys.argv[1] + "/dataset_build_config.json"))["dyn_vars"]))' "$1"
-}
-
 artifact_triplet_complete() {
-    local run_id="$1" stage="$2" dyn="$3" checkpoint_tag
+    local run_id="$1" stage="$2" checkpoint_tag
+    local -a scalers
     if [[ "${stage}" == "s1" ]]; then
         checkpoint_tag="S1_best_score"
     else
         checkpoint_tag="S2_PhaseB_best_score"
     fi
+    scalers=("${CKPT_DIR}/robust_scaler_${run_id}_${stage}_w12_dyn"*_pm.pkl)
     [[ -s "${CKPT_DIR}/${run_id}_${checkpoint_tag}.pt" \
-        && -s "${CKPT_DIR}/robust_scaler_${run_id}_${stage}_w12_dyn${dyn}_pm.pkl" \
+        && ${#scalers[@]} -eq 1 \
+        && -s "${scalers[0]}" \
         && -s "${CKPT_DIR}/${run_id}_static_rnn_config.json" ]]
 }
 
 require_artifact_triplet() {
-    local run_id="$1" stage="$2" dyn="$3"
-    if ! artifact_triplet_complete "${run_id}" "${stage}" "${dyn}"; then
+    local run_id="$1" stage="$2"
+    if ! artifact_triplet_complete "${run_id}" "${stage}"; then
         echo "ERROR: resume requested but completed ${stage} checkpoint/scaler/config triplet is missing: ${run_id}" >&2
         exit 2
     fi
 }
-
-S1_DYN="$(dataset_dyn "${S1_DATA_DIR}")"
-COMMON_S1_DYN=""
-COMMON_S2_DYN=""
-if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
-    COMMON_S1_DYN="$(dataset_dyn "${COMMON_CORE_S1_DATA_DIR}")"
-    COMMON_S2_DYN="$(dataset_dyn "${COMMON_CORE_DATA_DIR}")"
-fi
 
 if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
     if [[ -e "${HYBRID_DATA_ROOT}" ]]; then
@@ -114,9 +103,9 @@ if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
     IFS=':' read -ra RESUME_SEED_ARRAY <<< "${SEEDS//,/:}"
     for seed_raw in "${RESUME_SEED_ARRAY[@]}"; do
         seed="${seed_raw//[[:space:]]/}"
-        require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25" s1 "${S1_DYN}"
+        require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25" s1
         if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
-            require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25" s1 "${COMMON_S1_DYN}"
+            require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25" s1
         fi
     done
     echo "[RESUME] verified completed S1 triplets; S1 jobs will not be resubmitted"
@@ -221,7 +210,7 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
         common_s1_run_id="exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25"
         common_s1_ckpt="${CKPT_DIR}/${common_s1_run_id}_S1_best_score.pt"
         common_run_id="exp_qcore_hybrid_${RUN_TAG}_tianji_common_core_seed${seed}_pm10_pm25"
-        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]] && artifact_triplet_complete "${common_run_id}" s2 "${COMMON_S2_DYN}"; then
+        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]] && artifact_triplet_complete "${common_run_id}" s2; then
             COMMON_S2_JOBS[${seed}]=""
             echo "[RESUME] reusing completed common-core S2 triplet: ${common_run_id}"
         else
