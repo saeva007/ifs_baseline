@@ -23,6 +23,7 @@ RUN_EVAL="${RUN_EVAL:-1}"
 RUN_IMPORTANCE="${RUN_IMPORTANCE:-1}"
 RUN_ALE="${RUN_ALE:-1}"
 RESUME_AFTER_DATA_FAILURE="${RESUME_AFTER_DATA_FAILURE:-0}"
+RESUME_EXISTING_RUN="${RESUME_EXISTING_RUN:-0}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
@@ -48,6 +49,10 @@ case "${RUN_TAG}" in
 esac
 if [[ "${SOURCE_DATA_ROOT}" == "${HYBRID_DATA_ROOT}" ]]; then
     echo "ERROR: source and hybrid data roots must differ" >&2
+    exit 2
+fi
+if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" && "${RESUME_EXISTING_RUN}" == "1" ]]; then
+    echo "ERROR: use either RESUME_AFTER_DATA_FAILURE=1 or RESUME_EXISTING_RUN=1, not both" >&2
     exit 2
 fi
 
@@ -95,6 +100,17 @@ require_artifact_triplet() {
     fi
 }
 
+append_dep() {
+    local ids="$1" new_id="$2"
+    if [[ -z "${new_id}" ]]; then
+        echo "${ids}"
+    elif [[ -z "${ids}" ]]; then
+        echo "${new_id}"
+    else
+        echo "${ids}:${new_id}"
+    fi
+}
+
 if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
     if [[ -e "${HYBRID_DATA_ROOT}" ]]; then
         echo "ERROR: resume requires a clean HYBRID_DATA_ROOT; preserve/move the incomplete directory first: ${HYBRID_DATA_ROOT}" >&2
@@ -109,6 +125,27 @@ if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
         fi
     done
     echo "[RESUME] verified completed S1 triplets; S1 jobs will not be resubmitted"
+fi
+
+if [[ "${RESUME_EXISTING_RUN}" == "1" ]]; then
+    [[ -d "${HYBRID_DATA_ROOT}" ]] || {
+        echo "ERROR: RESUME_EXISTING_RUN=1 requires an existing HYBRID_DATA_ROOT: ${HYBRID_DATA_ROOT}" >&2
+        exit 2
+    }
+    IFS=':' read -ra RESUME_SEED_ARRAY <<< "${SEEDS//,/:}"
+    for seed_raw in "${RESUME_SEED_ARRAY[@]}"; do
+        seed="${seed_raw//[[:space:]]/}"
+        require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25" s1
+        if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
+            require_artifact_triplet "exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25" s1
+        fi
+    done
+    IFS=':' read -ra RESUME_MASK_ARRAY <<< "${MASKS//,/:}"
+    for mask_raw in "${RESUME_MASK_ARRAY[@]}"; do
+        mask="${mask_raw//[[:space:]]/}"
+        require_dataset "hybrid_mtw_${mask}" "${HYBRID_DATA_ROOT}/mtw_${mask}" train val test
+    done
+    echo "[RESUME] verified existing hybrid datasets and S1 triplets; completed S2 triplets will be reused"
 fi
 
 submit() {
@@ -127,7 +164,7 @@ submit() {
 
 dependency_arg() {
     local ids="$1"
-    if [[ "${DRY_RUN}" == "1" ]]; then
+    if [[ -z "${ids}" || "${DRY_RUN}" == "1" ]]; then
         echo ""
     else
         echo "--dependency=afterok:${ids}"
@@ -141,20 +178,27 @@ echo "HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT}"
 echo "SEEDS=${SEEDS}"
 echo "MASKS=${MASKS}"
 echo "RESUME_AFTER_DATA_FAILURE=${RESUME_AFTER_DATA_FAILURE}"
+echo "RESUME_EXISTING_RUN=${RESUME_EXISTING_RUN}"
 
-base_audit_job=$(submit base_audit \
-    --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit" \
-    sub_q_core_fair_data_audit.slurm)
+if [[ "${RESUME_EXISTING_RUN}" == "1" ]]; then
+    base_audit_job=""
+    hybrid_build_job="skipped_existing"
+    hybrid_audit_job=""
+else
+    base_audit_job=$(submit base_audit \
+        --export="ALL,RUN_TAG=${RUN_TAG},S1_DATA_DIR=${S1_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},IFS_DATA_DIR=${IFS_DATA_DIR},PANGU2025_DATA_DIR=${PANGU_DATA_DIR},ERA5_2025_DATA_DIR=${ERA5_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit" \
+        sub_q_core_fair_data_audit.slurm)
 
-base_dep="$(dependency_arg "${base_audit_job}")"
-build_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=build,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},MASKS=${MASKS},LIMIT_ROWS=${LIMIT_ROWS}")
-[[ -z "${base_dep}" ]] || build_args+=("${base_dep}")
-hybrid_build_job=$(submit hybrid_build "${build_args[@]}" sub_q_core_hybrid_factorial_data.slurm)
+    base_dep="$(dependency_arg "${base_audit_job}")"
+    build_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=build,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},MASKS=${MASKS},LIMIT_ROWS=${LIMIT_ROWS}")
+    [[ -z "${base_dep}" ]] || build_args+=("${base_dep}")
+    hybrid_build_job=$(submit hybrid_build "${build_args[@]}" sub_q_core_hybrid_factorial_data.slurm)
 
-build_dep="$(dependency_arg "${hybrid_build_job}")"
-hybrid_audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=audit,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},MASKS=${MASKS}")
-[[ -z "${build_dep}" ]] || hybrid_audit_args+=("${build_dep}")
-hybrid_audit_job=$(submit hybrid_audit "${hybrid_audit_args[@]}" sub_q_core_hybrid_factorial_data.slurm)
+    build_dep="$(dependency_arg "${hybrid_build_job}")"
+    hybrid_audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=audit,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},MASKS=${MASKS}")
+    [[ -z "${build_dep}" ]] || hybrid_audit_args+=("${build_dep}")
+    hybrid_audit_job=$(submit hybrid_audit "${hybrid_audit_args[@]}" sub_q_core_hybrid_factorial_data.slurm)
+fi
 
 IFS=':' read -ra SEED_ARRAY <<< "${SEEDS//,/:}"
 IFS=':' read -ra MASK_ARRAY <<< "${MASKS//,/:}"
@@ -169,7 +213,7 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
     seed="${seed_raw//[[:space:]]/}"
     [[ "${seed}" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid seed ${seed}" >&2; exit 2; }
     s1_run_id="exp_qcore_hybrid_${RUN_TAG}_s1_seed${seed}_pm10_pm25"
-    if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
+    if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" || "${RESUME_EXISTING_RUN}" == "1" ]]; then
         S1_JOBS[${seed}]=""
     else
         s1_args=(--export="ALL,EXPERIMENT=s1_q_core_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
@@ -179,7 +223,7 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
 
     if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
         common_s1_run_id="exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25"
-        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]]; then
+        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" || "${RESUME_EXISTING_RUN}" == "1" ]]; then
             COMMON_S1_JOBS[${seed}]=""
         else
             common_s1_args=(--export="ALL,EXPERIMENT=s1_common_core,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${common_s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${COMMON_CORE_S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_common_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
@@ -196,9 +240,14 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
         mask="${mask_raw//[[:space:]]/}"
         [[ "${mask}" =~ ^[01]{3}$ ]] || { echo "ERROR: invalid mask ${mask}" >&2; exit 2; }
         run_id="exp_qcore_hybrid_${RUN_TAG}_mtw${mask}_seed${seed}_pm10_pm25"
+        if [[ "${RESUME_EXISTING_RUN}" == "1" ]] && artifact_triplet_complete "${run_id}" s2; then
+            S2_JOBS[${seed}_${mask}]=""
+            echo "[RESUME] reusing completed S2 triplet: ${run_id}"
+            continue
+        fi
         deps="${hybrid_audit_job}"
         if [[ -n "${S1_JOBS[${seed}]}" ]]; then
-            deps="${deps}:${S1_JOBS[${seed}]}"
+            deps="$(append_dep "${deps}" "${S1_JOBS[${seed}]}")"
         fi
         dep="$(dependency_arg "${deps}")"
         s2_args=(--export="ALL,EXPERIMENT=s2_pangu2025_q_core_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mtw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mtw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
@@ -210,7 +259,7 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
         common_s1_run_id="exp_qcore_hybrid_${RUN_TAG}_common_core_s1_seed${seed}_pm10_pm25"
         common_s1_ckpt="${CKPT_DIR}/${common_s1_run_id}_S1_best_score.pt"
         common_run_id="exp_qcore_hybrid_${RUN_TAG}_tianji_common_core_seed${seed}_pm10_pm25"
-        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" ]] && artifact_triplet_complete "${common_run_id}" s2; then
+        if [[ "${RESUME_AFTER_DATA_FAILURE}" == "1" || "${RESUME_EXISTING_RUN}" == "1" ]] && artifact_triplet_complete "${common_run_id}" s2; then
             COMMON_S2_JOBS[${seed}]=""
             echo "[RESUME] reusing completed common-core S2 triplet: ${common_run_id}"
         else
@@ -230,7 +279,7 @@ for seed_raw in "${SEED_ARRAY[@]}"; do
     seed="${seed_raw//[[:space:]]/}"
     for mask_raw in "${MASK_ARRAY[@]}"; do
         mask="${mask_raw//[[:space:]]/}"
-        training_deps="${training_deps:+${training_deps}:}${S2_JOBS[${seed}_${mask}]}"
+        training_deps="$(append_dep "${training_deps}" "${S2_JOBS[${seed}_${mask}]}")"
     done
 done
 artifact_dep="$(dependency_arg "${training_deps}")"
@@ -248,7 +297,9 @@ if [[ "${RUN_IMPORTANCE}" == "1" ]]; then
         pangu_run_id="exp_qcore_hybrid_${RUN_TAG}_mtw000_seed${seed}_pm10_pm25"
         tianji_run_id="exp_qcore_hybrid_${RUN_TAG}_mtw111_seed${seed}_pm10_pm25"
         sources="tianji=${HYBRID_DATA_ROOT}/mtw_111|${CKPT_DIR}/${tianji_run_id}_S2_PhaseB_best_score.pt|AUTO|Tianji q-core;pangu2025_q_core_no_rh2m=${HYBRID_DATA_ROOT}/mtw_000|${CKPT_DIR}/${pangu_run_id}_S2_PhaseB_best_score.pt|AUTO|Pangu q-core"
-        deps="${S2_JOBS[${seed}_000]}:${S2_JOBS[${seed}_111]}"
+        deps=""
+        deps="$(append_dep "${deps}" "${S2_JOBS[${seed}_000]}")"
+        deps="$(append_dep "${deps}" "${S2_JOBS[${seed}_111]}")"
         dep="$(dependency_arg "${deps}")"
         importance_out="${EVAL_ROOT}/feature_importance/seed_${seed}"
         importance_args=(--export="ALL,SOURCES=${sources},FEATURE_IMPORTANCE_OUT_DIR=${importance_out},SAMPLE_SIZE=50000,MIN_LOW_VIS=200,REPEATS=5,BOOTSTRAP_ITERS=1000,GROUP_SCOPE=all")
@@ -260,7 +311,9 @@ fi
 if [[ "${RUN_ALE}" == "1" ]]; then
     for seed_raw in "${SEED_ARRAY[@]}"; do
         seed="${seed_raw//[[:space:]]/}"
-        deps="${S2_JOBS[${seed}_000]}:${S2_JOBS[${seed}_111]}"
+        deps=""
+        deps="$(append_dep "${deps}" "${S2_JOBS[${seed}_000]}")"
+        deps="$(append_dep "${deps}" "${S2_JOBS[${seed}_111]}")"
         dep="$(dependency_arg "${deps}")"
         ale_args=(--export="ALL,RUN_TAG=${RUN_TAG},SEED=${seed},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},SAMPLE_SIZE=50000,MIN_LOW_VIS=200,BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},LIMIT_ROWS=${LIMIT_SAMPLES}")
         [[ -z "${dep}" ]] || ale_args+=("${dep}")
@@ -275,18 +328,18 @@ if [[ "${RUN_EVAL}" == "1" ]]; then
         deps="${artifact_audit_job}"
         for mask_raw in "${MASK_ARRAY[@]}"; do
             mask="${mask_raw//[[:space:]]/}"
-            deps="${deps:+${deps}:}${S2_JOBS[${seed}_${mask}]}"
+            deps="$(append_dep "${deps}" "${S2_JOBS[${seed}_${mask}]}")"
         done
         if [[ "${RUN_COMMON_CORE}" == "1" ]]; then
             if [[ -n "${COMMON_S2_JOBS[${seed}]}" ]]; then
-                deps="${deps}:${COMMON_S2_JOBS[${seed}]}"
+                deps="$(append_dep "${deps}" "${COMMON_S2_JOBS[${seed}]}")"
             fi
         fi
         if [[ "${RUN_IMPORTANCE}" == "1" ]]; then
-            deps="${deps}:${IMPORTANCE_JOBS[${seed}]}"
+            deps="$(append_dep "${deps}" "${IMPORTANCE_JOBS[${seed}]}")"
         fi
         if [[ "${RUN_ALE}" == "1" ]]; then
-            deps="${deps}:${ALE_JOBS[${seed}]}"
+            deps="$(append_dep "${deps}" "${ALE_JOBS[${seed}]}")"
         fi
         dep="$(dependency_arg "${deps}")"
         eval_args=(--job-name="qcore_eval_s${seed}" --export="ALL,RUN_TAG=${RUN_TAG},MODE=evaluate_seed,SEED=${seed},SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},LIMIT_SAMPLES=${LIMIT_SAMPLES},INCLUDE_COMMON_CORE=${RUN_COMMON_CORE},COMMON_CORE_DATA_DIR=${COMMON_CORE_DATA_DIR}")
@@ -296,7 +349,7 @@ if [[ "${RUN_EVAL}" == "1" ]]; then
     eval_deps=""
     for seed_raw in "${SEED_ARRAY[@]}"; do
         seed="${seed_raw//[[:space:]]/}"
-        eval_deps="${eval_deps:+${eval_deps}:}${EVAL_JOBS[${seed}]}"
+        eval_deps="$(append_dep "${eval_deps}" "${EVAL_JOBS[${seed}]}")"
     done
     dep="$(dependency_arg "${eval_deps}")"
     analysis_args=(--job-name="qcore_analysis" --export="ALL,RUN_TAG=${RUN_TAG},MODE=analyze,SEEDS=${SEEDS},MASKS=${MASKS},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},EVAL_ROOT=${EVAL_ROOT},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},BOOTSTRAP_MAX_ROWS=${BOOTSTRAP_MAX_ROWS},OBS_ROOT=${OBS_ROOT},ERA5_DATA_DIR=${ERA5_DATA_DIR},REQUIRE_ALE=${RUN_ALE}")
@@ -317,6 +370,7 @@ if [[ "${DRY_RUN}" != "1" ]]; then
         echo "seeds=${SEEDS}"
         echo "masks=${MASKS}"
         echo "resume_after_data_failure=${RESUME_AFTER_DATA_FAILURE}"
+        echo "resume_existing_run=${RESUME_EXISTING_RUN}"
         echo "base_audit_job=${base_audit_job}"
         echo "hybrid_build_job=${hybrid_build_job}"
         echo "hybrid_audit_job=${hybrid_audit_job}"
