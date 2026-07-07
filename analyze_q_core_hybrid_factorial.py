@@ -1052,6 +1052,12 @@ def attach_observations(events: pd.DataFrame, obs_root: Path, paper_eval_dir: Pa
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     meta = events[["time_utc", "station_key"]].rename(columns={"time_utc": "time"}).copy()
+    # analyze_key_variable_quality.choose_obs_time_shift predates the q-core
+    # analysis and uses timezone-naive UTC timestamps for its probe merge.
+    # Keep event tables UTC-aware elsewhere, but pass a naive UTC view into
+    # the observation-alignment helper to avoid pandas aware-vs-naive merge
+    # failures.
+    meta["time"] = pd.to_datetime(meta["time"], errors="coerce", utc=True).dt.tz_convert("UTC").dt.tz_localize(None)
     shift, obs, diag = mod.choose_obs_time_shift(obs_root, meta, 96)
     keep = [column for column in ("rhu", "tem", "win_s_avg_10mi", "pre_1h") if column in obs.columns]
     obs = obs[["time", "station_key", *keep]].copy()
