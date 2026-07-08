@@ -37,6 +37,13 @@ EVENT_FEATURES = (
     "Q_1000",
     "Q_925",
 )
+OBS_VALID_RANGES = {
+    "rhu": (0.0, 100.0),
+    "tem": (-80.0, 60.0),
+    "win_s_avg_10mi": (0.0, 80.0),
+    "pre_1h": (0.0, 500.0),
+    "prs_sea": (800.0, 1100.0),
+}
 
 
 @dataclass
@@ -798,6 +805,21 @@ def current_feature_values(data_dir: Path, n: int, feature_names: Sequence[str])
     }
 
 
+def clean_observation_values(column: str, values) -> np.ndarray:
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=np.float64)
+    arr[~np.isfinite(arr)] = np.nan
+    arr[np.abs(arr) >= 1.0e5] = np.nan
+    if column == "prs_sea":
+        finite = arr[np.isfinite(arr)]
+        if finite.size and float(np.nanmedian(np.abs(finite))) > 2000.0:
+            arr = arr / 100.0
+    bounds = OBS_VALID_RANGES.get(column)
+    if bounds is not None:
+        lo, hi = bounds
+        arr[(arr < lo) | (arr > hi)] = np.nan
+    return arr
+
+
 def continuous_error_metrics(forecast: np.ndarray, reference: np.ndarray) -> Dict[str, float]:
     valid = np.isfinite(forecast) & np.isfinite(reference)
     if not valid.any():
@@ -835,7 +857,7 @@ def observation_anchored_quality(
     for feature, obs_column in mapping.items():
         if obs_column not in frame:
             continue
-        obs = pd.to_numeric(frame[obs_column], errors="coerce").to_numpy(dtype=np.float64)
+        obs = clean_observation_values(obs_column, frame[obs_column])
         for source in ("pangu", "tianji"):
             column = f"{feature}_{source}"
             if column not in frame:
@@ -857,7 +879,7 @@ def observation_anchored_quality(
                     }
                 )
     if "rhu" in frame and "RH2M_tianji_common_core" in frame:
-        obs = pd.to_numeric(frame["rhu"], errors="coerce").to_numpy(dtype=np.float64)
+        obs = clean_observation_values("rhu", frame["rhu"])
         forecast = frame["RH2M_tianji_common_core"].to_numpy(dtype=np.float64)
         if np.nanmedian(np.abs(forecast)) <= 1.5:
             forecast = forecast * 100.0
@@ -1059,9 +1081,11 @@ def attach_observations(events: pd.DataFrame, obs_root: Path, paper_eval_dir: Pa
     # failures.
     meta["time"] = pd.to_datetime(meta["time"], errors="coerce", utc=True).dt.tz_convert("UTC").dt.tz_localize(None)
     shift, obs, diag = mod.choose_obs_time_shift(obs_root, meta, 96)
-    keep = [column for column in ("rhu", "tem", "win_s_avg_10mi", "pre_1h") if column in obs.columns]
+    keep = [column for column in ("rhu", "tem", "win_s_avg_10mi", "pre_1h", "prs_sea") if column in obs.columns]
     obs = obs[["time", "station_key", *keep]].copy()
     obs["time"] = pd.to_datetime(obs["time"], errors="coerce", utc=True)
+    for column in keep:
+        obs[column] = clean_observation_values(column, obs[column])
     merged = events.merge(obs, left_on=["time_utc", "station_key"], right_on=["time", "station_key"], how="left")
     if "time" in merged:
         merged = merged.drop(columns=["time"])
