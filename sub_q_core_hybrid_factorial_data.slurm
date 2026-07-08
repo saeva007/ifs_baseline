@@ -20,6 +20,8 @@ MODE="${MODE:-build}"
 PANGU_DATA_DIR="${PANGU_DATA_DIR:-${BASELINE_DIR}/q_core_fair_datasets/${RUN_TAG}/pangu2025}"
 TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/q_core_fair_datasets/${RUN_TAG}/tianji}"
 HYBRID_DATA_ROOT="${HYBRID_DATA_ROOT:-${BASELINE_DIR}/q_core_hybrid_datasets/${RUN_TAG}}"
+GROUP_PROFILE="${GROUP_PROFILE:-mtw}"
+HYBRID_DATASET_PREFIX="${HYBRID_DATASET_PREFIX:-}"
 MASKS="${MASKS:-all}"
 SPLITS="${SPLITS:-train,val,test}"
 CHUNK_ROWS="${CHUNK_ROWS:-20000}"
@@ -36,12 +38,16 @@ CMD=(
     --pangu-dir "${PANGU_DATA_DIR}"
     --tianji-dir "${TIANJI_DATA_DIR}"
     --out-root "${HYBRID_DATA_ROOT}"
+    --group-profile "${GROUP_PROFILE}"
     --masks "${MASKS}"
     --splits "${SPLITS}"
     --chunk-rows "${CHUNK_ROWS}"
     --limit-rows "${LIMIT_ROWS}"
     --endpoint-fog-atol "${ENDPOINT_FOG_ATOL}"
 )
+if [[ -n "${HYBRID_DATASET_PREFIX}" ]]; then
+    CMD+=(--dataset-prefix "${HYBRID_DATASET_PREFIX}")
+fi
 if [[ "${MODE}" == "audit" ]]; then
     CMD+=(--audit-only)
 elif [[ "${MODE}" != "build" ]]; then

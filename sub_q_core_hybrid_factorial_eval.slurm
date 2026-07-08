@@ -26,8 +26,14 @@ RUN_TAG="${RUN_TAG:?RUN_TAG is required}"
 MODE="${MODE:-evaluate_seed}"
 SEED="${SEED:-42}"
 SEEDS="${SEEDS:-42:2025:20260702}"
-MASKS="${MASKS:-000:001:010:011:100:101:110:111}"
+MASKS="${MASKS:-}"
 HYBRID_DATA_ROOT="${HYBRID_DATA_ROOT:-${BASELINE_DIR}/q_core_hybrid_datasets/${RUN_TAG}}"
+GROUP_PROFILE="${GROUP_PROFILE:-mtw}"
+HYBRID_DATASET_PREFIX="${HYBRID_DATASET_PREFIX:-}"
+RUN_MASK_PREFIX="${RUN_MASK_PREFIX:-}"
+SOURCE_PREFIX="${SOURCE_PREFIX:-}"
+REUSE_COUPLED_MTW_RUN_TAG="${REUSE_COUPLED_MTW_RUN_TAG:-}"
+REUSE_COUPLED_MTW_HYBRID_ROOT="${REUSE_COUPLED_MTW_HYBRID_ROOT:-}"
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/${RUN_TAG}}"
 ANALYSIS_DIR="${ANALYSIS_DIR:-${EVAL_ROOT}/analysis}"
 DEVICE="${DEVICE:-cpu}"
@@ -43,6 +49,32 @@ REQUIRE_ALE="${REQUIRE_ALE:-0}"
 INCLUDE_COMMON_CORE="${INCLUDE_COMMON_CORE:-1}"
 COMMON_CORE_DATA_DIR="${COMMON_CORE_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_common_core}"
 
+case "${GROUP_PROFILE}" in
+    mtw)
+        MASKS="${MASKS:-000:001:010:011:100:101:110:111}"
+        HYBRID_DATASET_PREFIX="${HYBRID_DATASET_PREFIX:-mtw}"
+        RUN_MASK_PREFIX="${RUN_MASK_PREFIX:-mtw}"
+        SOURCE_PREFIX="${SOURCE_PREFIX:-qcore_hybrid_}"
+        ;;
+    mt2pw)
+        MASKS="${MASKS:-0000:0001:0010:0011:0100:0101:0110:0111:1000:1001:1010:1011:1100:1101:1110:1111}"
+        HYBRID_DATASET_PREFIX="${HYBRID_DATASET_PREFIX:-mt2pw}"
+        RUN_MASK_PREFIX="${RUN_MASK_PREFIX:-mt2pw}"
+        SOURCE_PREFIX="${SOURCE_PREFIX:-qcore_hybrid_mt2pw_}"
+        ;;
+    *)
+        echo "ERROR: unsupported GROUP_PROFILE=${GROUP_PROFILE}" >&2
+        exit 2
+        ;;
+esac
+
+coupled_mtw_mask() {
+    local mask="$1"
+    if [[ "${GROUP_PROFILE}" == "mt2pw" && "${#mask}" -eq 4 && "${mask:1:1}" == "${mask:2:1}" ]]; then
+        echo "${mask:0:1}${mask:1:1}${mask:3:1}"
+    fi
+}
+
 mkdir -p "${BASELINE_DIR}/logs" "${EVAL_ROOT}"
 source "${BASELINE_DIR}/activate_eval_torch_runtime.sh"
 export PYTHONUNBUFFERED=1
@@ -57,11 +89,22 @@ if [[ "${MODE}" == "evaluate_seed" ]]; then
     for mask in "${MASK_ARRAY[@]}"; do
         mask="${mask//[[:space:]]/}"
         [[ -n "${mask}" ]] || continue
-        tag="qcore_hybrid_${mask}"
-        data_dir="${HYBRID_DATA_ROOT}/mtw_${mask}"
-        run_id="exp_qcore_hybrid_${RUN_TAG}_mtw${mask}_seed${SEED}_pm10_pm25"
+        tag="${SOURCE_PREFIX}${mask}"
+        data_dir="${HYBRID_DATA_ROOT}/${HYBRID_DATASET_PREFIX}_${mask}"
+        run_id="exp_qcore_hybrid_${RUN_TAG}_${RUN_MASK_PREFIX}${mask}_seed${SEED}_pm10_pm25"
+        label="Hybrid ${GROUP_PROFILE} ${mask}"
+        old_mask="$(coupled_mtw_mask "${mask}")"
+        if [[ -n "${old_mask}" && -n "${REUSE_COUPLED_MTW_RUN_TAG}" ]]; then
+            [[ -n "${REUSE_COUPLED_MTW_HYBRID_ROOT}" ]] || {
+                echo "ERROR: REUSE_COUPLED_MTW_HYBRID_ROOT is required when reusing coupled MTW artifacts" >&2
+                exit 2
+            }
+            data_dir="${REUSE_COUPLED_MTW_HYBRID_ROOT}/mtw_${old_mask}"
+            run_id="exp_qcore_hybrid_${REUSE_COUPLED_MTW_RUN_TAG}_mtw${old_mask}_seed${SEED}_pm10_pm25"
+            label="Reused MTW ${old_mask} as ${GROUP_PROFILE} ${mask}"
+        fi
         ckpt="${CKPT_DIR}/${run_id}_S2_PhaseB_best_score.pt"
-        spec="${tag}=${data_dir}|${ckpt}|AUTO|Hybrid MTW ${mask}"
+        spec="${tag}=${data_dir}|${ckpt}|AUTO|${label}"
         EXTRA_SOURCES="${EXTRA_SOURCES:+${EXTRA_SOURCES};}${spec}"
         SOURCE_SUBSET="${SOURCE_SUBSET:+${SOURCE_SUBSET},}${tag}"
     done
@@ -98,6 +141,8 @@ elif [[ "${MODE}" == "analyze" ]]; then
         --out-dir "${ANALYSIS_DIR}"
         --seeds "${SEEDS}"
         --masks "${MASKS}"
+        --group-profile "${GROUP_PROFILE}"
+        --source-prefix "${SOURCE_PREFIX}"
         --bootstrap-iters "${BOOTSTRAP_ITERS}"
         --bootstrap-seed "${BOOTSTRAP_SEED}"
         --bootstrap-max-rows "${BOOTSTRAP_MAX_ROWS}"

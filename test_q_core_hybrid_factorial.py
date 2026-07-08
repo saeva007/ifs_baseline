@@ -21,6 +21,7 @@ from analyze_q_core_hybrid_factorial import (
     adaptive_ap_histograms,
     make_figures,
     pair_interactions,
+    set_group_profile as set_analysis_group_profile,
     shapley_values,
 )
 from build_q_core_hybrid_factorial import EXPECTED_ORDER, GROUPS
@@ -173,6 +174,66 @@ class HybridBuilderTest(unittest.TestCase):
 
             audit_cmd = cmd + ["--audit-only"]
             subprocess.run(audit_cmd, check=True, capture_output=True, text=True)
+
+    def test_mt2pw_profile_splits_t2m_and_mslp(self) -> None:
+        with workspace_temp_dir() as root:
+            rng = np.random.default_rng(1702)
+            n, dyn_n = 9, len(EXPECTED_ORDER)
+            p_dyn = rng.normal(size=(n, WINDOW, dyn_n)).astype(np.float32)
+            t_dyn = p_dyn.copy()
+            deltas = {
+                "Q_1000": np.float32(0.10),
+                "DP_1000": np.float32(0.10),
+                "Q_925": np.float32(0.10),
+                "DP_925": np.float32(0.10),
+                "RH_925": np.float32(0.10),
+                "T2M": np.float32(0.20),
+                "MSLP": np.float32(0.30),
+                "U10": np.float32(0.40),
+                "V10": np.float32(0.40),
+                "WSPD10": np.float32(0.40),
+                "WDIR10": np.float32(0.40),
+                "U_925": np.float32(0.40),
+                "V_925": np.float32(0.40),
+                "WSPD925": np.float32(0.40),
+            }
+            for feature, delta in deltas.items():
+                t_dyn[:, :, EXPECTED_ORDER.index(feature)] += delta
+            y = np.asarray([0, 1, 2, 2, 1, 0, 2, 1, 2], dtype=np.float32)
+            pangu = write_source(root, "pangu", p_dyn, y, canonical_pangu=True)
+            tianji = write_source(root, "tianji", t_dyn, y, canonical_pangu=False)
+            out = root / "hybrids"
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
+                "--pangu-dir",
+                str(pangu),
+                "--tianji-dir",
+                str(tianji),
+                "--out-root",
+                str(out),
+                "--splits",
+                "train",
+                "--group-profile",
+                "mt2pw",
+                "--masks",
+                "0000,0100,0010,1111",
+                "--chunk-rows",
+                "4",
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            t2m_only = np.load(out / "mt2pw_0100" / "X_train.npy")[:, : WINDOW * dyn_n].reshape(n, WINDOW, dyn_n)
+            mslp_only = np.load(out / "mt2pw_0010" / "X_train.npy")[:, : WINDOW * dyn_n].reshape(n, WINDOW, dyn_n)
+            for idx, feature in enumerate(EXPECTED_ORDER):
+                expected_t2m = t_dyn[:, :, idx] if feature == "T2M" else p_dyn[:, :, idx]
+                expected_mslp = t_dyn[:, :, idx] if feature == "MSLP" else p_dyn[:, :, idx]
+                self.assertTrue(np.array_equal(t2m_only[:, :, idx], expected_t2m), feature)
+                self.assertTrue(np.array_equal(mslp_only[:, :, idx], expected_mslp), feature)
+            with (out / "mt2pw_0100" / "dataset_build_config.json").open("r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            self.assertEqual(cfg["hybrid_group_profile"], "mt2pw")
+            self.assertEqual(cfg["replaced_feature_groups"], ["T2"])
+            self.assertEqual(cfg["replaced_features"], ["T2M"])
 
     def test_different_order_and_partial_overlap_are_aligned(self) -> None:
         with workspace_temp_dir() as root:
@@ -385,6 +446,113 @@ class ArtifactAndAleTest(unittest.TestCase):
             self.assertEqual(report["status"], "passed")
             self.assertEqual(report["passed_triplets"], 27)
 
+    def test_mt2pw_artifact_gate_accepts_24_new_s2_with_coupled_mtw_reuse(self) -> None:
+        with workspace_temp_dir() as root:
+            ckpt = root / "checkpoints"
+            ckpt.mkdir()
+            s1_data = root / "s1"
+            s1_data.mkdir()
+            split_hybrid = root / "split_hybrid"
+            split_hybrid.mkdir()
+            old_hybrid = root / "old_hybrid"
+            old_hybrid.mkdir()
+            data_cfg = {"dyn_vars": len(EXPECTED_ORDER), "dynamic_feature_order": EXPECTED_ORDER}
+            (s1_data / "dataset_build_config.json").write_text(json.dumps(data_cfg), encoding="utf-8")
+            seeds = (42, 2025, 20260702)
+            all_masks = tuple(f"{value:04b}" for value in range(16))
+            train_masks = ("0010", "0011", "0100", "0101", "1010", "1011", "1100", "1101")
+            coupled = {mask: f"{mask[0]}{mask[1]}{mask[3]}" for mask in all_masks if mask[1] == mask[2]}
+            for mask in train_masks:
+                data_dir = split_hybrid / f"mt2pw_{mask}"
+                data_dir.mkdir()
+                (data_dir / "dataset_build_config.json").write_text(json.dumps(data_cfg), encoding="utf-8")
+            for old_mask in sorted(set(coupled.values())):
+                data_dir = old_hybrid / f"mtw_{old_mask}"
+                data_dir.mkdir()
+                (data_dir / "dataset_build_config.json").write_text(json.dumps(data_cfg), encoding="utf-8")
+            for seed in seeds:
+                s1_run = f"exp_qcore_hybrid_old_s1_seed{seed}_pm10_pm25"
+                (ckpt / f"{s1_run}_S1_best_score.pt").touch()
+                (ckpt / f"robust_scaler_{s1_run}_s1_w12_dyn{len(EXPECTED_ORDER)}_pm.pkl").touch()
+                (ckpt / f"{s1_run}_static_rnn_config.json").write_text(
+                    json.dumps({"run_id": s1_run, "seed": seed, "window_size": 12, "s1_data_dir": str(s1_data)}),
+                    encoding="utf-8",
+                )
+                for mask in train_masks:
+                    run_id = f"exp_qcore_hybrid_split_mt2pw{mask}_seed{seed}_pm10_pm25"
+                    (ckpt / f"{run_id}_S2_PhaseB_best_score.pt").touch()
+                    (ckpt / f"robust_scaler_{run_id}_s2_w12_dyn{len(EXPECTED_ORDER)}_pm.pkl").touch()
+                    (ckpt / f"{run_id}_static_rnn_config.json").write_text(
+                        json.dumps(
+                            {
+                                "run_id": run_id,
+                                "seed": seed,
+                                "window_size": 12,
+                                "s2_data_dir": str(split_hybrid / f"mt2pw_{mask}"),
+                                "s2_phase_a_steps": 12000,
+                                "s2_phase_b_steps": 40000,
+                                "pretrained_ckpt": "s1.pt",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                for mask, old_mask in coupled.items():
+                    run_id = f"exp_qcore_hybrid_old_mtw{old_mask}_seed{seed}_pm10_pm25"
+                    (ckpt / f"{run_id}_S2_PhaseB_best_score.pt").touch()
+                    (ckpt / f"robust_scaler_{run_id}_s2_w12_dyn{len(EXPECTED_ORDER)}_pm.pkl").touch()
+                    (ckpt / f"{run_id}_static_rnn_config.json").write_text(
+                        json.dumps(
+                            {
+                                "run_id": run_id,
+                                "seed": seed,
+                                "window_size": 12,
+                                "s2_data_dir": str(old_hybrid / f"mtw_{old_mask}"),
+                                "s2_phase_a_steps": 12000,
+                                "s2_phase_b_steps": 40000,
+                                "pretrained_ckpt": "s1.pt",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+            out = root / "audit"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "verify_q_core_hybrid_artifacts.py"),
+                    "--run-tag",
+                    "split",
+                    "--s1-run-tag",
+                    "old",
+                    "--checkpoint-dir",
+                    str(ckpt),
+                    "--hybrid-data-root",
+                    str(split_hybrid),
+                    "--s1-data-dir",
+                    str(s1_data),
+                    "--out-dir",
+                    str(out),
+                    "--group-profile",
+                    "mt2pw",
+                    "--masks",
+                    ":".join(all_masks),
+                    "--train-masks",
+                    ":".join(train_masks),
+                    "--reuse-coupled-mtw-run-tag",
+                    "old",
+                    "--reuse-coupled-mtw-hybrid-root",
+                    str(old_hybrid),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report = json.loads((out / "primary_training_artifact_audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["passed_triplets"], 51)
+            frame = pd.read_csv(out / "primary_training_artifact_audit.csv")
+            self.assertEqual(int((frame["artifact_provenance"] == "trained_here").sum()), len(train_masks) * len(seeds))
+            self.assertEqual(int((frame["artifact_provenance"] == "reused_coupled_mtw").sum()), len(coupled) * len(seeds))
+
 
 class AttributionMathTest(unittest.TestCase):
     def test_exact_shapley_efficiency_and_values(self) -> None:
@@ -399,6 +567,30 @@ class AttributionMathTest(unittest.TestCase):
         self.assertAlmostEqual(sum(phi.values()), values["111"] - values["000"])
         for value in pair_interactions(values).values():
             self.assertAlmostEqual(value, 0.0)
+
+    def test_exact_four_group_shapley_and_pair_interactions(self) -> None:
+        try:
+            set_analysis_group_profile("mt2pw")
+            values = {}
+            for i in range(16):
+                mask = f"{i:04b}"
+                values[mask] = (
+                    1.0
+                    + 0.1 * int(mask[0])
+                    + 0.2 * int(mask[1])
+                    + 0.05 * int(mask[2])
+                    + 0.3 * int(mask[3])
+                )
+            phi = shapley_values(values)
+            self.assertAlmostEqual(phi["M"], 0.1)
+            self.assertAlmostEqual(phi["T2"], 0.2)
+            self.assertAlmostEqual(phi["P"], 0.05)
+            self.assertAlmostEqual(phi["W"], 0.3)
+            self.assertAlmostEqual(sum(phi.values()), values["1111"] - values["0000"])
+            for value in pair_interactions(values).values():
+                self.assertAlmostEqual(value, 0.0)
+        finally:
+            set_analysis_group_profile("mtw")
 
     def test_analysis_cli_smoke(self) -> None:
         with workspace_temp_dir() as root:
@@ -488,6 +680,92 @@ class AttributionMathTest(unittest.TestCase):
                 report = json.load(f)
             self.assertEqual(report["status"], "passed")
             self.assertFalse(report["moisture_followup_gate"]["formal_three_seed_analysis"])
+
+    def test_analysis_cli_smoke_mt2pw_profile(self) -> None:
+        with workspace_temp_dir() as root:
+            eval_root = root / "eval"
+            seed_dir = eval_root / "seed_42"
+            seed_dir.mkdir(parents=True)
+            data_root = root / "data"
+            data_root.mkdir()
+            rng = np.random.default_rng(2402)
+            specs = {}
+            test_times = pd.date_range("2025-02-01", periods=96, freq="6h")
+            for mask in (f"{i:04b}" for i in range(16)):
+                data_dir = data_root / mask
+                data_dir.mkdir()
+                np.save(data_dir / "X_test.npy", rng.normal(size=(96, WINDOW * len(EXPECTED_ORDER) + 10)).astype(np.float32))
+                pd.DataFrame(
+                    {"time": test_times, "station_id": 60000 + np.arange(96)}
+                ).to_csv(data_dir / "meta_test.csv", index=False)
+                with (data_dir / "dataset_build_config.json").open("w", encoding="utf-8") as f:
+                    json.dump(
+                        {"dynamic_feature_order": EXPECTED_ORDER, "dyn_vars": len(EXPECTED_ORDER), "window": WINDOW},
+                        f,
+                    )
+                specs[f"qcore_hybrid_mt2pw_{mask}"] = {"data_dir": str(data_dir)}
+            with (seed_dir / "run_config.json").open("w", encoding="utf-8") as f:
+                json.dump({"specs": specs}, f)
+
+            for split, n in (("val", 48), ("test", 96)):
+                y = np.asarray(([0, 1, 2, 2, 2, 1] * ((n + 5) // 6))[:n], dtype=np.int64)
+                time = pd.date_range("2025-02-01", periods=n, freq="6h")
+                noise = rng.normal(0.0, 0.12, size=n)
+                for i in range(16):
+                    mask = f"{i:04b}"
+                    improvement = (
+                        0.02 * int(mask[0])
+                        + 0.05 * int(mask[1])
+                        + 0.005 * int(mask[2])
+                        + 0.015 * int(mask[3])
+                    )
+                    score = np.clip(0.18 + 0.50 * (y <= 1) + noise + improvement * (2 * (y <= 1) - 1), 0.001, 0.999)
+                    probs = np.column_stack([0.55 * score, 0.45 * score, 1.0 - score])
+                    pred = np.argmax(probs, axis=1)
+                    frame = pd.DataFrame(
+                        {
+                            "time": time,
+                            "station_id": 60000 + np.arange(n),
+                            "y_cls": y,
+                            "vis_raw_m": np.where(y == 0, 300.0, np.where(y == 1, 750.0, 5000.0)),
+                            "pred": pred,
+                            "p_fog": probs[:, 0],
+                            "p_mist": probs[:, 1],
+                            "p_clear": probs[:, 2],
+                        }
+                    )
+                    name = (
+                        f"per_sample_val_qcore_hybrid_mt2pw_{mask}.csv"
+                        if split == "val"
+                        else f"per_sample_qcore_hybrid_mt2pw_{mask}.csv"
+                    )
+                    frame.to_csv(seed_dir / name, index=False)
+            out = root / "analysis"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "analyze_q_core_hybrid_factorial.py"),
+                    "--eval-root",
+                    str(eval_root),
+                    "--out-dir",
+                    str(out),
+                    "--seeds",
+                    "42",
+                    "--group-profile",
+                    "mt2pw",
+                    "--bootstrap-iters",
+                    "5",
+                    "--no-figures",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            shapley = pd.read_csv(out / "hybrid_exact_shapley_effects.csv")
+            self.assertEqual(set(shapley["group"]), {"M", "T2", "P", "W"})
+            report = json.loads((out / "hybrid_factorial_analysis_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["group_profile"], "mt2pw")
+            self.assertEqual(report["moisture_followup_gate"]["status"], "not_applicable")
 
 
 if __name__ == "__main__":

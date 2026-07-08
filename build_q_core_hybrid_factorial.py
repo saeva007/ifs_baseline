@@ -40,17 +40,79 @@ from pmst_overlap_common import (
 
 
 EXPECTED_ORDER = list(Q_CORE_NO_RH2M_DYN_FEATURES)
-GROUPS: Dict[str, Tuple[str, ...]] = {
-    "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
-    "T": ("T2M", "MSLP"),
-    "W": ("U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"),
+GROUP_PROFILES: Dict[str, Dict[str, object]] = {
+    "mtw": {
+        "dataset_prefix": "mtw",
+        "description": "Original three-package factorial: moisture, thermal/pressure, wind.",
+        "order": ("M", "T", "W"),
+        "groups": {
+            "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
+            "T": ("T2M", "MSLP"),
+            "W": ("U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"),
+        },
+    },
+    "mt2pw": {
+        "dataset_prefix": "mt2pw",
+        "description": "T-package follow-up factorial: split T into T2M and MSLP.",
+        "order": ("M", "T2", "P", "W"),
+        "groups": {
+            "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
+            "T2": ("T2M",),
+            "P": ("MSLP",),
+            "W": ("U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"),
+        },
+    },
 }
-GROUP_ORDER = ("M", "T", "W")
+GROUP_PROFILE = "mtw"
+GROUPS: Dict[str, Tuple[str, ...]] = dict(GROUP_PROFILES[GROUP_PROFILE]["groups"])  # type: ignore[arg-type]
+GROUP_ORDER = tuple(GROUP_PROFILES[GROUP_PROFILE]["order"])  # type: ignore[arg-type]
+DATASET_PREFIX = str(GROUP_PROFILES[GROUP_PROFILE]["dataset_prefix"])
 SHARED_DYNAMIC = ("ZENITH", "PM10_ugm3", "PM25_ugm3")
 STATIC_DIM = 6
 CYCLICAL_DIM = 4
 DEFAULT_SPLITS = ("train", "val", "test")
 DEFAULT_ENDPOINT_FOG_ATOL = 5.0e-5
+
+
+def set_group_profile(profile: str, dataset_prefix: str | None = None) -> None:
+    global GROUP_PROFILE, GROUPS, GROUP_ORDER, DATASET_PREFIX
+    key = str(profile).strip().lower()
+    if key not in GROUP_PROFILES:
+        raise ValueError(f"Unknown group profile {profile!r}; choose from {sorted(GROUP_PROFILES)}")
+    spec = GROUP_PROFILES[key]
+    groups = {str(name): tuple(features) for name, features in dict(spec["groups"]).items()}
+    order = tuple(str(name) for name in tuple(spec["order"]))
+    missing = [name for name in order if name not in groups]
+    if missing:
+        raise ValueError(f"Group profile {profile!r} has missing group definitions: {missing}")
+    for group, features in groups.items():
+        absent = [feature for feature in features if feature not in EXPECTED_ORDER]
+        if absent:
+            raise ValueError(f"Group profile {profile!r}/{group} uses unknown dynamic features: {absent}")
+    prefix = str(dataset_prefix).strip() if dataset_prefix else str(spec["dataset_prefix"])
+    if not prefix or any(ch.isspace() for ch in prefix) or "/" in prefix or "\\" in prefix:
+        raise ValueError(f"Invalid dataset prefix: {prefix!r}")
+    GROUP_PROFILE = key
+    GROUPS = groups
+    GROUP_ORDER = order
+    DATASET_PREFIX = prefix
+
+
+def all_masks() -> List[str]:
+    width = len(GROUP_ORDER)
+    return [f"{value:0{width}b}" for value in range(1 << width)]
+
+
+def zero_mask() -> str:
+    return "0" * len(GROUP_ORDER)
+
+
+def one_mask() -> str:
+    return "1" * len(GROUP_ORDER)
+
+
+def dataset_dir_name(mask: str) -> str:
+    return f"{DATASET_PREFIX}_{mask}"
 
 
 @dataclass(frozen=True)
@@ -75,7 +137,18 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pangu-dir", required=True)
     ap.add_argument("--tianji-dir", required=True)
     ap.add_argument("--out-root", required=True)
-    ap.add_argument("--masks", default="all", help="all or comma-separated MTW masks, e.g. 000,100,111")
+    ap.add_argument(
+        "--group-profile",
+        default="mtw",
+        choices=sorted(GROUP_PROFILES),
+        help="Physical package profile: mtw keeps the original 3 groups; mt2pw splits T into T2M and MSLP.",
+    )
+    ap.add_argument(
+        "--dataset-prefix",
+        default="",
+        help="Optional output directory prefix override; defaults to the selected group profile prefix.",
+    )
+    ap.add_argument("--masks", default="all", help="all or comma-separated binary masks for the selected group profile")
     ap.add_argument("--splits", default="train,val,test")
     ap.add_argument("--chunk-rows", type=int, default=20000)
     ap.add_argument("--limit-rows", type=int, default=0, help="Smoke-test row limit per split; 0 uses all rows.")
@@ -100,10 +173,11 @@ def parse_csv(value: str) -> List[str]:
 
 
 def parse_masks(value: str) -> List[str]:
-    masks = [f"{i:03b}" for i in range(8)] if str(value).strip().lower() == "all" else parse_csv(value)
-    bad = [mask for mask in masks if len(mask) != 3 or any(bit not in "01" for bit in mask)]
+    masks = all_masks() if str(value).strip().lower() == "all" else parse_csv(value)
+    width = len(GROUP_ORDER)
+    bad = [mask for mask in masks if len(mask) != width or any(bit not in "01" for bit in mask)]
     if bad:
-        raise ValueError(f"Invalid MTW mask(s): {bad}")
+        raise ValueError(f"Invalid {GROUP_PROFILE} mask(s): {bad}; expected {width}-bit binary masks")
     return list(dict.fromkeys(masks))
 
 
@@ -350,8 +424,8 @@ def build_one_split(
         cyc = base_rows[:, -CYCLICAL_DIM:]
         rows = np.concatenate([hybrid.reshape(end - start, dyn_width), static, fog, cyc], axis=1).astype(np.float32)
         out_x[start:end] = rows
-        if mask in {"000", "111"}:
-            expected = base_rows if mask == "000" else donor_rows
+        if mask in {zero_mask(), one_mask()}:
+            expected = base_rows if mask == zero_mask() else donor_rows
             source_fog = expected[:, fog_start : fog_start + fog_dim]
             recomputed_fog = rows[:, fog_start : fog_start + fog_dim]
             max_abs_endpoint = max(max_abs_endpoint, max_abs_difference(recomputed_fog, source_fog))
@@ -374,8 +448,8 @@ def build_one_split(
         "mask": mask,
         "replaced_groups": mask_groups(mask),
         "replaced_features": [order[i] for i in donor_idx],
-        "endpoint_recomputed_fog_max_abs_diff": max_abs_endpoint if mask in {"000", "111"} else None,
-        "endpoint_recomputed_fog_atol": endpoint_fog_atol if mask in {"000", "111"} else None,
+        "endpoint_recomputed_fog_max_abs_diff": max_abs_endpoint if mask in {zero_mask(), one_mask()} else None,
+        "endpoint_recomputed_fog_atol": endpoint_fog_atol if mask in {zero_mask(), one_mask()} else None,
         "pangu_source_rows": alignment.pangu_source_rows,
         "tianji_source_rows": alignment.tianji_source_rows,
         "common_rows": n,
@@ -400,6 +474,8 @@ def config_for_mask(
             "feature_set": "q_core_no_rh2m",
             "hybrid_base_source": "pangu2025",
             "hybrid_donor_source": "tianji",
+            "hybrid_group_profile": GROUP_PROFILE,
+            "hybrid_dataset_prefix": DATASET_PREFIX,
             "hybrid_group_order": list(GROUP_ORDER),
             "hybrid_group_mask": mask,
             "hybrid_group_definitions": {key: list(value) for key, value in GROUPS.items()},
@@ -447,7 +523,7 @@ def audit_outputs(
     alignment_cache: Dict[str, Tuple[pd.DataFrame, np.ndarray, np.ndarray]] = {}
     reference_mask = masks[0]
     for split in splits:
-        reference_meta = canonical_meta(out_root / f"mtw_{reference_mask}" / f"meta_{split}.csv")
+        reference_meta = canonical_meta(out_root / dataset_dir_name(reference_mask) / f"meta_{split}.csv")
         base_meta = canonical_meta(pangu_dir / f"meta_{split}.csv")
         donor_meta = canonical_meta(tianji_dir / f"meta_{split}.csv")
         alignment_cache[split] = (
@@ -456,7 +532,7 @@ def audit_outputs(
             positions_for_keys(donor_meta, reference_meta, f"audit {split}/Tianji"),
         )
     for mask in masks:
-        data_dir = out_root / f"mtw_{mask}"
+        data_dir = out_root / dataset_dir_name(mask)
         cfg = require_layout(data_dir)
         if str(cfg.get("hybrid_group_mask")) != mask or not bool(cfg.get("recomputed_fog_features")):
             raise ValueError(f"{data_dir}: hybrid provenance is missing or inconsistent")
@@ -512,7 +588,7 @@ def audit_outputs(
                     rtol,
                     atol,
                 )
-                if mask == "000":
+                if mask == zero_mask():
                     assert_close(
                         f"audit {mask}/{split} source fog compatibility rows {start}:{end}",
                         np.asarray(x[start:end, fog_start : fog_start + fog_dim]),
@@ -520,7 +596,7 @@ def audit_outputs(
                         rtol,
                         endpoint_fog_atol,
                     )
-                if mask == "111":
+                if mask == one_mask():
                     assert_close(
                         f"audit {mask}/{split} source fog compatibility rows {start}:{end}",
                         np.asarray(x[start:end, fog_start : fog_start + fog_dim]),
@@ -535,6 +611,8 @@ def audit_outputs(
         "splits": list(splits),
         "checks": rows,
         "group_order": list(GROUP_ORDER),
+        "group_profile": GROUP_PROFILE,
+        "dataset_prefix": DATASET_PREFIX,
         "group_definitions": {key: list(value) for key, value in GROUPS.items()},
         "endpoint_source_fog_compatibility_atol": endpoint_fog_atol,
     }
@@ -545,6 +623,7 @@ def main() -> None:
     pangu_dir = Path(args.pangu_dir).expanduser().resolve()
     tianji_dir = Path(args.tianji_dir).expanduser().resolve()
     out_root = Path(args.out_root).expanduser().resolve()
+    set_group_profile(args.group_profile, args.dataset_prefix or None)
     masks = parse_masks(args.masks)
     splits = parse_csv(args.splits)
     if not splits or any(split not in DEFAULT_SPLITS for split in splits):
@@ -608,7 +687,7 @@ def main() -> None:
 
     build_records: List[Dict[str, object]] = []
     for mask in masks:
-        out_dir = out_root / f"mtw_{mask}"
+        out_dir = out_root / dataset_dir_name(mask)
         out_dir.mkdir(parents=True, exist_ok=False)
         cfg = config_for_mask(
             p_cfg,
@@ -656,6 +735,10 @@ def main() -> None:
         "tianji_dir": str(tianji_dir),
         "out_root": str(out_root),
         "masks": masks,
+        "group_profile": GROUP_PROFILE,
+        "dataset_prefix": DATASET_PREFIX,
+        "group_order": list(GROUP_ORDER),
+        "group_definitions": {key: list(value) for key, value in GROUPS.items()},
         "split_rows": split_rows,
         "row_alignment_policy": "ordered source-key intersection in Pangu row order",
         "source_pair_coverage": split_alignment,

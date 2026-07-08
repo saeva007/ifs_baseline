@@ -3,7 +3,7 @@
 
 Primary endpoints are threshold-free low-visibility average precision and
 low-visibility CSI/recall at a validation-matched false-positive rate.  The
-script computes exact three-package Shapley contributions, second-order
+script computes exact package-level Shapley contributions, second-order
 interactions, paired UTC-date block-bootstrap intervals, calibration tables,
 and Pangu-hit/Tianji-hit event case-control exports.
 """
@@ -23,9 +23,27 @@ import numpy as np
 import pandas as pd
 
 
-GROUP_ORDER = ("M", "T", "W")
-GROUP_LABELS = {"M": "Moisture", "T": "Thermal/pressure", "W": "Wind"}
-ALL_MASKS = tuple(f"{i:03b}" for i in range(8))
+GROUP_PROFILES: Dict[str, Dict[str, object]] = {
+    "mtw": {
+        "dataset_prefix": "mtw",
+        "source_prefix": "qcore_hybrid_",
+        "description": "Original three-package factorial: moisture, thermal/pressure, wind.",
+        "order": ("M", "T", "W"),
+        "labels": {"M": "Moisture", "T": "Thermal/pressure", "W": "Wind"},
+    },
+    "mt2pw": {
+        "dataset_prefix": "mt2pw",
+        "source_prefix": "qcore_hybrid_mt2pw_",
+        "description": "T-package follow-up factorial: split T into T2M and MSLP.",
+        "order": ("M", "T2", "P", "W"),
+        "labels": {"M": "Moisture", "T2": "T2M", "P": "MSLP", "W": "Wind"},
+    },
+}
+GROUP_PROFILE = "mtw"
+GROUP_ORDER = tuple(GROUP_PROFILES[GROUP_PROFILE]["order"])  # type: ignore[arg-type]
+GROUP_LABELS = dict(GROUP_PROFILES[GROUP_PROFILE]["labels"])  # type: ignore[arg-type]
+DATASET_PREFIX = str(GROUP_PROFILES[GROUP_PROFILE]["dataset_prefix"])
+SOURCE_PREFIX = str(GROUP_PROFILES[GROUP_PROFILE]["source_prefix"])
 PRIMARY_METRICS = ("low_vis_ap", "low_vis_csi_matched_fpr", "low_vis_recall_matched_fpr")
 EVENT_FEATURES = (
     "T2M",
@@ -46,6 +64,43 @@ OBS_VALID_RANGES = {
 }
 
 
+def set_group_profile(profile: str, dataset_prefix: str | None = None, source_prefix: str | None = None) -> None:
+    global GROUP_PROFILE, GROUP_ORDER, GROUP_LABELS, DATASET_PREFIX, SOURCE_PREFIX
+    key = str(profile).strip().lower()
+    if key not in GROUP_PROFILES:
+        raise ValueError(f"Unknown group profile {profile!r}; choose from {sorted(GROUP_PROFILES)}")
+    spec = GROUP_PROFILES[key]
+    order = tuple(str(name) for name in tuple(spec["order"]))
+    labels = {str(name): str(label) for name, label in dict(spec["labels"]).items()}
+    missing = [name for name in order if name not in labels]
+    if missing:
+        raise ValueError(f"Group profile {profile!r} has missing labels: {missing}")
+    prefix = str(dataset_prefix).strip() if dataset_prefix else str(spec["dataset_prefix"])
+    src_prefix = str(source_prefix).strip() if source_prefix else str(spec["source_prefix"])
+    if not prefix or any(ch.isspace() for ch in prefix) or "/" in prefix or "\\" in prefix:
+        raise ValueError(f"Invalid dataset prefix: {prefix!r}")
+    if not src_prefix or any(ch.isspace() for ch in src_prefix):
+        raise ValueError(f"Invalid source prefix: {src_prefix!r}")
+    GROUP_PROFILE = key
+    GROUP_ORDER = order
+    GROUP_LABELS = labels
+    DATASET_PREFIX = prefix
+    SOURCE_PREFIX = src_prefix
+
+
+def all_masks() -> Tuple[str, ...]:
+    width = len(GROUP_ORDER)
+    return tuple(f"{value:0{width}b}" for value in range(1 << width))
+
+
+def zero_mask() -> str:
+    return "0" * len(GROUP_ORDER)
+
+
+def one_mask() -> str:
+    return "1" * len(GROUP_ORDER)
+
+
 @dataclass
 class SampleSet:
     frame: pd.DataFrame
@@ -60,7 +115,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--seeds", default="42,2025,20260702")
     ap.add_argument("--masks", default="all")
-    ap.add_argument("--source-prefix", default="qcore_hybrid_")
+    ap.add_argument(
+        "--group-profile",
+        default="mtw",
+        choices=sorted(GROUP_PROFILES),
+        help="Physical package profile used by the evaluator source tags and Shapley masks.",
+    )
+    ap.add_argument("--dataset-prefix", default="", help="Optional dataset prefix override recorded in the report.")
+    ap.add_argument("--source-prefix", default="", help="Optional evaluator source-tag prefix override.")
     ap.add_argument("--bootstrap-iters", type=int, default=1000)
     ap.add_argument("--bootstrap-seed", type=int, default=20260702)
     ap.add_argument("--bootstrap-max-rows", type=int, default=0, help="Optional deterministic paired-row cap; 0 uses all rows.")
@@ -83,14 +145,15 @@ def parse_csv(value: str) -> List[str]:
 
 
 def parse_masks(value: str) -> List[str]:
-    masks = list(ALL_MASKS) if str(value).strip().lower() == "all" else parse_csv(value)
-    bad = [mask for mask in masks if mask not in ALL_MASKS]
+    expected = set(all_masks())
+    masks = list(all_masks()) if str(value).strip().lower() == "all" else parse_csv(value)
+    bad = [mask for mask in masks if mask not in expected]
     if bad:
-        raise ValueError(f"Invalid MTW masks: {bad}")
-    missing = sorted(set(ALL_MASKS) - set(masks))
+        raise ValueError(f"Invalid {GROUP_PROFILE} masks: {bad}; expected {len(GROUP_ORDER)}-bit factorial masks")
+    missing = sorted(expected - set(masks))
     if missing:
-        raise ValueError(f"Exact three-package Shapley requires all eight masks; missing {missing}")
-    return list(ALL_MASKS)
+        raise ValueError(f"Exact {len(GROUP_ORDER)}-package Shapley requires all {len(expected)} masks; missing {missing}")
+    return list(all_masks())
 
 
 def load_ale_outputs(eval_root: Path, seeds: Sequence[int], required: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -326,22 +389,26 @@ def shapley_values(values: Mapping[str, float]) -> Dict[str, float]:
 
 def pair_interactions(values: Mapping[str, float]) -> Dict[str, float]:
     out: Dict[str, float] = {}
+    n = len(GROUP_ORDER)
     for i, left in enumerate(GROUP_ORDER):
         for right in GROUP_ORDER[i + 1 :]:
-            remaining = next(group for group in GROUP_ORDER if group not in {left, right})
-            delta_empty = (
-                values[set_to_mask({left, right})]
-                - values[set_to_mask({left})]
-                - values[set_to_mask({right})]
-                + values["000"]
-            )
-            delta_context = (
-                values["111"]
-                - values[set_to_mask({left, remaining})]
-                - values[set_to_mask({right, remaining})]
-                + values[set_to_mask({remaining})]
-            )
-            out[f"{left}:{right}"] = float(0.5 * (delta_empty + delta_context))
+            others = [name for name in GROUP_ORDER if name not in {left, right}]
+            interaction = 0.0
+            for bits in range(1 << len(others)):
+                subset = {others[j] for j in range(len(others)) if bits & (1 << j)}
+                weight = (
+                    math.factorial(len(subset))
+                    * math.factorial(n - len(subset) - 2)
+                    / math.factorial(n - 1)
+                )
+                delta = (
+                    values[set_to_mask(subset | {left, right})]
+                    - values[set_to_mask(subset | {left})]
+                    - values[set_to_mask(subset | {right})]
+                    + values[set_to_mask(subset)]
+                )
+                interaction += weight * delta
+            out[f"{left}:{right}"] = float(interaction)
     return out
 
 
@@ -387,8 +454,8 @@ def load_common_core(
             return {}, {}
         val[seed] = load_samples(val_path)
         test[seed] = load_samples(test_path)
-        assert_aligned(reference_val[(seed, "111")], val[seed], f"common-core validation seed={seed}")
-        assert_aligned(reference_test[(seed, "111")], test[seed], f"common-core test seed={seed}")
+        assert_aligned(reference_val[(seed, one_mask())], val[seed], f"common-core validation seed={seed}")
+        assert_aligned(reference_test[(seed, one_mask())], test[seed], f"common-core test seed={seed}")
     return val, test
 
 
@@ -401,7 +468,7 @@ def point_analysis(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, float, Dict[Tuple[int, str], float]]:
     baseline_fprs = []
     for seed in seeds:
-        sample = val[(seed, "000")]
+        sample = val[(seed, zero_mask())]
         baseline_fprs.append(argmax_metrics(sample.y, sample.pred)["low_vis_fpr_argmax"])
     target_fpr = float(np.median(baseline_fprs))
     thresholds: Dict[Tuple[int, str], float] = {}
@@ -445,13 +512,16 @@ def aggregate_effects(metrics: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame
             interactions = pair_interactions(values)
             for pair, value in interactions.items():
                 interaction_rows.append({"seed": int(seed), "metric": metric, "pair": pair, "interaction": value})
-            total = values["111"] - values["000"]
+            total = values[one_mask()] - values[zero_mask()]
             phi_sum = sum(per_seed[int(seed)].values())
             efficiency_rows.append(
                 {
                     "seed": int(seed),
                     "metric": metric,
                     "endpoint_delta_111_minus_000": total,
+                    "endpoint_delta_all1_minus_all0": total,
+                    "all0_mask": zero_mask(),
+                    "all1_mask": one_mask(),
                     "shapley_sum": phi_sum,
                     "absolute_error": abs(total - phi_sum),
                 }
@@ -496,7 +566,7 @@ def common_core_availability_analysis(
     thresholds: Dict[Tuple[int, str], float] = {}
     for seed in seeds:
         for label, val_set, test_set in (
-            ("q_core", qcore_val[(seed, "111")], qcore_test[(seed, "111")]),
+            ("q_core", qcore_val[(seed, one_mask())], qcore_test[(seed, one_mask())]),
             ("common_core_plus_rh2m_dpd", common_val[seed], common_test[seed]),
         ):
             threshold, achieved = match_fpr_threshold(val_set.y, val_set.score, target_fpr)
@@ -515,9 +585,9 @@ def common_core_availability_analysis(
             )
     point = pd.DataFrame(point_rows)
 
-    ref = qcore_test[(seeds[0], "111")]
+    ref = qcore_test[(seeds[0], one_mask())]
     rng = np.random.default_rng(rng_seed + 811)
-    working_q = {seed: qcore_test[(seed, "111")] for seed in seeds}
+    working_q = {seed: qcore_test[(seed, one_mask())] for seed in seeds}
     working_c = dict(common_test)
     if max_rows > 0 and len(ref.y) > max_rows:
         keep = np.sort(rng.choice(len(ref.y), size=max_rows, replace=False).astype(np.int64))
@@ -654,13 +724,13 @@ def bootstrap_effects(
     ap_hist_max_bins: int,
     ap_hist_max_error: float,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    reference = test[(seeds[0], "000")]
+    reference = test[(seeds[0], zero_mask())]
     n = len(reference.y)
     rng = np.random.default_rng(rng_seed)
     if max_rows > 0 and n > max_rows:
         keep = np.sort(rng.choice(n, size=max_rows, replace=False).astype(np.int64))
         working = {key: subset_sample(sample, keep) for key, sample in test.items()}
-        reference = working[(seeds[0], "000")]
+        reference = working[(seeds[0], zero_mask())]
     else:
         working = dict(test)
     dates = reference.frame["time_utc"].dt.strftime("%Y-%m-%d").to_numpy()
@@ -721,7 +791,10 @@ def bootstrap_effects(
                 {
                     "iteration": iteration,
                     "metric": metric,
-                    "delta_111_minus_000": metric_values[metric]["111"] - metric_values[metric]["000"],
+                    "delta_111_minus_000": metric_values[metric][one_mask()] - metric_values[metric][zero_mask()],
+                    "delta_all1_minus_all0": metric_values[metric][one_mask()] - metric_values[metric][zero_mask()],
+                    "all0_mask": zero_mask(),
+                    "all1_mask": one_mask(),
                 }
             )
     draw_df = pd.DataFrame(draws)
@@ -1002,8 +1075,8 @@ def qc_elevation_sensitivity(
 ) -> pd.DataFrame:
     seed_dir = eval_root / f"seed_{seeds[0]}"
     data_dirs = {
-        "pangu": read_eval_data_dir(seed_dir, f"{prefix}000"),
-        "tianji": read_eval_data_dir(seed_dir, f"{prefix}111"),
+        "pangu": read_eval_data_dir(seed_dir, f"{prefix}{zero_mask()}"),
+        "tianji": read_eval_data_dir(seed_dir, f"{prefix}{one_mask()}"),
     }
     arrays: Dict[str, Dict[str, np.ndarray]] = {}
     for source, data_dir in data_dirs.items():
@@ -1018,7 +1091,7 @@ def qc_elevation_sensitivity(
             "q925": np.asarray(x[:, current + order.index("Q_925")], dtype=np.float64),
             "orography": np.asarray(x[:, window * dyn + 2], dtype=np.float64),
         }
-    n = len(test[(seeds[0], "000")].y)
+    n = len(test[(seeds[0], zero_mask())].y)
     if any(len(values["q1000"]) != n for values in arrays.values()):
         raise ValueError("QC/elevation arrays do not match evaluator test rows")
     p_valid = np.isfinite(arrays["pangu"]["q1000"]) & np.isfinite(arrays["pangu"]["q925"])
@@ -1032,7 +1105,7 @@ def qc_elevation_sensitivity(
         "elevation_gt_500m": np.isfinite(orography) & (orography > 500.0),
     }
     rows: List[Dict[str, object]] = []
-    for source, mask in (("pangu", "000"), ("tianji", "111")):
+    for source, mask in (("pangu", zero_mask()), ("tianji", one_mask())):
         q1000 = arrays[source]["q1000"]
         q925 = arrays[source]["q925"]
         nonphysical = (~np.isfinite(q1000)) | (~np.isfinite(q925)) | (q1000 < 0.0) | (q925 < 0.0)
@@ -1109,17 +1182,19 @@ def event_case_control(
     obs_root: str,
     paper_eval_dir: str,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, object]]:
-    ref = test[(seeds[0], "000")]
+    all0 = zero_mask()
+    all1 = one_mask()
+    ref = test[(seeds[0], all0)]
     y_low = ref.y <= 1
     mean_val: Dict[str, np.ndarray] = {}
     mean_test: Dict[str, np.ndarray] = {}
     thresholds: Dict[str, float] = {}
-    for mask in ("000", "111"):
+    for mask in (all0, all1):
         mean_val[mask] = np.mean(np.stack([val[(seed, mask)].score for seed in seeds], axis=0), axis=0)
         mean_test[mask] = np.mean(np.stack([test[(seed, mask)].score for seed in seeds], axis=0), axis=0)
         thresholds[mask], _ = match_fpr_threshold(val[(seeds[0], mask)].y, mean_val[mask], target_fpr)
-    p_hit = mean_test["000"] >= thresholds["000"]
-    t_hit = mean_test["111"] >= thresholds["111"]
+    p_hit = mean_test[all0] >= thresholds[all0]
+    t_hit = mean_test[all1] >= thresholds[all1]
     category = np.full(len(ref.y), "not_low_visibility", dtype=object)
     category[y_low & p_hit & t_hit] = "both_hit"
     category[y_low & ~p_hit & ~t_hit] = "both_miss"
@@ -1132,14 +1207,14 @@ def event_case_control(
     if "vis_raw_m" in ref.frame:
         events["vis_raw_m"] = ref.frame["vis_raw_m"].to_numpy()[event_idx]
     events["case_category"] = category[event_idx]
-    events["pangu_seed_mean_low_vis_probability"] = mean_test["000"][event_idx]
-    events["tianji_seed_mean_low_vis_probability"] = mean_test["111"][event_idx]
-    events["pangu_matched_fpr_threshold"] = thresholds["000"]
-    events["tianji_matched_fpr_threshold"] = thresholds["111"]
+    events["pangu_seed_mean_low_vis_probability"] = mean_test[all0][event_idx]
+    events["tianji_seed_mean_low_vis_probability"] = mean_test[all1][event_idx]
+    events["pangu_matched_fpr_threshold"] = thresholds[all0]
+    events["tianji_matched_fpr_threshold"] = thresholds[all1]
 
     seed_dir = eval_root / f"seed_{seeds[0]}"
-    pangu_dir = read_eval_data_dir(seed_dir, f"{prefix}000")
-    tianji_dir = read_eval_data_dir(seed_dir, f"{prefix}111")
+    pangu_dir = read_eval_data_dir(seed_dir, f"{prefix}{all0}")
+    tianji_dir = read_eval_data_dir(seed_dir, f"{prefix}{all1}")
     events = attach_source_features(events, ref, pangu_dir, tianji_dir, feature_names)
     obs_info: Dict[str, object] = {"enabled": False}
     if obs_root:
@@ -1194,7 +1269,7 @@ def make_figures(
     ax.plot(x, aggregate["low_vis_ap"], marker="o", label="Low-vis AP")
     ax.plot(x, aggregate["low_vis_csi_matched_fpr"], marker="s", label="CSI at matched FPR")
     ax.set_xticks(x, aggregate["mask"], rotation=45)
-    ax.set_xlabel("MTW source mask (1 = Tianji)")
+    ax.set_xlabel(f"{GROUP_PROFILE} source mask (1 = Tianji; order={','.join(GROUP_ORDER)})")
     ax.set_ylabel("Score")
     ax.legend(frameon=False)
     ax.grid(alpha=0.2)
@@ -1219,11 +1294,13 @@ def make_figures(
     ax.legend(frameon=False, fontsize=7)
 
     ax = axes[1, 0]
-    endpoint = aggregate[aggregate["mask"].isin(["000", "111"])].set_index("mask")
+    all0 = zero_mask()
+    all1 = one_mask()
+    endpoint = aggregate[aggregate["mask"].isin([all0, all1])].set_index("mask")
     width = 0.34
-    values = [endpoint.loc["000", "low_vis_ap"], endpoint.loc["111", "low_vis_ap"]]
+    values = [endpoint.loc[all0, "low_vis_ap"], endpoint.loc[all1, "low_vis_ap"]]
     ax.bar(np.arange(2) - width / 2, values, width, label="AP", color="#8C564B")
-    values_csi = [endpoint.loc["000", "low_vis_csi_matched_fpr"], endpoint.loc["111", "low_vis_csi_matched_fpr"]]
+    values_csi = [endpoint.loc[all0, "low_vis_csi_matched_fpr"], endpoint.loc[all1, "low_vis_csi_matched_fpr"]]
     ax.bar(np.arange(2) + width / 2, values_csi, width, label="CSI at matched FPR", color="#2CA02C")
     ax.set_xticks(np.arange(2), ["Pangu q-core", "Tianji q-core"])
     ax.set_ylabel("Score")
@@ -1241,7 +1318,7 @@ def make_figures(
         fig.savefig(out_dir / f"fig_q_core_hybrid_factorial_mechanism.{ext}", dpi=300)
     plt.close(fig)
 
-    endpoint = reliability[reliability["mask"].isin(["000", "111"])].copy()
+    endpoint = reliability[reliability["mask"].isin([zero_mask(), one_mask()])].copy()
     if not endpoint.empty:
         endpoint = (
             endpoint.groupby(["mask", "bin"], as_index=False)
@@ -1250,8 +1327,8 @@ def make_figures(
         fig, ax = plt.subplots(figsize=(4.4, 4.0), constrained_layout=True)
         ax.plot([0, 1], [0, 1], ls="--", lw=1.0, color="#777777", label="Perfect calibration")
         for mask, label, color, marker in (
-            ("000", "Pangu q-core", "#684A9B", "o"),
-            ("111", "Tianji q-core", "#176B87", "s"),
+            (zero_mask(), "Pangu q-core", "#684A9B", "o"),
+            (one_mask(), "Tianji q-core", "#176B87", "s"),
         ):
             part = endpoint[(endpoint["mask"] == mask) & (endpoint["n"] > 0)].sort_values("mean_probability")
             ax.plot(part["mean_probability"], part["observed_frequency"], marker=marker, color=color, label=label)
@@ -1268,11 +1345,12 @@ def main() -> None:
     eval_root = Path(args.eval_root).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    set_group_profile(args.group_profile, args.dataset_prefix or None, args.source_prefix or None)
     seeds = [int(value) for value in parse_csv(args.seeds)]
     masks = parse_masks(args.masks)
     if len(seeds) not in {1, 3}:
         raise ValueError("Use one seed for an end-to-end smoke test or exactly three seeds for formal analysis")
-    val, test = load_all(eval_root, seeds, masks, args.source_prefix)
+    val, test = load_all(eval_root, seeds, masks, SOURCE_PREFIX)
     common_val, common_test = load_common_core(eval_root, seeds, val, test)
     metrics, reliability, target_fpr, thresholds = point_analysis(val, test, seeds, masks, args.ece_bins)
     shapley, interactions, efficiency = aggregate_effects(metrics)
@@ -1312,15 +1390,15 @@ def main() -> None:
         seeds,
         target_fpr,
         eval_root,
-        args.source_prefix,
+        SOURCE_PREFIX,
         parse_csv(args.event_features),
         args.obs_root,
         args.paper_eval_dir,
     )
-    qc_sensitivity = qc_elevation_sensitivity(test, seeds, thresholds, eval_root, args.source_prefix)
+    qc_sensitivity = qc_elevation_sensitivity(test, seeds, thresholds, eval_root, SOURCE_PREFIX)
     seed_dir = eval_root / f"seed_{seeds[0]}"
-    pangu_data_dir = read_eval_data_dir(seed_dir, f"{args.source_prefix}000")
-    tianji_data_dir = read_eval_data_dir(seed_dir, f"{args.source_prefix}111")
+    pangu_data_dir = read_eval_data_dir(seed_dir, f"{SOURCE_PREFIX}{zero_mask()}")
+    tianji_data_dir = read_eval_data_dir(seed_dir, f"{SOURCE_PREFIX}{one_mask()}")
     observation_quality = pd.DataFrame()
     observation_quality_info: Dict[str, object] = {"enabled": False}
     if args.obs_root:
@@ -1328,7 +1406,7 @@ def main() -> None:
             read_eval_data_dir(seed_dir, "tianji_common_core") if common_val else None
         )
         observation_quality, observation_quality_info = observation_anchored_quality(
-            test[(seeds[0], "000")],
+            test[(seeds[0], zero_mask())],
             pangu_data_dir,
             tianji_data_dir,
             args.obs_root,
@@ -1339,7 +1417,7 @@ def main() -> None:
     q_quality = pd.DataFrame()
     if args.era5_data_dir:
         q_quality = q_reference_quality(
-            test[(seeds[0], "000")], pangu_data_dir, tianji_data_dir, Path(args.era5_data_dir)
+            test[(seeds[0], zero_mask())], pangu_data_dir, tianji_data_dir, Path(args.era5_data_dir)
         )
     ale_all, ale_mean = load_ale_outputs(eval_root, seeds, args.require_ale)
 
@@ -1370,29 +1448,44 @@ def main() -> None:
     ap_rows = shapley[shapley["metric"] == "low_vis_ap"].sort_values("shapley_mean", ascending=False)
     moisture = ap_rows[ap_rows["group"] == "M"].iloc[0]
     formal_three_seed = len(seeds) == 3
-    gate_passed = bool(
-        formal_three_seed
-        and str(ap_rows.iloc[0]["group"]) == "M"
-        and float(moisture["ci_low"]) > 0.0
-        and bool(moisture["seed_sign_consistent_positive"])
-    )
-    gate = {
-        "status": "passed"
-        if gate_passed
-        else "not_passed",
-        "criterion": "M is the largest Low-vis AP Shapley contribution, date-block CI excludes zero, and all seed effects are positive",
-        "largest_group": str(ap_rows.iloc[0]["group"]),
-        "moisture_shapley_mean": float(moisture["shapley_mean"]),
-        "moisture_ci": [float(moisture["ci_low"]), float(moisture["ci_high"])],
-        "moisture_seed_sign_consistent_positive": bool(moisture["seed_sign_consistent_positive"]),
-        "formal_three_seed_analysis": formal_three_seed,
-        "next_step": "build M1000-only and M925-only hybrids" if gate_passed else "do not claim a moisture mechanism; investigate the winning package",
-    }
+    if GROUP_PROFILE == "mtw":
+        gate_passed = bool(
+            formal_three_seed
+            and str(ap_rows.iloc[0]["group"]) == "M"
+            and float(moisture["ci_low"]) > 0.0
+            and bool(moisture["seed_sign_consistent_positive"])
+        )
+        gate = {
+            "status": "passed" if gate_passed else "not_passed",
+            "criterion": "M is the largest Low-vis AP Shapley contribution, date-block CI excludes zero, and all seed effects are positive",
+            "largest_group": str(ap_rows.iloc[0]["group"]),
+            "moisture_shapley_mean": float(moisture["shapley_mean"]),
+            "moisture_ci": [float(moisture["ci_low"]), float(moisture["ci_high"])],
+            "moisture_seed_sign_consistent_positive": bool(moisture["seed_sign_consistent_positive"]),
+            "formal_three_seed_analysis": formal_three_seed,
+            "next_step": "build M1000-only and M925-only hybrids" if gate_passed else "do not claim a moisture mechanism; investigate the winning package",
+        }
+    else:
+        gate = {
+            "status": "not_applicable",
+            "criterion": "The MTW moisture follow-up gate applies only to the original mtw profile.",
+            "largest_group": str(ap_rows.iloc[0]["group"]),
+            "moisture_shapley_mean": float(moisture["shapley_mean"]),
+            "moisture_ci": [float(moisture["ci_low"]), float(moisture["ci_high"])],
+            "moisture_seed_sign_consistent_positive": bool(moisture["seed_sign_consistent_positive"]),
+            "formal_three_seed_analysis": formal_three_seed,
+            "next_step": "interpret the mt2pw T-package split; compare T2M and MSLP Shapley effects and interactions",
+        }
     report = {
         "status": "passed",
         "seeds": seeds,
         "masks": masks,
+        "group_profile": GROUP_PROFILE,
         "group_order": list(GROUP_ORDER),
+        "dataset_prefix": DATASET_PREFIX,
+        "source_prefix": SOURCE_PREFIX,
+        "all0_mask": zero_mask(),
+        "all1_mask": one_mask(),
         "target_validation_fpr": target_fpr,
         "primary_endpoints": list(PRIMARY_METRICS),
         "bootstrap": {

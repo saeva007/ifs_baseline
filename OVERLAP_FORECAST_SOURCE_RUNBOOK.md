@@ -295,6 +295,42 @@ OBS_ROOT=/path/to/hourly/station/csv/root \
 bash submit_q_core_hybrid_factorial.sh
 ```
 
+If the MTW analysis indicates that the thermal/pressure package should be
+split, run the `mt2pw` follow-up instead of retraining a full 48-model
+four-package matrix. In this profile the mask order is `M,T2,P,W`, where `T2`
+is `T2M` and `P` is `MSLP`. The eight masks with `T2==P` are exactly the
+already-trained MTW combinations, so the follow-up trains only the eight
+T2M-only/MSLP-only masks:
+
+- new S2 masks: `0010,0011,0100,0101,1010,1011,1100,1101`;
+- reused MTW masks: `0000,0001,0110,0111,1000,1001,1110,1111`.
+
+Use the completed MTW formal tag as `BASE_MTW_RUN_TAG`; this reuses its three
+shared q-core S1 anchors and the eight coupled MTW S2 checkpoints, while
+building/auditing the full 16-mask `mt2pw_*` dataset set for provenance.
+Common-core, endpoint feature importance and ALE are disabled by default for
+this follow-up; the main deliverable is the 4-group Shapley/interaction
+analysis.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=qcore_hybrid_mt2pw_formal_v1_20260708 \
+GROUP_PROFILE=mt2pw \
+BASE_MTW_RUN_TAG=qcore_hybrid_mtw_formal_v1_20260703 \
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_fair_datasets/qcore_units_v2_20260701 \
+SEEDS=42:2025:20260702 \
+OBS_ROOT=/path/to/hourly/station/csv/root \
+bash submit_q_core_hybrid_factorial.sh
+```
+
+For a scheduler dry run, add `DRY_RUN=1`. For a 2000-row smoke test of the new
+profile, also set `RUN_TAG` to a smoke tag, `SEEDS=42`, `LIMIT_ROWS=2000`,
+`LIMIT_SAMPLES=2000`, `BOOTSTRAP_ITERS=20`, and short S2 step counts. The
+artifact audit for a formal `mt2pw` run expects 51 triplets: 3 reused S1
+triplets, 24 newly trained split-only S2 triplets, and 24 reused coupled MTW S2
+triplets.
+
 Use a separate tag for the required 2000-row end-to-end smoke test. The short
 step counts are inherited by every submitted training job:
 
