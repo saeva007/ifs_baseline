@@ -35,16 +35,18 @@ from pmst_overlap_common import (
     CANONICAL_UNIT_POLICY_VERSION,
     PM_QC_POLICY_VERSION,
     Q_CORE_NO_RH2M_DYN_FEATURES,
+    Q_CORE_T925_NO_RH2M_DYN_FEATURES,
     compute_fog_features_pmst,
 )
 
 
-EXPECTED_ORDER = list(Q_CORE_NO_RH2M_DYN_FEATURES)
 GROUP_PROFILES: Dict[str, Dict[str, object]] = {
     "mtw": {
         "dataset_prefix": "mtw",
         "description": "Original three-package factorial: moisture, thermal/pressure, wind.",
         "order": ("M", "T", "W"),
+        "feature_set": "q_core_no_rh2m",
+        "dynamic_order": tuple(Q_CORE_NO_RH2M_DYN_FEATURES),
         "groups": {
             "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
             "T": ("T2M", "MSLP"),
@@ -55,6 +57,8 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
         "dataset_prefix": "mt2pw",
         "description": "T-package follow-up factorial: split T into T2M and MSLP.",
         "order": ("M", "T2", "P", "W"),
+        "feature_set": "q_core_no_rh2m",
+        "dynamic_order": tuple(Q_CORE_NO_RH2M_DYN_FEATURES),
         "groups": {
             "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
             "T2": ("T2M",),
@@ -62,8 +66,35 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
             "W": ("U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"),
         },
     },
+    "m925b": {
+        "dataset_prefix": "m925b",
+        "description": (
+            "Three-package joint-structure factorial: low-level moisture/thermodynamic state, "
+            "explicit T925, and the remaining q-core background."
+        ),
+        "order": ("M", "H", "B"),
+        "feature_set": "q_core_t925_no_rh2m",
+        "dynamic_order": tuple(Q_CORE_T925_NO_RH2M_DYN_FEATURES),
+        "groups": {
+            "M": ("Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"),
+            "H": ("T_925",),
+            "B": (
+                "T2M",
+                "MSLP",
+                "U10",
+                "V10",
+                "WSPD10",
+                "WDIR10",
+                "U_925",
+                "V_925",
+                "WSPD925",
+            ),
+        },
+    },
 }
 GROUP_PROFILE = "mtw"
+FEATURE_SET = str(GROUP_PROFILES[GROUP_PROFILE]["feature_set"])
+EXPECTED_ORDER = list(GROUP_PROFILES[GROUP_PROFILE]["dynamic_order"])  # type: ignore[arg-type]
 GROUPS: Dict[str, Tuple[str, ...]] = dict(GROUP_PROFILES[GROUP_PROFILE]["groups"])  # type: ignore[arg-type]
 GROUP_ORDER = tuple(GROUP_PROFILES[GROUP_PROFILE]["order"])  # type: ignore[arg-type]
 DATASET_PREFIX = str(GROUP_PROFILES[GROUP_PROFILE]["dataset_prefix"])
@@ -75,24 +106,39 @@ DEFAULT_ENDPOINT_FOG_ATOL = 5.0e-5
 
 
 def set_group_profile(profile: str, dataset_prefix: str | None = None) -> None:
-    global GROUP_PROFILE, GROUPS, GROUP_ORDER, DATASET_PREFIX
+    global GROUP_PROFILE, FEATURE_SET, EXPECTED_ORDER, GROUPS, GROUP_ORDER, DATASET_PREFIX
     key = str(profile).strip().lower()
     if key not in GROUP_PROFILES:
         raise ValueError(f"Unknown group profile {profile!r}; choose from {sorted(GROUP_PROFILES)}")
     spec = GROUP_PROFILES[key]
     groups = {str(name): tuple(features) for name, features in dict(spec["groups"]).items()}
     order = tuple(str(name) for name in tuple(spec["order"]))
+    dynamic_order = [str(name) for name in tuple(spec["dynamic_order"])]
+    feature_set = str(spec["feature_set"])
     missing = [name for name in order if name not in groups]
     if missing:
         raise ValueError(f"Group profile {profile!r} has missing group definitions: {missing}")
     for group, features in groups.items():
-        absent = [feature for feature in features if feature not in EXPECTED_ORDER]
+        absent = [feature for feature in features if feature not in dynamic_order]
         if absent:
             raise ValueError(f"Group profile {profile!r}/{group} uses unknown dynamic features: {absent}")
+    flat_features = [feature for features in groups.values() for feature in features]
+    duplicates = sorted({feature for feature in flat_features if flat_features.count(feature) > 1})
+    if duplicates:
+        raise ValueError(f"Group profile {profile!r} assigns features to more than one group: {duplicates}")
+    covered = set(flat_features)
+    expected_source_features = set(dynamic_order) - set(SHARED_DYNAMIC)
+    if covered != expected_source_features:
+        raise ValueError(
+            f"Group profile {profile!r} must partition every source-dependent dynamic feature; "
+            f"missing={sorted(expected_source_features - covered)}, extra={sorted(covered - expected_source_features)}"
+        )
     prefix = str(dataset_prefix).strip() if dataset_prefix else str(spec["dataset_prefix"])
     if not prefix or any(ch.isspace() for ch in prefix) or "/" in prefix or "\\" in prefix:
         raise ValueError(f"Invalid dataset prefix: {prefix!r}")
     GROUP_PROFILE = key
+    FEATURE_SET = feature_set
+    EXPECTED_ORDER = dynamic_order
     GROUPS = groups
     GROUP_ORDER = order
     DATASET_PREFIX = prefix
@@ -195,8 +241,8 @@ def read_config(data_dir: Path) -> Dict[str, object]:
 def require_layout(data_dir: Path) -> Dict[str, object]:
     cfg = read_config(data_dir)
     order = [str(v) for v in cfg.get("dynamic_feature_order", [])]
-    if str(cfg.get("feature_set")) != "q_core_no_rh2m":
-        raise ValueError(f"{data_dir}: feature_set must be q_core_no_rh2m")
+    if str(cfg.get("feature_set")) != FEATURE_SET:
+        raise ValueError(f"{data_dir}: feature_set must be {FEATURE_SET}")
     if order != EXPECTED_ORDER:
         raise ValueError(f"{data_dir}: dynamic_feature_order mismatch\nactual={order}\nexpected={EXPECTED_ORDER}")
     if int(cfg.get("dyn_vars", -1)) != len(EXPECTED_ORDER):
@@ -471,7 +517,7 @@ def config_for_mask(
     cfg.update(
         {
             "dataset": "pangu_tianji_q_core_hybrid_factorial",
-            "feature_set": "q_core_no_rh2m",
+            "feature_set": FEATURE_SET,
             "hybrid_base_source": "pangu2025",
             "hybrid_donor_source": "tianji",
             "hybrid_group_profile": GROUP_PROFILE,
@@ -487,6 +533,14 @@ def config_for_mask(
             "row_alignment_policy": "ordered intersection of canonical (valid_time, station_id) keys in Pangu row order",
             "source_pair_coverage": {key: dict(value) for key, value in split_alignment.items()},
             "recomputed_fog_features": True,
+            "thermodynamic_source_channels_recomputed": False,
+            "thermodynamic_cross_source_policy": (
+                "For m925b, T_925 and the M channels are independently assigned by the factorial mask; "
+                "RH_925/DP_925/Q_925 are not re-derived after mixing because their cross-source consistency "
+                "is the experimental factor. Only downstream fog-engineered features are recomputed."
+                if GROUP_PROFILE == "m925b"
+                else "not_applicable"
+            ),
             "endpoint_source_fog_compatibility_atol": endpoint_fog_atol,
             "endpoint_identity_policy": (
                 "dynamic/static/time fields retain source checks; recomputed float32 fog features use a separately "
@@ -496,6 +550,12 @@ def config_for_mask(
             "pm_qc_policy": PM_QC_POLICY_VERSION,
             "hybrid_smoke_limit_rows": int(limit_rows),
             "scientific_role": "controlled source-block retraining attribution; not a single-variable causal effect",
+            "joint_structure_interpretation": (
+                "For m925b, the M:H interaction is evidence of predictive complementarity under retraining; "
+                "it is not by itself proof of dynamical-equation consistency."
+                if GROUP_PROFILE == "m925b"
+                else None
+            ),
         }
     )
     return cfg

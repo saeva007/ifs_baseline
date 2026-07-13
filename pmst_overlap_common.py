@@ -125,6 +125,23 @@ Q_CORE_NO_RH2M_PMST_FEATURES: List[str] = [
     "Q_1000",
     "Q_925",
 ]
+Q_CORE_T925_NO_RH2M_PMST_FEATURES: List[str] = [
+    "T2M",
+    "MSLP",
+    "U10",
+    "WSPD10",
+    "V10",
+    "WDIR10",
+    "T_925",
+    "RH_925",
+    "U_925",
+    "WSPD925",
+    "V_925",
+    "DP_1000",
+    "DP_925",
+    "Q_1000",
+    "Q_925",
+]
 COMPACT_COMMON_CORE_DYN_FEATURES: List[str] = [
     *COMPACT_COMMON_CORE_PMST_FEATURES,
     "ZENITH",
@@ -133,6 +150,12 @@ COMPACT_COMMON_CORE_DYN_FEATURES: List[str] = [
 ]
 Q_CORE_NO_RH2M_DYN_FEATURES: List[str] = [
     *Q_CORE_NO_RH2M_PMST_FEATURES,
+    "ZENITH",
+    "PM10_ugm3",
+    "PM25_ugm3",
+]
+Q_CORE_T925_NO_RH2M_DYN_FEATURES: List[str] = [
+    *Q_CORE_T925_NO_RH2M_PMST_FEATURES,
     "ZENITH",
     "PM10_ugm3",
     "PM25_ugm3",
@@ -171,6 +194,7 @@ FEATURE_SET_CHOICES: Tuple[str, ...] = (
     "compact_common_core",
     "compact_common_core_no_rh2m",
     "q_core_no_rh2m",
+    "q_core_t925_no_rh2m",
     "overlap_full",
     "source_full",
 )
@@ -181,6 +205,7 @@ PM_CONCENTRATION_MAX_UGM3 = 10000.0
 LEGACY_PM_1E12_UNITS = "legacy_kgm3_times_1e12"
 CANONICAL_DYNAMIC_UNITS: Dict[str, str] = {
     "T2M": "K",
+    "T_925": "K",
     "MSLP": "Pa",
     "RH2M": "%",
     "RH_925": "%",
@@ -599,6 +624,8 @@ def resolve_pmst_feature_set(feature_set: str, available_features: Optional[Iter
         key = "compact_common_core_no_rh2m"
     if key in {"q_core", "q1000_core", "q1000_core_no_rh2m", "q_core_common", "q_core_no_rh"}:
         key = "q_core_no_rh2m"
+    if key in {"q_core_t925", "q925_thermo_core", "q_core_t925_no_rh", "q_core_plus_t925"}:
+        key = "q_core_t925_no_rh2m"
     if key in {"full", "overlap", "overlap_canonical"}:
         key = "overlap_full"
     if key in {"all", "all_available", "source"}:
@@ -609,6 +636,8 @@ def resolve_pmst_feature_set(feature_set: str, available_features: Optional[Iter
         return list(COMPACT_COMMON_CORE_PMST_FEATURES)
     if key == "q_core_no_rh2m":
         return list(Q_CORE_NO_RH2M_PMST_FEATURES)
+    if key == "q_core_t925_no_rh2m":
+        return list(Q_CORE_T925_NO_RH2M_PMST_FEATURES)
     if key == "overlap_full":
         return list(OVERLAP_CANONICAL)
     if key == "source_full":
@@ -641,6 +670,8 @@ def _feature_set_key(feature_set: str) -> str:
         return "compact_common_core_no_rh2m"
     if key in {"q_core", "q1000_core", "q1000_core_no_rh2m", "q_core_common", "q_core_no_rh"}:
         return "q_core_no_rh2m"
+    if key in {"q_core_t925", "q925_thermo_core", "q_core_t925_no_rh", "q_core_plus_t925"}:
+        return "q_core_t925_no_rh2m"
     if key in {"full", "overlap", "overlap_canonical"}:
         return "overlap_full"
     if key in {"all", "all_available", "source"}:
@@ -671,6 +702,8 @@ def dynamic_feature_order_for_feature_set(
         met = list(COMPACT_COMMON_CORE_PMST_FEATURES)
     elif key == "q_core_no_rh2m":
         met = list(Q_CORE_NO_RH2M_PMST_FEATURES)
+    elif key == "q_core_t925_no_rh2m":
+        met = list(Q_CORE_T925_NO_RH2M_PMST_FEATURES)
     elif key == "common_core":
         met = list(COMMON_CORE_PMST_FEATURES)
     elif key == "overlap_full":

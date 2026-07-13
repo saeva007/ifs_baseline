@@ -11,6 +11,7 @@ import unittest
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -24,10 +25,18 @@ from analyze_q_core_hybrid_factorial import (
     set_group_profile as set_analysis_group_profile,
     shapley_values,
 )
+from analyze_q_core_t925_joint_structure import (
+    AlignedSplit,
+    event_linkage,
+    qsat_kgkg,
+    rff,
+    rff_sum,
+)
 from build_q_core_hybrid_factorial import EXPECTED_ORDER, GROUPS
 from pmst_overlap_common import (
     CANONICAL_UNIT_POLICY_VERSION,
     PM_QC_POLICY_VERSION,
+    Q_CORE_T925_NO_RH2M_DYN_FEATURES,
     compute_fog_features_pmst,
 )
 
@@ -47,10 +56,19 @@ def workspace_temp_dir():
         shutil.rmtree(path, ignore_errors=True)
 
 
-def write_source(root: Path, name: str, dyn: np.ndarray, y: np.ndarray, canonical_pangu: bool) -> Path:
+def write_source(
+    root: Path,
+    name: str,
+    dyn: np.ndarray,
+    y: np.ndarray,
+    canonical_pangu: bool,
+    order: list[str] | None = None,
+    feature_set: str = "q_core_no_rh2m",
+) -> Path:
+    order = list(EXPECTED_ORDER if order is None else order)
     data_dir = root / name
     data_dir.mkdir()
-    fog = compute_fog_features_pmst(dyn, WINDOW, len(EXPECTED_ORDER), EXPECTED_ORDER)
+    fog = compute_fog_features_pmst(dyn, WINDOW, len(order), order)
     rng = np.random.default_rng(991)
     static = rng.normal(size=(len(dyn), STATIC_DIM)).astype(np.float32)
     cyc = rng.normal(size=(len(dyn), CYCLICAL_DIM)).astype(np.float32)
@@ -67,9 +85,9 @@ def write_source(root: Path, name: str, dyn: np.ndarray, y: np.ndarray, canonica
     ).to_csv(data_dir / "meta_train.csv", index=False)
     cfg = {
         "dataset": name,
-        "feature_set": "q_core_no_rh2m",
-        "dynamic_feature_order": EXPECTED_ORDER,
-        "dyn_vars": len(EXPECTED_ORDER),
+        "feature_set": feature_set,
+        "dynamic_feature_order": order,
+        "dyn_vars": len(order),
         "window": WINDOW,
         "fe_dim": int(fog.shape[1] + CYCLICAL_DIM),
         "zero_filled_pmst_features": [],
@@ -235,6 +253,71 @@ class HybridBuilderTest(unittest.TestCase):
             self.assertEqual(cfg["replaced_feature_groups"], ["T2"])
             self.assertEqual(cfg["replaced_features"], ["T2M"])
 
+    def test_m925b_profile_isolates_explicit_t925_from_moisture_state(self) -> None:
+        with workspace_temp_dir() as root:
+            order = list(Q_CORE_T925_NO_RH2M_DYN_FEATURES)
+            rng = np.random.default_rng(925)
+            n = 8
+            p_dyn = rng.normal(size=(n, WINDOW, len(order))).astype(np.float32)
+            p_dyn[:, :, order.index("T_925")] = 275.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("T2M")] = 278.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("Q_925")] = 0.006 + 0.0002 * rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("Q_1000")] = 0.007 + 0.0002 * rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("RH_925")] = 75.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("DP_925")] = 271.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("DP_1000")] = 273.0 + rng.normal(size=(n, WINDOW))
+            t_dyn = p_dyn.copy()
+            moisture = {"Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"}
+            for feature in moisture:
+                t_dyn[:, :, order.index(feature)] += np.float32(0.01)
+            t_dyn[:, :, order.index("T_925")] += np.float32(2.0)
+            for feature in set(order) - moisture - {"T_925", "ZENITH", "PM10_ugm3", "PM25_ugm3"}:
+                t_dyn[:, :, order.index(feature)] += np.float32(0.25)
+            y = np.asarray([300, 800, 5000, 5000, 800, 300, 5000, 5000], dtype=np.float32)
+            pangu = write_source(
+                root, "pangu", p_dyn, y, canonical_pangu=True,
+                order=order, feature_set="q_core_t925_no_rh2m",
+            )
+            tianji = write_source(
+                root, "tianji", t_dyn, y, canonical_pangu=False,
+                order=order, feature_set="q_core_t925_no_rh2m",
+            )
+            out = root / "hybrids"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
+                    "--pangu-dir", str(pangu),
+                    "--tianji-dir", str(tianji),
+                    "--out-root", str(out),
+                    "--splits", "train",
+                    "--group-profile", "m925b",
+                    "--masks", "000,010,100,111",
+                    "--chunk-rows", "3",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue(np.array_equal(np.load(out / "m925b_000" / "X_train.npy"), np.load(pangu / "X_train.npy")))
+            self.assertTrue(np.array_equal(np.load(out / "m925b_111" / "X_train.npy"), np.load(tianji / "X_train.npy")))
+            t925_only = np.load(out / "m925b_010" / "X_train.npy")[:, : WINDOW * len(order)].reshape(n, WINDOW, len(order))
+            moisture_only = np.load(out / "m925b_100" / "X_train.npy")[:, : WINDOW * len(order)].reshape(n, WINDOW, len(order))
+            for idx, feature in enumerate(order):
+                self.assertTrue(
+                    np.array_equal(t925_only[:, :, idx], t_dyn[:, :, idx] if feature == "T_925" else p_dyn[:, :, idx]),
+                    feature,
+                )
+                self.assertTrue(
+                    np.array_equal(moisture_only[:, :, idx], t_dyn[:, :, idx] if feature in moisture else p_dyn[:, :, idx]),
+                    feature,
+                )
+            cfg = json.loads((out / "m925b_010" / "dataset_build_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(cfg["hybrid_group_profile"], "m925b")
+            self.assertEqual(cfg["replaced_feature_groups"], ["H"])
+            self.assertFalse(cfg["thermodynamic_source_channels_recomputed"])
+            self.assertTrue(cfg["recomputed_fog_features"])
+
     def test_different_order_and_partial_overlap_are_aligned(self) -> None:
         with workspace_temp_dir() as root:
             rng = np.random.default_rng(5)
@@ -317,6 +400,193 @@ class ArtifactAndAleTest(unittest.TestCase):
     def test_centered_ale_has_weighted_zero_mean(self) -> None:
         curve = centered_curve(np.asarray([0.1, -0.02, 0.04]), np.asarray([10, 20, 30]))
         self.assertAlmostEqual(float(np.average(curve, weights=[10, 20, 30])), 0.0, places=12)
+
+    def test_t925_joint_helpers_are_numerically_stable(self) -> None:
+        temperature = np.asarray([260.0, 275.0, 290.0])
+        saturation = qsat_kgkg(temperature)
+        self.assertTrue(np.all(np.diff(saturation) > 0.0))
+        rng = np.random.default_rng(77)
+        values = rng.uniform(0.0, 1.0, size=(37, 2))
+        omega = rng.normal(size=(2, 32))
+        phase = rng.uniform(0.0, 2.0 * np.pi, size=32)
+        self.assertTrue(np.allclose(rff_sum(values, omega, phase, chunk_rows=7), rff(values, omega, phase).sum(axis=0)))
+
+    def test_event_linkage_accepts_factorial_case_category_schema(self) -> None:
+        with workspace_temp_dir() as root:
+            times = pd.date_range("2025-01-01", periods=4, freq="h", tz="UTC")
+            keys = pd.DataFrame(
+                {
+                    "time_utc": times,
+                    "time_key": times.strftime("%Y-%m-%d %H:%M:%S"),
+                    "station_key": ["50001", "50002", "50003", "50004"],
+                    "source_row": np.arange(4),
+                }
+            )
+            values = {}
+            for source in ("pangu", "tianji", "era5_reference_analysis"):
+                values[source] = {
+                    "T_925": np.full((4, WINDOW), 275.0, dtype=np.float32),
+                    "Q_925": np.full((4, WINDOW), 0.006, dtype=np.float32),
+                    "RH_925": np.full((4, WINDOW), 75.0, dtype=np.float32),
+                }
+            split = AlignedSplit(
+                keys=keys,
+                positions={source: np.arange(4) for source in values},
+                values=values,
+                visibility_m=np.asarray([300.0, 500.0, 700.0, 900.0]),
+                orography_m=np.asarray([20.0, 30.0, 40.0, 50.0]),
+            )
+            pd.DataFrame(
+                {
+                    "time_utc": times,
+                    "station_key": keys["station_key"],
+                    "case_category": [
+                        "tianji_hit_pangu_miss",
+                        "tianji_hit_pangu_miss",
+                        "both_hit",
+                        "pangu_hit_tianji_miss",
+                    ],
+                }
+            ).to_csv(root / "event_case_control_samples.csv.gz", index=False, compression="gzip")
+            losses = {
+                "pangu": {
+                    "standardized_joint_vector_rmse": np.asarray([4.0, 9.0, 1.0, 1.0]),
+                    "saturation_deficit_rmse_gkg": np.asarray([1.0, 4.0, 1.0, 1.0]),
+                },
+                "tianji": {
+                    "standardized_joint_vector_rmse": np.asarray([1.0, 1.0, 1.0, 4.0]),
+                    "saturation_deficit_rmse_gkg": np.asarray([0.25, 1.0, 1.0, 4.0]),
+                },
+            }
+            summary, info = event_linkage(
+                root,
+                split,
+                losses,
+                SimpleNamespace(low_vis_threshold_m=1000.0, bootstrap_seed=8, bootstrap_iters=20),
+            )
+            self.assertTrue(info["enabled"])
+            self.assertEqual(info["target_category_rows"], 2)
+            self.assertGreater(info["target_joint_error_delta_ci"][0], 0.0)
+            self.assertIn("tianji_hit_pangu_miss", set(summary["category"]))
+
+    def test_joint_structure_cli_smoke(self) -> None:
+        with workspace_temp_dir() as root:
+            order = list(Q_CORE_T925_NO_RH2M_DYN_FEATURES)
+            rng = np.random.default_rng(92514)
+            data_root = root / "data"
+            analysis_dir = root / "factorial"
+            analysis_dir.mkdir()
+            source_dirs = {}
+
+            def write_joint_dataset(source: str, t_error: float, q_error: float) -> Path:
+                path = data_root / source
+                path.mkdir(parents=True)
+                for split, n, start in (("train", 72, "2025-01-01"), ("test", 96, "2025-02-01")):
+                    dyn = np.zeros((n, WINDOW, len(order)), dtype=np.float32)
+                    base_t = 274.0 + rng.normal(0.0, 1.2, size=(n, WINDOW))
+                    base_q = 0.006 + rng.normal(0.0, 0.00025, size=(n, WINDOW))
+                    dyn[:, :, order.index("T_925")] = base_t + t_error
+                    dyn[:, :, order.index("Q_925")] = base_q + q_error
+                    dyn[:, :, order.index("Q_1000")] = base_q + 0.001 + q_error
+                    dyn[:, :, order.index("T2M")] = base_t + 3.0 + 0.25 * t_error
+                    dyn[:, :, order.index("RH_925")] = 78.0 - 2.0 * t_error + 1000.0 * q_error
+                    dyn[:, :, order.index("DP_925")] = base_t - 4.0 + 0.2 * t_error
+                    dyn[:, :, order.index("DP_1000")] = base_t - 2.0 + 0.2 * t_error
+                    dyn[:, :, order.index("MSLP")] = 101000.0
+                    fog = compute_fog_features_pmst(dyn, WINDOW, len(order), order)
+                    static = np.zeros((n, STATIC_DIM), dtype=np.float32)
+                    static[:, 2] = 100.0
+                    cyc = np.zeros((n, CYCLICAL_DIM), dtype=np.float32)
+                    x = np.concatenate([dyn.reshape(n, -1), static, fog, cyc], axis=1).astype(np.float32)
+                    np.save(path / f"X_{split}.npy", x)
+                    y = np.where(np.arange(n) % 4 == 0, 500.0, 5000.0).astype(np.float32)
+                    np.save(path / f"y_{split}.npy", y)
+                    pd.DataFrame(
+                        {
+                            "time": pd.date_range(start, periods=n, freq="h"),
+                            "station_id": 51000 + np.arange(n),
+                            "lat": 30.0,
+                            "lon": 110.0,
+                        }
+                    ).to_csv(path / f"meta_{split}.csv", index=False)
+                (path / "dataset_build_config.json").write_text(
+                    json.dumps(
+                        {
+                            "feature_set": "q_core_t925_no_rh2m",
+                            "dynamic_feature_order": order,
+                            "dyn_vars": len(order),
+                            "window": WINDOW,
+                            "fe_dim": int(fog.shape[1] + CYCLICAL_DIM),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return path
+
+            # Tianji is deliberately closer to the ERA5 reference analysis than Pangu.
+            source_dirs["era5"] = write_joint_dataset("era5", 0.0, 0.0)
+            source_dirs["tianji"] = write_joint_dataset("tianji", 0.3, 0.00005)
+            source_dirs["pangu"] = write_joint_dataset("pangu", 1.5, 0.00030)
+
+            metric_rows = []
+            interaction_rows = []
+            for seed in (42, 2025, 20260702):
+                for value in range(8):
+                    mask = f"{value:03b}"
+                    m, h, b = (int(bit) for bit in mask)
+                    metric_rows.append(
+                        {
+                            "seed": seed,
+                            "mask": mask,
+                            "low_vis_ap": 0.40 + 0.01 * m + 0.01 * h + 0.01 * b + 0.02 * m * h,
+                        }
+                    )
+                interaction_rows.append({"seed": seed, "metric": "low_vis_ap", "pair": "M:H", "interaction": 0.02})
+            pd.DataFrame(metric_rows).to_csv(analysis_dir / "hybrid_factorial_metrics_by_seed.csv", index=False)
+            pd.DataFrame(interaction_rows).to_csv(analysis_dir / "hybrid_second_order_interactions_by_seed.csv", index=False)
+            pd.DataFrame(
+                [{"metric": "low_vis_ap", "effect": "interaction", "term": "M:H", "ci_low": 0.01, "ci_high": 0.03}]
+            ).to_csv(analysis_dir / "hybrid_date_block_bootstrap_ci.csv", index=False)
+            pd.DataFrame(
+                {"metric": ["low_vis_ap"] * 20, "delta_all1_minus_all0": np.linspace(0.04, 0.08, 20)}
+            ).to_csv(analysis_dir / "hybrid_total_gap_bootstrap_draws.csv.gz", index=False, compression="gzip")
+            event_times = pd.date_range("2025-02-01", periods=12, freq="h", tz="UTC")
+            pd.DataFrame(
+                {
+                    "time_utc": event_times,
+                    "station_key": (51000 + np.arange(12)).astype(str),
+                    "case_category": ["tianji_hit_pangu_miss"] * 8 + ["both_hit"] * 4,
+                }
+            ).to_csv(analysis_dir / "event_case_control_samples.csv.gz", index=False, compression="gzip")
+
+            out = root / "out"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "analyze_q_core_t925_joint_structure.py"),
+                    "--pangu-dir", str(source_dirs["pangu"]),
+                    "--tianji-dir", str(source_dirs["tianji"]),
+                    "--era5-dir", str(source_dirs["era5"]),
+                    "--factorial-analysis-dir", str(analysis_dir),
+                    "--out-dir", str(out),
+                    "--fit-max-rows", "0",
+                    "--test-max-rows", "0",
+                    "--bootstrap-iters", "20",
+                    "--rff-dim", "32",
+                    "--rff-bandwidth-sample", "64",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report = json.loads((out / "joint_structure_analysis_report.json").read_text(encoding="utf-8"))
+            gate = json.loads((out / "joint_structure_evidence_gate.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["factorial_profile"], "m925b")
+            self.assertIn(gate["status"], {"joint_structure_supported", "joint_structure_not_fully_supported"})
+            self.assertTrue((out / "t925_q925_empirical_copula_quality.csv").is_file())
+            self.assertTrue((out / "fig_joint_saturation_deficit_quality.png").is_file())
+            self.assertTrue((out / "fig_m_t925_performance_interaction.svg").is_file())
 
     def test_ap_histogram_resolution_adapts_without_relaxing_error(self) -> None:
         sample = SampleSet(

@@ -115,7 +115,7 @@ case "${EXPERIMENT}" in
             exit 1
         fi
         ;;
-    s1_q_core_no_rh2m|s1_q_core|s1_q1000_core)
+    s1_q_core_no_rh2m|s1_q_core|s1_q1000_core|s1_q_core_t925_no_rh2m)
         if [ "${MODEL_ARCH}" = "static_rnn" ]; then
             TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
             LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"
@@ -348,7 +348,7 @@ case "${EXPERIMENT}" in
         LOWVIS_RNN_RUN_ID="${LOWVIS_RNN_RUN_ID:-exp_overlap_static_rnn_s2_ifs_q_core_no_rh2m_pm10_pm25}"
         STATIC_RNN_S2_DATA_DIR="${OVERLAP_S2_DATA_DIR:-${OVERLAP_IFS_Q_CORE_NO_RH2M_S2_DATA_DIR}}"
         ;;
-    s2_pangu2025_q_core_no_rh2m|s2_pangu2025_q_core|s2_pangu_q_core)
+    s2_pangu2025_q_core_no_rh2m|s2_pangu2025_q_core|s2_pangu_q_core|s2_q_core_t925_joint)
         if [ "${MODEL_ARCH}" != "static_rnn" ]; then echo "ERROR: ${EXPERIMENT} supports MODEL_ARCH=static_rnn only" >&2; exit 1; fi
         TRAIN_SCRIPT="${STATIC_RNN_TRAIN_SCRIPT}"
         LAUNCH_DIR="${STATIC_RNN_TRAIN_DIR}"

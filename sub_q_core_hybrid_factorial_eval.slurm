@@ -62,6 +62,12 @@ case "${GROUP_PROFILE}" in
         RUN_MASK_PREFIX="${RUN_MASK_PREFIX:-mt2pw}"
         SOURCE_PREFIX="${SOURCE_PREFIX:-qcore_hybrid_mt2pw_}"
         ;;
+    m925b)
+        MASKS="${MASKS:-000:001:010:011:100:101:110:111}"
+        HYBRID_DATASET_PREFIX="${HYBRID_DATASET_PREFIX:-m925b}"
+        RUN_MASK_PREFIX="${RUN_MASK_PREFIX:-m925b}"
+        SOURCE_PREFIX="${SOURCE_PREFIX:-qcore_joint_}"
+        ;;
     *)
         echo "ERROR: unsupported GROUP_PROFILE=${GROUP_PROFILE}" >&2
         exit 2

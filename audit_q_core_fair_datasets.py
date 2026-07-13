@@ -20,32 +20,30 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from pmst_overlap_common import PM_QC_POLICY_VERSION
+from pmst_overlap_common import (
+    PM_QC_POLICY_VERSION,
+    Q_CORE_NO_RH2M_DYN_FEATURES,
+    Q_CORE_T925_NO_RH2M_DYN_FEATURES,
+)
 
 
-EXPECTED_ORDER = [
-    "T2M",
-    "MSLP",
-    "U10",
-    "WSPD10",
-    "V10",
-    "WDIR10",
-    "RH_925",
-    "U_925",
-    "WSPD925",
-    "V_925",
-    "DP_1000",
-    "DP_925",
-    "Q_1000",
-    "Q_925",
-    "ZENITH",
-    "PM10_ugm3",
-    "PM25_ugm3",
-]
+AUDIT_PROFILES = {
+    "qcore": {
+        "feature_set": "q_core_no_rh2m",
+        "order": list(Q_CORE_NO_RH2M_DYN_FEATURES),
+    },
+    "qcore_t925": {
+        "feature_set": "q_core_t925_no_rh2m",
+        "order": list(Q_CORE_T925_NO_RH2M_DYN_FEATURES),
+    },
+}
+AUDIT_PROFILE = "qcore"
+EXPECTED_ORDER = list(AUDIT_PROFILES[AUDIT_PROFILE]["order"])
 EXPECTED_FEATURE_SET = "q_core_no_rh2m"
 EXPECTED_UNIT_POLICY = "pmst_canonical_units_v2_20260630"
 EXPECTED_CANONICAL_UNITS = {
     "T2M": "K",
+    "T_925": "K",
     "MSLP": "Pa",
     "RH_925": "%",
     "DP_1000": "K",
@@ -61,6 +59,16 @@ DEFAULT_NOMINAL_YEAR = 2025
 DEFAULT_NEXT_YEAR_SPILL_DAYS = 1
 S2_SPLITS = ("train", "val", "test")
 S1_SPLITS = ("train", "val")
+
+
+def set_audit_profile(profile: str) -> None:
+    global AUDIT_PROFILE, EXPECTED_ORDER, EXPECTED_FEATURE_SET
+    key = str(profile).strip().lower()
+    if key not in AUDIT_PROFILES:
+        raise ValueError(f"Unknown audit profile {profile!r}; choose from {sorted(AUDIT_PROFILES)}")
+    AUDIT_PROFILE = key
+    EXPECTED_ORDER = list(AUDIT_PROFILES[key]["order"])
+    EXPECTED_FEATURE_SET = str(AUDIT_PROFILES[key]["feature_set"])
 
 
 def parse_specs(text: str) -> Dict[str, Path]:
@@ -279,6 +287,7 @@ def iter_row_slices(n_rows: int, chunk_rows: int, max_rows: int) -> Iterable[sli
 def plausible_bounds(feature: str) -> Tuple[float, float] | None:
     return {
         "T2M": (180.0, 340.0),
+        "T_925": (180.0, 340.0),
         "MSLP": (50000.0, 120000.0),
         "U10": (-150.0, 150.0),
         "WSPD10": (0.0, 150.0),
@@ -383,7 +392,7 @@ def audit_dataset(
     unit_mismatch = {
         name: (declared_units.get(name), expected)
         for name, expected in EXPECTED_CANONICAL_UNITS.items()
-        if declared_units.get(name) != expected
+        if name in EXPECTED_ORDER and declared_units.get(name) != expected
     }
     if unit_mismatch:
         raise ValueError(f"{tag}: canonical dynamic-unit metadata mismatch: {unit_mismatch}")
@@ -432,6 +441,7 @@ def audit_dataset(
                 f"got lead={lead}"
             )
     lineage_evidence = "dataset_config"
+    t925_lineage_evidence = "not_applicable"
     if require_meta and tag.lower() in {"era5", "era5_2025"}:
         native = {str(v) for v in cfg.get("native_source_features", [])}
         derived = {str(v) for v in cfg.get("derived_source_features", [])}
@@ -461,6 +471,13 @@ def audit_dataset(
                 lineage_evidence = "legacy Tianji builder direct q1000/q925 mapping"
             else:
                 raise ValueError(f"{tag}: Q_1000 is not documented as a native source field")
+    if require_meta and AUDIT_PROFILE == "qcore_t925":
+        native = {str(v) for v in cfg.get("native_source_features", [])}
+        if "T_925" not in native:
+            raise ValueError(
+                f"{tag}: T_925 must be documented as a native source field for the joint-structure experiment"
+            )
+        t925_lineage_evidence = "native source T_925 documented by dataset builder"
     if require_meta and tag.lower() == "ifs" and "native IFS" not in str(cfg.get("q1000_provenance", "")):
         dataset_name = str(cfg.get("dataset", ""))
         derived = cfg.get("derived_overlap_vars", {})
@@ -526,6 +543,7 @@ def audit_dataset(
         "label_policy_source": label_policy_source,
         "time_axis_evidence": time_axis_evidence,
         "q1000_lineage_evidence": lineage_evidence,
+        "t925_lineage_evidence": t925_lineage_evidence,
         "splits": split_summary,
     }
 
@@ -760,6 +778,7 @@ def raise_stage_failure(stage: str, issues: Sequence[str]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--profile", default="qcore", choices=sorted(AUDIT_PROFILES))
     ap.add_argument("--sources", required=True, help="Semicolon-separated tag=/dataset/dir specs")
     ap.add_argument("--s1-dir", required=True, help="q-core S1 dataset directory")
     ap.add_argument("--out-dir", required=True)
@@ -777,6 +796,8 @@ def main() -> None:
     ap.add_argument("--expected-pangu-lead-min-hours", type=float, default=24.0)
     ap.add_argument("--expected-pangu-lead-max-hours", type=float, default=24.0)
     args = ap.parse_args()
+
+    set_audit_profile(args.profile)
 
     if args.expected_pangu_lead_min_hours > args.expected_pangu_lead_max_hours:
         ap.error("--expected-pangu-lead-min-hours cannot exceed --expected-pangu-lead-max-hours")
@@ -815,7 +836,7 @@ def main() -> None:
     s1_result: Dict[str, object] = {}
     try:
         s1_result = audit_dataset(
-            "s1_q_core_no_rh2m",
+            f"s1_{EXPECTED_FEATURE_SET}",
             s1_path,
             S1_SPLITS,
             require_meta=False,
@@ -825,7 +846,7 @@ def main() -> None:
             expected_pangu_lead_max_hours=args.expected_pangu_lead_max_hours,
         )
     except Exception as exc:
-        structural_issues.append(f"s1_q_core_no_rh2m: {type(exc).__name__}: {exc}")
+        structural_issues.append(f"s1_{EXPECTED_FEATURE_SET}: {type(exc).__name__}: {exc}")
 
     if structural_issues:
         write_failure_report(
@@ -876,7 +897,7 @@ def main() -> None:
             feature_issues.append(f"{tag}: feature scan failed: {type(exc).__name__}: {exc}")
     try:
         rows, issues = audit_dataset_features(
-            "s1_q_core_no_rh2m",
+            f"s1_{EXPECTED_FEATURE_SET}",
             s1_path,
             S1_SPLITS,
             s1_result["config"],
@@ -888,7 +909,7 @@ def main() -> None:
         feature_rows.extend(rows)
         feature_issues.extend(issues)
     except Exception as exc:
-        feature_issues.append(f"s1_q_core_no_rh2m: feature scan failed: {type(exc).__name__}: {exc}")
+        feature_issues.append(f"s1_{EXPECTED_FEATURE_SET}: feature scan failed: {type(exc).__name__}: {exc}")
 
     feature_df = pd.DataFrame(feature_rows)
     feature_df.to_csv(out_dir / "q_core_feature_quality.csv", index=False)
@@ -908,6 +929,7 @@ def main() -> None:
         raise_stage_failure("feature_quality_and_unit_checks", feature_issues)
     summary = {
         "status": "passed",
+        "audit_profile": AUDIT_PROFILE,
         "feature_set": EXPECTED_FEATURE_SET,
         "expected_dynamic_feature_order": EXPECTED_ORDER,
         "sources": results,

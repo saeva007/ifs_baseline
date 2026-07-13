@@ -393,6 +393,117 @@ date-block interval excludes zero, and all three seed effects are positive. If
 the gate fails, retain the null result and investigate the winning package;
 do not continue to a moisture-only claim.
 
+### T925--moisture joint-structure experiment
+
+The original four-source q-core omitted `T_925` because it was not present in
+the current IFS intersection. That omission is appropriate for the four-source
+fair score table, but it cannot test whether the Pangu--Tianji performance gap
+is associated with the joint low-level temperature--moisture state. The
+targeted Pangu/Tianji follow-up therefore adds native `T_925` to both sources
+and to the shared S1 anchor. It does **not** retrofit T925 only at evaluation
+time.
+
+Run `submit_q_core_t925_joint_structure.sh` as an independent experiment. Its
+`m925b` masks are in `M,H,B` order:
+
+- `M`: `Q_1000,DP_1000,Q_925,DP_925,RH_925`, interpreted as the existing
+  low-level moisture--thermodynamic state package rather than as pure moisture;
+- `H`: explicit `T_925`;
+- `B`: `T2M,MSLP,U10,V10,WSPD10,WDIR10,U_925,V_925,WSPD925`.
+
+Thus `000` is full Pangu, `111` is full Tianji, and the complete eight-cell
+factorial estimates the `M x T925` interaction while averaging over both
+background-source contexts. All 12 lead-time steps are replaced together and
+each cell is retrained from a same-seed q-core+T925 S1 checkpoint. The builder
+recomputes downstream fog-engineered features, but deliberately does not
+rederive `RH_925`, `DP_925`, or `Q_925` after mixing `M` and `T925`: their
+cross-source compatibility is the experimental contrast. This policy is
+recorded in every dataset config.
+
+The analysis pre-specifies three evidence layers:
+
+1. **Reference-analysis quality.** On the exact paired
+   `(valid_time, station_id)` test intersection, compare Pangu and Tianji with
+   ERA5 reference analysis using marginal T925/Q925 errors, the Bolton-form
+   925-hPa saturation-deficit error, temporal-tendency error, exact-reference
+   and quantile-matched near-saturation placement, and source QC. ERA5 is not
+   called truth.
+2. **Dependence and predictive interaction.** Remove train-fitted source
+   marginals with empirical-CDF transforms, then compare the T925--Q925 copula
+   with ERA5 using Gaussian-kernel MMD. The formal performance endpoint is the
+   retrained Low-vis AP Shapley `M:H` interaction; matched-FPR CSI/recall remain
+   secondary outcomes. A fixed-seed exact-kernel MMD on a 2000-row paired
+   subset must confirm the source ordering obtained from the full-sample random-
+   feature approximation.
+3. **Outcome linkage.** In true low-visibility cases, test whether the
+   standardized T925--Q925 joint error is larger for Pangu than Tianji in
+   `Tianji-hit/Pangu-miss` samples.
+
+Pangu's original architecture is a data-driven 3-D Earth-specific transformer,
+not a numerical solver that explicitly advances the atmospheric governing
+equations ([Bi et al., 2023](https://www.nature.com/articles/s41586-023-06185-3)).
+That motivates the hypothesis but does not establish that Pangu is physically
+inconsistent. MMD is a distributional two-sample distance
+([Gretton et al., 2012](https://www.jmlr.org/papers/v13/gretton12a.html)); fixed
+random Fourier features make the date bootstrap tractable
+([Rahimi and Recht, 2007](https://papers.nips.cc/paper/2007/hash/013a006f03dbc5392effeb8f18fda755-Abstract.html)); empirical copulas separate
+dependence from marginal distributions
+([Wilks, 2015](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.2414)); and
+the saturation calculation follows
+[Bolton (1980)](https://journals.ametsoc.org/doi/10.1175/1520-0493%281980%29108%3C1046%3ATCOEPT%3E2.0.CO%3B2).
+All confidence intervals resample paired UTC valid dates so station samples
+within the same weather day remain together, following the case-resampling
+principle of
+[Hamill (1999)](https://journals.ametsoc.org/abstract/journals/wefo/14/2/1520-0434_1999_014_0155_htfenp_2_0_co_2.xml).
+
+Use a fresh smoke tag first. This builds the full source datasets once, but
+limits the hybrid matrix, evaluation, training steps, and bootstrap:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=qcore_t925_joint_smoke_20260714 \
+SEEDS=42 LIMIT_ROWS=2000 LIMIT_SAMPLES=2000 \
+LOWVIS_RNN_S1_STEPS=20 LOWVIS_RNN_S2_A_STEPS=20 LOWVIS_RNN_S2_B_STEPS=40 \
+BOOTSTRAP_ITERS=50 TEST_MAX_ROWS=2000 RFF_DIM=64 \
+bash submit_q_core_t925_joint_structure.sh
+```
+
+Do not submit the formal matrix until the final
+`joint_structure_analysis_job` succeeds and
+`joint_structure_analysis_report.json` is present. Then reuse only the audited
+source datasets, not the smoke checkpoints or hybrids, under a fresh formal
+tag:
+
+```bash
+RUN_TAG=qcore_t925_joint_formal_v1_20260714 \
+DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_t925_joint_datasets/qcore_t925_joint_smoke_20260714 \
+RESUME_EXISTING_DATA=1 \
+SEEDS=42:2025:20260702 \
+BOOTSTRAP_ITERS=1000 TEST_MAX_ROWS=0 RFF_DIM=512 \
+bash submit_q_core_t925_joint_structure.sh
+```
+
+The formal artifact gate expects 27 complete checkpoint/scaler/config
+triplets: three S1 anchors plus 24 independently trained S2 models. The primary
+claim gate is intentionally conjunctive: (i) Pangu has significantly larger
+saturation-deficit RMSE and copula MMD than Tianji, (ii) the Low-vis AP `M:H`
+interaction is positive in all three seeds with a date-block interval above
+zero and the `111-000` AP gap is positive, and (iii) the asymmetric-event joint
+error interval is above zero. Failure of any layer is reported as
+`joint_structure_not_fully_supported`; secondary diagnostics cannot rescue the
+primary claim and are not multiplicity-tested confirmatory endpoints.
+
+Outputs are written below
+`paper_eval_results_pm10_pm25_journal/q_core_t925_joint/<RUN_TAG>/`. The final
+analysis produces source-data CSV files, two JSON evidence reports, and four
+single-claim figures in PNG/PDF/SVG/TIFF: saturation-deficit quality, empirical-
+copula discrepancy, retrained `M x T925` performance interaction, and
+asymmetric-event joint-state error. A supported result may be stated only as a
+source-dependent low-level joint-structure contribution for Pangu-2025, 2025,
+12--23 h lead, and this low-visibility task. It does not prove a governing-
+equation violation and must not be generalized to all AI weather models.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do

@@ -38,6 +38,20 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
         "order": ("M", "T2", "P", "W"),
         "labels": {"M": "Moisture", "T2": "T2M", "P": "MSLP", "W": "Wind"},
     },
+    "m925b": {
+        "dataset_prefix": "m925b",
+        "source_prefix": "qcore_joint_",
+        "description": (
+            "Joint-structure factorial: low-level moisture/thermodynamic state, explicit T925, "
+            "and remaining q-core background."
+        ),
+        "order": ("M", "H", "B"),
+        "labels": {
+            "M": "Moisture/thermodynamic state",
+            "H": "T925",
+            "B": "Remaining q-core background",
+        },
+    },
 }
 GROUP_PROFILE = "mtw"
 GROUP_ORDER = tuple(GROUP_PROFILES[GROUP_PROFILE]["order"])  # type: ignore[arg-type]
@@ -47,6 +61,7 @@ SOURCE_PREFIX = str(GROUP_PROFILES[GROUP_PROFILE]["source_prefix"])
 PRIMARY_METRICS = ("low_vis_ap", "low_vis_csi_matched_fpr", "low_vis_recall_matched_fpr")
 EVENT_FEATURES = (
     "T2M",
+    "T_925",
     "MSLP",
     "WSPD10",
     "RH_925",
@@ -1465,6 +1480,43 @@ def main() -> None:
             "formal_three_seed_analysis": formal_three_seed,
             "next_step": "build M1000-only and M925-only hybrids" if gate_passed else "do not claim a moisture mechanism; investigate the winning package",
         }
+    elif GROUP_PROFILE == "m925b":
+        interaction_rows = interactions[
+            (interactions["metric"] == "low_vis_ap") & (interactions["pair"] == "M:H")
+        ].copy()
+        interaction_ci = bootstrap[
+            (bootstrap["metric"] == "low_vis_ap")
+            & (bootstrap["effect"] == "interaction")
+            & (bootstrap["term"] == "M:H")
+        ]
+        if interaction_rows.empty or interaction_ci.empty:
+            raise RuntimeError("m925b analysis is missing the Low-vis AP M:H interaction")
+        interaction_values = interaction_rows["interaction"].to_numpy(dtype=float)
+        ci_row = interaction_ci.iloc[0]
+        positive = bool(
+            formal_three_seed
+            and np.all(interaction_values > 0.0)
+            and float(ci_row["ci_low"]) > 0.0
+        )
+        gate = {
+            "status": "performance_interaction_supported" if positive else "performance_interaction_not_supported",
+            "criterion": (
+                "The Low-vis AP Shapley M:T925 interaction is positive in all three seeds and its "
+                "UTC-date block-bootstrap interval excludes zero."
+            ),
+            "interaction_pair": "M:H",
+            "interaction_mean": float(np.mean(interaction_values)),
+            "interaction_seed_values": [float(value) for value in interaction_values],
+            "interaction_ci": [float(ci_row["ci_low"]), float(ci_row["ci_high"])],
+            "formal_three_seed_analysis": formal_three_seed,
+            "next_step": (
+                "combine this predictive-complementarity result with ERA5-reference joint-quality and hit/miss evidence"
+            ),
+            "claim_limit": (
+                "A positive interaction supports complementarity of the M and T925 source blocks under retraining; "
+                "it does not alone prove physical-law consistency."
+            ),
+        }
     else:
         gate = {
             "status": "not_applicable",
@@ -1515,11 +1567,13 @@ def main() -> None:
             "enabled": bool(not availability_point.empty),
             "role": "Tianji common-core versus Tianji q-core paired comparison",
         },
+        "mechanism_gate": gate,
         "moisture_followup_gate": gate,
         "interpretation": "controlled source-block retraining attribution; not a single-variable causal effect",
         "era5_role": "reference analysis only",
     }
-    with (out_dir / "moisture_followup_gate.json").open("w", encoding="utf-8") as f:
+    gate_filename = "joint_structure_performance_gate.json" if GROUP_PROFILE == "m925b" else "moisture_followup_gate.json"
+    with (out_dir / gate_filename).open("w", encoding="utf-8") as f:
         json.dump(gate, f, ensure_ascii=False, indent=2)
     with (out_dir / "hybrid_factorial_analysis_report.json").open("w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
