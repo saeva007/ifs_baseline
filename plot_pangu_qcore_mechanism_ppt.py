@@ -121,9 +121,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dpi", type=int, default=300, help="PNG resolution.")
     parser.add_argument(
-        "--skip-principle",
+        "--include-principle",
         action="store_true",
-        help="Skip the conceptual NWP-versus-Pangu mechanism schematic.",
+        help="Also draw the conceptual NWP-versus-Pangu schematic (off by default).",
     )
     parser.add_argument(
         "--allow-missing-artifact-audit",
@@ -714,12 +714,11 @@ editability matters; use PNG for quick preview and PDF for print/archive.
 
 ## Recommended story order
 
-1. `00_weather_model_principle`: architecture context and the physical-consistency hypothesis. Do not present this as an experimentally proven mechanism.
-2. `01_qcore_fair_performance`: common q-core inputs still leave a significant Tianji advantage in AP, matched-FPR CSI and recall.
-3. `02_source_block_shapley`: controlled hybrid retraining localizes the gain mainly to T2M and moisture, with a smaller wind contribution and no robust MSLP contribution.
-4. `03_lowvis_observation_quality`: during observed low-visibility conditions Tianji is closer to station observations for T2M, 10-m wind speed and MSLP.
-5. `04_unique_event_hits`: the aggregate gain closes at event level; Tianji-only hits outnumber Pangu-only hits by about 2.16 to 1.
-6. `05_moisture_reference_caveat` (discussion/supplement): marginal Q errors against ERA5 reference analysis do not uniformly favour Tianji, so the joint-structure hypothesis remains plausible but unproven.
+1. `01_qcore_fair_performance`: common q-core inputs still leave a significant Tianji advantage in AP, matched-FPR CSI and recall.
+2. `02_source_block_shapley`: controlled hybrid retraining localizes the gain mainly to T2M and moisture, with a smaller wind contribution and no robust MSLP contribution.
+3. `03_lowvis_observation_quality`: during observed low-visibility conditions Tianji is closer to station observations for T2M, 10-m wind speed and MSLP.
+4. `04_unique_event_hits`: the aggregate gain closes at event level; Tianji-only hits outnumber Pangu-only hits by about 2.16 to 1.
+5. `05_moisture_reference_caveat` (discussion/supplement): marginal Q errors against ERA5 reference analysis do not uniformly favour Tianji, so the joint-structure hypothesis remains plausible but unproven.
 
 ## Claim boundary
 
@@ -761,7 +760,7 @@ def main() -> None:
     source_dir.mkdir(parents=True, exist_ok=True)
     generated: Dict[str, List[str]] = {}
 
-    if not args.skip_principle:
+    if args.include_principle:
         principle, files = plot_principle(out_dir, formats, args.dpi)
         principle.to_csv(source_dir / "00_weather_model_principle.csv", index=False)
         generated["00_weather_model_principle"] = files

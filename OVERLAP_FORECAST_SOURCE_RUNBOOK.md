@@ -994,10 +994,12 @@ sbatch --export=ALL,RUN_TAG=qcore_hybrid_mt2pw_formal_v1_20260708 \
 
 The default output is
 `paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/ppt_figures`.
-Each claim is a separate figure: model-principle context, fair q-core endpoints,
-source-block Shapley attribution, observation-anchored low-visibility quality,
-unique event hits, and the ERA5-reference moisture caveat. Every figure is
-written as editable SVG plus PDF/300-dpi PNG, with its own source-data CSV.
+Each claim is a separate figure: fair q-core endpoints, source-block Shapley
+attribution, observation-anchored low-visibility quality, unique event hits,
+and the ERA5-reference moisture caveat. The conceptual model-principle figure
+is disabled by default and is produced only with `--include-principle`. Every
+figure is written as editable SVG plus PDF/300-dpi PNG, with its own source-data
+CSV.
 `ppt_figure_manifest.json` records the evidence role and claim boundary, while
 `PPT_FIGURE_GUIDE.md` gives the recommended slide order. The physical-consistency
 schematic is a mechanism hypothesis; do not cite it as direct proof that Pangu
