@@ -977,6 +977,32 @@ direct paired differences. `global_shared` rows support all-source comparison;
 whether it was selected, so a truncated smoke run cannot be mistaken for the
 full analysis.
 
+## Pangu q-core mechanism figures for PPT
+
+After the formal `mt2pw` analysis and the 51-triplet artifact audit have both
+passed, draw the standalone presentation figures with the CPU-only plotting
+job. The entrypoint rejects smoke/incomplete matrices and does not import
+Torch/HIP.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+mkdir -p logs
+
+sbatch --export=ALL,RUN_TAG=qcore_hybrid_mt2pw_formal_v1_20260708 \
+  sub_pangu_qcore_mechanism_ppt.slurm
+```
+
+The default output is
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/ppt_figures`.
+Each claim is a separate figure: model-principle context, fair q-core endpoints,
+source-block Shapley attribution, observation-anchored low-visibility quality,
+unique event hits, and the ERA5-reference moisture caveat. Every figure is
+written as editable SVG plus PDF/300-dpi PNG, with its own source-data CSV.
+`ppt_figure_manifest.json` records the evidence role and claim boundary, while
+`PPT_FIGURE_GUIDE.md` gives the recommended slide order. The physical-consistency
+schematic is a mechanism hypothesis; do not cite it as direct proof that Pangu
+violates governing equations or conservation laws.
+
 ## Completion Checklist
 
 1. `dataset_build_config.json` for Tianji and IFS both contain
