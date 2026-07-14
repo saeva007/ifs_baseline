@@ -8,13 +8,15 @@
 #     H = explicit T925
 #     B = remaining source-dependent q-core variables
 #
-# Smoke example:
+# Optional confirmatory smoke example (diagnosis must be reviewed first):
+#   ENABLE_OPTIONAL_FACTORIAL=1 \
 #   RUN_TAG=qcore_t925_joint_smoke_$(date +%Y%m%d_%H%M%S) \
 #   SEEDS=42 LIMIT_ROWS=2000 LIMIT_SAMPLES=2000 \
 #   LOWVIS_RNN_S1_STEPS=20 LOWVIS_RNN_S2_A_STEPS=20 LOWVIS_RNN_S2_B_STEPS=40 \
 #   BOOTSTRAP_ITERS=50 TEST_MAX_ROWS=2000 bash submit_q_core_t925_joint_structure.sh
 #
-# Formal example:
+# Optional confirmatory formal example:
+#   ENABLE_OPTIONAL_FACTORIAL=1 \
 #   RUN_TAG=qcore_t925_joint_formal_v1_20260714 \
 #   PANGU2025_STATION_FILE=/.../pangu_station_2025_lead12_23h_canonical.nc \
 #   bash submit_q_core_t925_joint_structure.sh
@@ -25,6 +27,7 @@ BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 RUN_TAG="${RUN_TAG:?RUN_TAG is required and must be a fresh tag}"
+ENABLE_OPTIONAL_FACTORIAL="${ENABLE_OPTIONAL_FACTORIAL:-0}"
 SEEDS="${SEEDS:-42:2025:20260702}"
 MASKS="000:001:010:011:100:101:110:111"
 FEATURE_SET="q_core_t925_no_rh2m"
@@ -41,6 +44,13 @@ TEST_MAX_ROWS="${TEST_MAX_ROWS:-0}"
 RFF_DIM="${RFF_DIM:-512}"
 OBS_ROOT="${OBS_ROOT:-}"
 PANGU2025_STATION_FILE="${PANGU2025_STATION_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc}"
+
+if [[ "${ENABLE_OPTIONAL_FACTORIAL}" != "1" ]]; then
+  echo "ERROR: this launcher submits 3 S1 + 24 S2 optional confirmatory trainings." >&2
+  echo "Use submit_q_core_t925_diagnostics.sh for the default zero-training diagnosis." >&2
+  echo "Set ENABLE_OPTIONAL_FACTORIAL=1 only after the diagnostic evidence has been reviewed." >&2
+  exit 2
+fi
 
 DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/q_core_t925_joint_datasets/${RUN_TAG}}"
 S1_DATA_DIR="${S1_DATA_DIR:-${DATA_ROOT}/s1}"
@@ -237,7 +247,7 @@ analysis_job=$(submit factorial_analysis "${analysis_args[@]}" sub_q_core_hybrid
 
 analysis_dep="$(dep_arg "${analysis_job}")"
 joint_args=(
-  --export="ALL,RUN_TAG=${RUN_TAG},DATA_ROOT=${DATA_ROOT},PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},ERA5_DATA_DIR=${ERA5_DATA_DIR},EVAL_ROOT=${EVAL_ROOT},FACTORIAL_ANALYSIS_DIR=${EVAL_ROOT}/factorial_analysis,OUT_DIR=${EVAL_ROOT}/joint_structure_analysis,FIT_MAX_ROWS=${FIT_MAX_ROWS},TEST_MAX_ROWS=${TEST_MAX_ROWS},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},RFF_DIM=${RFF_DIM}"
+  --export="ALL,RUN_TAG=${RUN_TAG},ANALYSIS_MODE=factorial_confirmatory,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},ERA5_DATA_DIR=${ERA5_DATA_DIR},EVAL_ROOT=${EVAL_ROOT},EVENT_ANALYSIS_DIR=${EVAL_ROOT}/factorial_analysis,FACTORIAL_ANALYSIS_DIR=${EVAL_ROOT}/factorial_analysis,OUT_DIR=${EVAL_ROOT}/joint_structure_analysis,FIT_MAX_ROWS=${FIT_MAX_ROWS},TEST_MAX_ROWS=${TEST_MAX_ROWS},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},RFF_DIM=${RFF_DIM}"
 )
 [[ -z "${analysis_dep}" ]] || joint_args+=("${analysis_dep}")
 joint_job=$(submit joint_structure_analysis "${joint_args[@]}" sub_q_core_t925_joint_structure.slurm)

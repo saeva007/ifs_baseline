@@ -481,19 +481,24 @@ class ArtifactAndAleTest(unittest.TestCase):
             def write_joint_dataset(source: str, t_error: float, q_error: float) -> Path:
                 path = data_root / source
                 path.mkdir(parents=True)
+                source_order = list(order)
+                if source == "tianji":
+                    source_order = source_order[5:] + source_order[:5]
+                elif source == "era5":
+                    source_order = source_order[-3:] + source_order[:-3]
                 for split, n, start in (("train", 72, "2025-01-01"), ("test", 96, "2025-02-01")):
-                    dyn = np.zeros((n, WINDOW, len(order)), dtype=np.float32)
+                    dyn = np.zeros((n, WINDOW, len(source_order)), dtype=np.float32)
                     base_t = 274.0 + rng.normal(0.0, 1.2, size=(n, WINDOW))
                     base_q = 0.006 + rng.normal(0.0, 0.00025, size=(n, WINDOW))
-                    dyn[:, :, order.index("T_925")] = base_t + t_error
-                    dyn[:, :, order.index("Q_925")] = base_q + q_error
-                    dyn[:, :, order.index("Q_1000")] = base_q + 0.001 + q_error
-                    dyn[:, :, order.index("T2M")] = base_t + 3.0 + 0.25 * t_error
-                    dyn[:, :, order.index("RH_925")] = 78.0 - 2.0 * t_error + 1000.0 * q_error
-                    dyn[:, :, order.index("DP_925")] = base_t - 4.0 + 0.2 * t_error
-                    dyn[:, :, order.index("DP_1000")] = base_t - 2.0 + 0.2 * t_error
-                    dyn[:, :, order.index("MSLP")] = 101000.0
-                    fog = compute_fog_features_pmst(dyn, WINDOW, len(order), order)
+                    dyn[:, :, source_order.index("T_925")] = base_t + t_error
+                    dyn[:, :, source_order.index("Q_925")] = base_q + q_error
+                    dyn[:, :, source_order.index("Q_1000")] = base_q + 0.001 + q_error
+                    dyn[:, :, source_order.index("T2M")] = base_t + 3.0 + 0.25 * t_error
+                    dyn[:, :, source_order.index("RH_925")] = 78.0 - 2.0 * t_error + 1000.0 * q_error
+                    dyn[:, :, source_order.index("DP_925")] = base_t - 4.0 + 0.2 * t_error
+                    dyn[:, :, source_order.index("DP_1000")] = base_t - 2.0 + 0.2 * t_error
+                    dyn[:, :, source_order.index("MSLP")] = 101000.0
+                    fog = compute_fog_features_pmst(dyn, WINDOW, len(source_order), source_order)
                     static = np.zeros((n, STATIC_DIM), dtype=np.float32)
                     static[:, 2] = 100.0
                     cyc = np.zeros((n, CYCLICAL_DIM), dtype=np.float32)
@@ -512,11 +517,25 @@ class ArtifactAndAleTest(unittest.TestCase):
                 (path / "dataset_build_config.json").write_text(
                     json.dumps(
                         {
-                            "feature_set": "q_core_t925_no_rh2m",
-                            "dynamic_feature_order": order,
-                            "dyn_vars": len(order),
+                            "feature_set": "source_full",
+                            "dynamic_feature_order": source_order,
+                            "dyn_vars": len(source_order),
                             "window": WINDOW,
                             "fe_dim": int(fog.shape[1] + CYCLICAL_DIM),
+                            "canonical_unit_policy": CANONICAL_UNIT_POLICY_VERSION,
+                            "canonical_dynamic_units": {
+                                "T_925": "K",
+                                "Q_925": "kg kg-1",
+                                "RH_925": "%",
+                            },
+                            "time_coordinate": "UTC",
+                            "native_source_features": ["T_925", "Q_925", "RH_925"],
+                            "derived_source_features": [],
+                            "source_forecast_lead": (
+                                {"available": True, "min_hours": 12.0, "max_hours": 23.0}
+                                if source == "pangu"
+                                else {"available": False}
+                            ),
                         }
                     ),
                     encoding="utf-8",
@@ -568,6 +587,7 @@ class ArtifactAndAleTest(unittest.TestCase):
                     "--tianji-dir", str(source_dirs["tianji"]),
                     "--era5-dir", str(source_dirs["era5"]),
                     "--factorial-analysis-dir", str(analysis_dir),
+                    "--analysis-mode", "factorial_confirmatory",
                     "--out-dir", str(out),
                     "--fit-max-rows", "0",
                     "--test-max-rows", "0",
@@ -587,6 +607,38 @@ class ArtifactAndAleTest(unittest.TestCase):
             self.assertTrue((out / "t925_q925_empirical_copula_quality.csv").is_file())
             self.assertTrue((out / "fig_joint_saturation_deficit_quality.png").is_file())
             self.assertTrue((out / "fig_m_t925_performance_interaction.svg").is_file())
+
+            diagnostic_out = root / "diagnostic_only"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "analyze_q_core_t925_joint_structure.py"),
+                    "--pangu-dir", str(source_dirs["pangu"]),
+                    "--tianji-dir", str(source_dirs["tianji"]),
+                    "--era5-dir", str(source_dirs["era5"]),
+                    "--event-analysis-dir", str(analysis_dir),
+                    "--out-dir", str(diagnostic_out),
+                    "--fit-max-rows", "0",
+                    "--test-max-rows", "0",
+                    "--bootstrap-iters", "20",
+                    "--rff-dim", "32",
+                    "--rff-bandwidth-sample", "64",
+                    "--no-figures",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            diagnostic_report = json.loads(
+                (diagnostic_out / "joint_structure_analysis_report.json").read_text(encoding="utf-8")
+            )
+            diagnostic_gate = json.loads(
+                (diagnostic_out / "joint_structure_evidence_gate.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(diagnostic_report["analysis_mode"], "diagnostic_only")
+            self.assertEqual(diagnostic_report["new_training_models_used"], 0)
+            self.assertIsNone(diagnostic_gate["predictive_m_t925_interaction_supported"])
+            self.assertFalse((diagnostic_out / "m_t925_coherence_contrasts_by_seed.csv").exists())
 
     def test_ap_histogram_resolution_adapts_without_relaxing_error(self) -> None:
         sample = SampleSet(

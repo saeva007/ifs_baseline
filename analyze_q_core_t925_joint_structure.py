@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Paper-grade T925--moisture joint-structure diagnosis for Pangu versus Tianji.
 
-This script combines three deliberately distinct evidence layers:
+The default diagnostic-only mode combines two new evidence layers with the
+already-completed MTW/mt2pw performance experiment:
 
 1. paired source quality against ERA5 reference analysis;
-2. the retrained M x T925 interaction from the m925b factorial; and
-3. joint-state errors in Tianji-hit/Pangu-miss low-visibility cases.
+2. joint-state errors in existing Tianji-hit/Pangu-miss cases.
+
+An explicitly optional factorial-confirmatory mode can additionally read a
+retrained M x T925 interaction. It is not required for the default diagnosis.
 
 The analysis separates marginal accuracy from dependence using an empirical-
 copula MMD.  The Gaussian-kernel MMD is approximated with fixed random Fourier
@@ -43,6 +46,9 @@ import pandas as pd
 SOURCES = ("pangu", "tianji", "era5_reference_analysis")
 FORECAST_SOURCES = ("pangu", "tianji")
 FEATURES = ("T_925", "Q_925", "RH_925")
+ALLOWED_FEATURE_SETS = {"source_full", "q_core_t925_no_rh2m"}
+EXPECTED_UNIT_POLICY = "pmst_canonical_units_v2_20260630"
+EXPECTED_UNITS = {"T_925": "K", "Q_925": "kg kg-1", "RH_925": "%"}
 SOURCE_LABELS = {
     "pangu": "Pangu",
     "tianji": "Tianji",
@@ -58,6 +64,8 @@ class DatasetLayout:
     window: int
     dyn_vars: int
     fe_dim: int
+    feature_set: str
+    config: Dict[str, object]
 
 
 @dataclass
@@ -74,7 +82,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pangu-dir", required=True)
     ap.add_argument("--tianji-dir", required=True)
     ap.add_argument("--era5-dir", required=True)
-    ap.add_argument("--factorial-analysis-dir", required=True)
+    ap.add_argument(
+        "--analysis-mode",
+        choices=("diagnostic_only", "factorial_confirmatory"),
+        default="diagnostic_only",
+        help="diagnostic_only never requires or interprets newly trained M-H-B models.",
+    )
+    ap.add_argument("--event-analysis-dir", default="", help="Existing MTW/mt2pw analysis containing event samples.")
+    ap.add_argument("--factorial-analysis-dir", default="", help="Required only for factorial_confirmatory mode.")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--fit-max-rows", type=int, default=200000)
     ap.add_argument("--test-max-rows", type=int, default=200000)
@@ -84,11 +99,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--rff-bandwidth-sample", type=int, default=2000)
     ap.add_argument("--low-vis-threshold-m", type=float, default=1000.0)
     ap.add_argument("--near-saturation-quantile", type=float, default=0.10)
+    ap.add_argument("--min-event-coverage", type=float, default=0.80)
     ap.add_argument("--no-figures", action="store_true")
     return ap.parse_args()
 
 
-def load_layout(path: Path) -> DatasetLayout:
+def load_layout(path: Path, source: str) -> DatasetLayout:
     cfg_path = path / "dataset_build_config.json"
     with cfg_path.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
@@ -96,14 +112,54 @@ def load_layout(path: Path) -> DatasetLayout:
     missing = [name for name in FEATURES if name not in order]
     if missing:
         raise ValueError(f"{path}: q-core+T925 layout is missing {missing}; order={order}")
-    if str(cfg.get("feature_set")) != "q_core_t925_no_rh2m":
-        raise ValueError(f"{path}: expected feature_set=q_core_t925_no_rh2m")
+    feature_set = str(cfg.get("feature_set", "")).strip().lower().replace("-", "_")
+    if feature_set not in ALLOWED_FEATURE_SETS:
+        raise ValueError(f"{path}: feature_set={feature_set!r}; expected one of {sorted(ALLOWED_FEATURE_SETS)}")
+    if str(cfg.get("canonical_unit_policy", "")) != EXPECTED_UNIT_POLICY:
+        raise ValueError(
+            f"{path}: canonical_unit_policy predates {EXPECTED_UNIT_POLICY}; rebuild data before diagnosis"
+        )
+    declared_units = cfg.get("canonical_dynamic_units")
+    if not isinstance(declared_units, Mapping):
+        raise ValueError(f"{path}: canonical_dynamic_units metadata is missing")
+    mismatch = {
+        feature: (declared_units.get(feature), expected)
+        for feature, expected in EXPECTED_UNITS.items()
+        if declared_units.get(feature) != expected
+    }
+    if mismatch:
+        raise ValueError(f"{path}: canonical unit mismatch: {mismatch}")
+    if str(cfg.get("time_coordinate", "")).upper() != "UTC":
+        raise ValueError(f"{path}: time_coordinate must be explicitly recorded as UTC")
+    native = {str(value) for value in cfg.get("native_source_features", [])}
+    derived = {str(value) for value in cfg.get("derived_source_features", [])}
+    if "T_925" not in native:
+        raise ValueError(f"{path}: T_925 must be documented as a native source field")
+    if source in {"pangu", "tianji"} and "Q_925" not in native:
+        raise ValueError(f"{path}: {source} Q_925 must be documented as native")
+    if source == "era5_reference_analysis" and "Q_925" not in native:
+        if "Q_925" not in derived or not {"T_925", "RH_925"}.issubset(native):
+            raise ValueError(f"{path}: ERA5 Q_925 needs native Q or documented derivation from native T925/RH925")
+    if source == "pangu":
+        lead = cfg.get("source_forecast_lead")
+        if not isinstance(lead, Mapping) or not bool(lead.get("available")):
+            raise ValueError(f"{path}: Pangu forecast-lead provenance is missing")
+        lead_min = float(lead.get("min_hours", math.nan))
+        lead_max = float(lead.get("max_hours", math.nan))
+        if not (math.isclose(lead_min, 12.0, abs_tol=1.0e-6) and math.isclose(lead_max, 23.0, abs_tol=1.0e-6)):
+            raise ValueError(f"{path}: expected canonical Pangu 12--23 h lead, got {lead}")
+    window = int(cfg["window"])
+    dyn_vars = int(cfg["dyn_vars"])
+    if window != 12 or dyn_vars != len(order):
+        raise ValueError(f"{path}: invalid window/dyn_vars metadata")
     return DatasetLayout(
         path=path,
         order=order,
-        window=int(cfg["window"]),
-        dyn_vars=int(cfg["dyn_vars"]),
+        window=window,
+        dyn_vars=dyn_vars,
         fe_dim=int(cfg["fe_dim"]),
+        feature_set=feature_set,
+        config=dict(cfg),
     )
 
 
@@ -208,10 +264,22 @@ def align_split(
         source: extract_sequences(layout, split, positions[source])
         for source, layout in layouts.items()
     }
+    labels = {
+        source: np.asarray(
+            np.load(layout.path / f"y_{split}.npy", mmap_mode="r")[positions[source]],
+            dtype=np.float64,
+        )
+        for source, layout in layouts.items()
+    }
+    reference_labels = labels["pangu"]
+    for source in SOURCES[1:]:
+        same = np.isclose(reference_labels, labels[source], rtol=0.0, atol=1.0e-3, equal_nan=False)
+        if not np.all(same):
+            raise ValueError(f"{split}/{source}: {int((~same).sum())} paired visibility labels differ from Pangu")
     p_x = np.load(layouts["pangu"].path / f"X_{split}.npy", mmap_mode="r")
     p_static_start = layouts["pangu"].window * layouts["pangu"].dyn_vars
     p_rows = positions["pangu"]
-    visibility = np.asarray(np.load(layouts["pangu"].path / f"y_{split}.npy", mmap_mode="r")[p_rows], dtype=np.float64)
+    visibility = reference_labels
     orography = np.asarray(p_x[p_rows, p_static_start + 2], dtype=np.float64)
     return AlignedSplit(keys, positions, values, visibility, orography)
 
@@ -825,6 +893,7 @@ def event_linkage(
     merged = events[["time_key", "station_key", "category"]].merge(
         sample, on=["time_key", "station_key"], how="inner", validate="one_to_one"
     )
+    input_target_rows = int((events["category"] == "tianji_hit_pangu_miss").sum())
     rows = []
     for category, part in merged.groupby("category"):
         rows.append(
@@ -842,8 +911,16 @@ def event_linkage(
             }
         )
     target = merged[merged["category"] == "tianji_hit_pangu_miss"].copy()
+    target_coverage = float(len(target) / max(input_target_rows, 1))
     if target.empty:
-        return pd.DataFrame(rows), {"enabled": True, "matched_rows": int(len(merged)), "target_category_rows": 0}
+        return pd.DataFrame(rows), {
+            "enabled": True,
+            "input_event_rows": int(len(events)),
+            "matched_rows": int(len(merged)),
+            "input_target_category_rows": input_target_rows,
+            "target_category_rows": 0,
+            "target_category_coverage": target_coverage,
+        }
     dates = pd.to_datetime(target["time_utc"], utc=True).dt.strftime("%Y-%m-%d").to_numpy()
     delta = target["pangu_joint_error"].to_numpy() - target["tianji_joint_error"].to_numpy()
     unique, sums, counts = aggregate_daily(delta, dates)
@@ -855,8 +932,11 @@ def event_linkage(
         draws[i] = float(weights @ sums) / max(float(weights @ counts), 1.0)
     info = {
         "enabled": True,
+        "input_event_rows": int(len(events)),
         "matched_rows": int(len(merged)),
+        "input_target_category_rows": input_target_rows,
         "target_category_rows": int(len(target)),
+        "target_category_coverage": target_coverage,
         "target_joint_error_delta": float(np.mean(delta)),
         "target_joint_error_delta_ci": [float(np.quantile(draws, 0.025)), float(np.quantile(draws, 0.975))],
         "bootstrap_unit": "UTC_valid_date",
@@ -888,7 +968,7 @@ def paired_key_sha256(keys: pd.DataFrame) -> str:
 
 def make_figures(
     bootstrap: pd.DataFrame,
-    performance: Mapping[str, object],
+    performance: Mapping[str, object] | None,
     event_info: Mapping[str, object],
     out_dir: Path,
 ) -> None:
@@ -941,21 +1021,22 @@ def make_figures(
     bar_metric("saturation_deficit_rmse_gkg", "925-hPa saturation-deficit RMSE (g kg$^{-1}$)", "fig_joint_saturation_deficit_quality")
     bar_metric("copula_mmd2_rff", "Empirical-copula MMD$^2$", "fig_t925_q925_copula_quality")
 
-    ci = performance["interaction_ci"]
-    mean = float(performance["interaction_mean"])
-    seed_values = np.asarray(performance["interaction_seed_values"], dtype=float)
-    fig, ax = plt.subplots(figsize=(7.2, 5.4))
-    ax.axhline(0.0, color="#555555", linewidth=1.2)
-    ax.errorbar([0], [mean], yerr=[[max(0.0, mean - float(ci[0]))], [max(0.0, float(ci[1]) - mean)]], fmt="o", color="#D95F02", markersize=11, capsize=7, linewidth=2.2)
-    offsets = np.linspace(-0.10, 0.10, len(seed_values))
-    ax.scatter(offsets, seed_values, color="#7F2704", s=55, zorder=3, label="Training seeds")
-    ax.set_xlim(-0.45, 0.45)
-    ax.set_xticks([0], ["M × T925"])
-    ax.set_ylabel("Low-visibility AP interaction")
-    ax.set_title("Retrained source-block complementarity")
-    ax.grid(axis="y", color="#D8D8D8", linewidth=0.7, alpha=0.7)
-    save_figure(fig, out_dir, "fig_m_t925_performance_interaction")
-    plt.close(fig)
+    if performance is not None:
+        ci = performance["interaction_ci"]
+        mean = float(performance["interaction_mean"])
+        seed_values = np.asarray(performance["interaction_seed_values"], dtype=float)
+        fig, ax = plt.subplots(figsize=(7.2, 5.4))
+        ax.axhline(0.0, color="#555555", linewidth=1.2)
+        ax.errorbar([0], [mean], yerr=[[max(0.0, mean - float(ci[0]))], [max(0.0, float(ci[1]) - mean)]], fmt="o", color="#D95F02", markersize=11, capsize=7, linewidth=2.2)
+        offsets = np.linspace(-0.10, 0.10, len(seed_values))
+        ax.scatter(offsets, seed_values, color="#7F2704", s=55, zorder=3, label="Training seeds")
+        ax.set_xlim(-0.45, 0.45)
+        ax.set_xticks([0], ["M × T925"])
+        ax.set_ylabel("Low-visibility AP interaction")
+        ax.set_title("Retrained source-block complementarity")
+        ax.grid(axis="y", color="#D8D8D8", linewidth=0.7, alpha=0.7)
+        save_figure(fig, out_dir, "fig_m_t925_performance_interaction")
+        plt.close(fig)
 
     if event_info.get("enabled") and int(event_info.get("target_category_rows", 0)) > 0:
         mean = float(event_info["target_joint_error_delta"])
@@ -991,25 +1072,35 @@ def main() -> None:
         raise ValueError("--rff-bandwidth-sample must be at least 10")
     if not 0.0 < args.near_saturation_quantile < 1.0:
         raise ValueError("--near-saturation-quantile must lie strictly between 0 and 1")
+    if not 0.0 < args.min_event_coverage <= 1.0:
+        raise ValueError("--min-event-coverage must lie in (0, 1]")
     if args.fit_max_rows < 0 or args.test_max_rows < 0:
         raise ValueError("row caps must be non-negative; use 0 for no cap")
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     layouts = {
-        "pangu": load_layout(Path(args.pangu_dir).expanduser().resolve()),
-        "tianji": load_layout(Path(args.tianji_dir).expanduser().resolve()),
-        "era5_reference_analysis": load_layout(Path(args.era5_dir).expanduser().resolve()),
+        "pangu": load_layout(Path(args.pangu_dir).expanduser().resolve(), "pangu"),
+        "tianji": load_layout(Path(args.tianji_dir).expanduser().resolve(), "tianji"),
+        "era5_reference_analysis": load_layout(
+            Path(args.era5_dir).expanduser().resolve(), "era5_reference_analysis"
+        ),
     }
-    orders = {layout.order for layout in layouts.values()}
-    if len(orders) != 1:
-        raise ValueError(f"Dynamic feature orders differ across sources: {orders}")
     fit = align_split(layouts, "train", args.fit_max_rows, args.bootstrap_seed)
     test = align_split(layouts, "test", args.test_max_rows, args.bootstrap_seed + 1)
     marginal, closure, temporal, tails, qc, quality_info = source_quality(fit, test, args)
     dependence, bootstrap, losses = dependence_and_bootstrap(fit, test, args)
-    analysis_dir = Path(args.factorial_analysis_dir).expanduser().resolve()
-    coherence, performance = performance_evidence(analysis_dir)
-    events, event_info = event_linkage(analysis_dir, test, losses, args)
+    performance: Dict[str, object] | None = None
+    coherence = pd.DataFrame()
+    if args.analysis_mode == "factorial_confirmatory":
+        if not args.factorial_analysis_dir:
+            raise ValueError("--factorial-analysis-dir is required for factorial_confirmatory mode")
+        factorial_dir = Path(args.factorial_analysis_dir).expanduser().resolve()
+        coherence, performance = performance_evidence(factorial_dir)
+    event_dir_text = args.event_analysis_dir or args.factorial_analysis_dir
+    if not event_dir_text:
+        raise ValueError("--event-analysis-dir is required so existing MTW/mt2pw hit/miss cases can be reused")
+    event_dir = Path(event_dir_text).expanduser().resolve()
+    events, event_info = event_linkage(event_dir, test, losses, args)
 
     marginal.to_csv(out_dir / "joint_structure_marginal_and_vector_quality.csv", index=False)
     closure.to_csv(out_dir / "joint_structure_thermodynamic_closure_qc.csv", index=False)
@@ -1018,7 +1109,8 @@ def main() -> None:
     qc.to_csv(out_dir / "joint_structure_source_qc.csv", index=False)
     dependence.to_csv(out_dir / "t925_q925_empirical_copula_quality.csv", index=False)
     bootstrap.to_csv(out_dir / "joint_structure_utc_date_bootstrap_ci.csv", index=False)
-    coherence.to_csv(out_dir / "m_t925_coherence_contrasts_by_seed.csv", index=False)
+    if not coherence.empty:
+        coherence.to_csv(out_dir / "m_t925_coherence_contrasts_by_seed.csv", index=False)
     if not events.empty:
         events.to_csv(out_dir / "joint_structure_event_case_summary.csv", index=False)
 
@@ -1034,25 +1126,36 @@ def main() -> None:
         and float(copula["delta_ci_low"]) > 0.0
         and exact_subset_rank_stable
     )
-    performance_supported = bool(
-        float(performance["interaction_ci"][0]) > 0.0
-        and bool(performance["interaction_all_seeds_positive"])
-        and float(performance["endpoint_gap_ci"][0]) > 0.0
-    )
+    performance_supported = None
+    if performance is not None:
+        performance_supported = bool(
+            float(performance["interaction_ci"][0]) > 0.0
+            and bool(performance["interaction_all_seeds_positive"])
+            and float(performance["endpoint_gap_ci"][0]) > 0.0
+        )
     event_supported = bool(
         event_info.get("enabled")
         and int(event_info.get("target_category_rows", 0)) > 0
+        and float(event_info.get("target_category_coverage", 0.0)) >= args.min_event_coverage
         and float(event_info.get("target_joint_error_delta_ci", [math.nan, math.nan])[0]) > 0.0
     )
-    all_supported = quality_supported and performance_supported and event_supported
+    diagnostic_supported = quality_supported and event_supported
+    all_supported = diagnostic_supported and bool(performance_supported)
+    if args.analysis_mode == "diagnostic_only":
+        gate_status = "joint_structure_diagnostic_supported" if diagnostic_supported else "joint_structure_diagnostic_not_supported"
+    else:
+        gate_status = "joint_structure_supported" if all_supported else "joint_structure_not_fully_supported"
     gate = {
-        "status": "joint_structure_supported" if all_supported else "joint_structure_not_fully_supported",
+        "status": gate_status,
+        "analysis_mode": args.analysis_mode,
+        "new_training_models_used": 0 if args.analysis_mode == "diagnostic_only" else 27,
         "quality_against_reference_analysis_supported": quality_supported,
         "copula_rff_ranking_confirmed_by_exact_subset": exact_subset_rank_stable,
         "predictive_m_t925_interaction_supported": performance_supported,
         "tianji_hit_pangu_miss_linkage_supported": event_supported,
         "performance": performance,
         "event_linkage": event_info,
+        "minimum_event_coverage": args.min_event_coverage,
         "primary_quality_deltas": {
             "saturation_deficit_rmse_pangu_minus_tianji": float(sat["delta_pangu_minus_tianji"]),
             "saturation_deficit_rmse_delta_ci": [float(sat["delta_ci_low"]), float(sat["delta_ci_high"])],
@@ -1060,21 +1163,30 @@ def main() -> None:
             "copula_mmd2_delta_ci": [float(copula["delta_ci_low"]), float(copula["delta_ci_high"])],
         },
         "claim_if_supported": (
-            "Within Pangu-2025, 2025, 12--23 h lead and this low-visibility task, the evidence supports "
+            "Within Pangu-2025, 2025, 12--23 h lead and this low-visibility task, Pangu has a larger "
+            "low-level T925--moisture joint-structure discrepancy than Tianji, and that discrepancy is "
+            "associated with existing Tianji-hit/Pangu-miss cases."
+            if args.analysis_mode == "diagnostic_only"
+            else "Within the same scope, the combined quality, event and retrained-interaction evidence supports "
             "a source-dependent low-level T925--moisture joint-structure contribution beyond marginal errors."
         ),
         "claim_limit": (
-            "The experiment does not prove violation of atmospheric governing equations and must not be generalized "
-            "to all AI weather models. Factorial interactions can also reflect source-specific representation and "
-            "cross-source distribution shift; the ERA5-reference and event layers are required for interpretation."
+            "Diagnostic-only results are associative mechanism evidence, not a direct T925 intervention. The experiment "
+            "does not prove violation of atmospheric governing equations and must not be generalized to all AI models."
+            if args.analysis_mode == "diagnostic_only"
+            else "The experiment does not prove violation of atmospheric governing equations and must not be generalized "
+            "to all AI weather models. Factorial interactions can also reflect representation and distribution shift."
         ),
     }
     report = {
         "status": "completed",
+        "analysis_mode": args.analysis_mode,
+        "new_training_models_used": 0 if args.analysis_mode == "diagnostic_only" else 27,
         "era5_role": "reference analysis, not truth",
-        "feature_set": "q_core_t925_no_rh2m",
-        "factorial_profile": "m925b",
-        "factorial_groups": {
+        "source_feature_sets": {source: layout.feature_set for source, layout in layouts.items()},
+        "event_analysis_dir": str(event_dir),
+        "factorial_profile": "m925b" if performance is not None else None,
+        "optional_factorial_groups": {
             "M": ["Q_1000", "DP_1000", "Q_925", "DP_925", "RH_925"],
             "H": ["T_925"],
             "B": ["T2M", "MSLP", "U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"],
@@ -1096,6 +1208,15 @@ def main() -> None:
             }
             for source, layout in layouts.items()
         },
+        "existing_event_artifact": {
+            "path": str(event_dir / "event_case_control_samples.csv.gz"),
+            "sha256": (
+                sha256_file(event_dir / "event_case_control_samples.csv.gz")
+                if (event_dir / "event_case_control_samples.csv.gz").is_file()
+                else None
+            ),
+            "role": "reused completed MTW/mt2pw hit-miss classification; no new model inference",
+        },
         "paired_alignment": {
             "fit_key_sha256": paired_key_sha256(fit.keys),
             "test_key_sha256": paired_key_sha256(test.keys),
@@ -1108,9 +1229,8 @@ def main() -> None:
             "core_conclusions": [
                 "joint saturation-state accuracy versus ERA5 reference analysis",
                 "T925-Q925 empirical-copula discrepancy",
-                "retrained M by T925 predictive interaction",
                 "joint-state error in asymmetric low-visibility outcomes",
-            ],
+            ] + (["retrained M by T925 predictive interaction"] if performance is not None else []),
         },
         "method_references": [
             "Gretton et al. 2012 JMLR 13:723-773",
