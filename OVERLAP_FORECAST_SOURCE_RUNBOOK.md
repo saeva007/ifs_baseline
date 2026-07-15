@@ -465,6 +465,12 @@ DRY_RUN=1 \
 bash submit_q_core_t925_diagnostics.sh
 ```
 
+The launcher selects a Python 3.8+ interpreter for this preflight instead of
+assuming that the login-node `python` command is Python 3. Dataset rejection
+is the preflight's explicit exit code 2; syntax, interpreter, or other program
+failures abort the chain before any `sbatch` rather than being misclassified as
+three datasets needing rebuild.
+
 Then submit the diagnosis by removing only `DRY_RUN=1`:
 
 ```bash

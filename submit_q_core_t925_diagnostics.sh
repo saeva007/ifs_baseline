@@ -15,7 +15,8 @@ BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 RUN_TAG="${RUN_TAG:?RUN_TAG is required and must be a fresh diagnostic tag}"
 DRY_RUN="${DRY_RUN:-0}"
 BUILD_DATA="${BUILD_DATA:-auto}"
-PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-python}"
+PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-}"
+PREFLIGHT_SCRIPT="${PREFLIGHT_SCRIPT:-${BASELINE_DIR}/preflight_q_core_t925_diagnostic_inputs.py}"
 ALLOW_EXISTING_OUTPUT="${ALLOW_EXISTING_OUTPUT:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 FIT_MAX_ROWS="${FIT_MAX_ROWS:-200000}"
@@ -44,11 +45,79 @@ esac
   echo "ERROR: BUILD_DATA must be auto, 0, or 1" >&2; exit 2;
 }
 
+python_is_supported() {
+  local candidate="$1"
+  "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' \
+    >/dev/null 2>&1
+}
+
+resolve_preflight_python() {
+  local candidate
+  if [[ -n "${PREFLIGHT_PYTHON}" ]]; then
+    if python_is_supported "${PREFLIGHT_PYTHON}"; then
+      printf '%s\n' "${PREFLIGHT_PYTHON}"
+      return 0
+    fi
+    echo "ERROR: PREFLIGHT_PYTHON=${PREFLIGHT_PYTHON} is unavailable or older than Python 3.8" >&2
+    return 2
+  fi
+  for candidate in \
+    python3 \
+    /public/home/jarvis226/miniconda3/envs/torch/bin/python \
+    python
+  do
+    if python_is_supported "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  echo "ERROR: no Python >=3.8 interpreter is available for the login-node preflight" >&2
+  return 2
+}
+
+PREFLIGHT_PYTHON="$(resolve_preflight_python)" || exit $?
+
 preflight_source() {
   local source="$1"
   local data_dir="$2"
-  "${PREFLIGHT_PYTHON}" "${BASELINE_DIR}/preflight_q_core_t925_diagnostic_inputs.py" \
+  "${PREFLIGHT_PYTHON}" "${PREFLIGHT_SCRIPT}" \
     --source "${source}" --data-dir "${data_dir}"
+}
+
+auto_select_source() {
+  local source="$1"
+  local data_dir="$2"
+  local build_var="$3"
+  local rc
+  if preflight_source "${source}" "${data_dir}"; then
+    printf -v "${build_var}" '%s' 0
+    return 0
+  else
+    rc=$?
+  fi
+  if [[ "${rc}" == "2" ]]; then
+    printf -v "${build_var}" '%s' 1
+    return 0
+  fi
+  echo "ERROR: ${source} preflight infrastructure failed with exit code ${rc}; no jobs were submitted" >&2
+  exit "${rc}"
+}
+
+require_reusable_source() {
+  local source="$1"
+  local data_dir="$2"
+  local rc
+  if preflight_source "${source}" "${data_dir}"; then
+    return 0
+  else
+    rc=$?
+  fi
+  if [[ "${rc}" == "2" ]]; then
+    echo "ERROR: strict reuse requested (BUILD_DATA=0), but ${source} input failed data preflight." >&2
+    exit 2
+  fi
+  echo "ERROR: ${source} preflight infrastructure failed with exit code ${rc}; no jobs were submitted" >&2
+  exit "${rc}"
 }
 
 BUILD_PANGU=0
@@ -59,22 +128,13 @@ if [[ "${BUILD_DATA}" == "1" ]]; then
   BUILD_TIANJI=1
   BUILD_ERA5=1
 elif [[ "${BUILD_DATA}" == "auto" ]]; then
-  preflight_source pangu "${PANGU_REUSE_DATA_DIR}" || BUILD_PANGU=1
-  preflight_source tianji "${TIANJI_REUSE_DATA_DIR}" || BUILD_TIANJI=1
-  preflight_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}" || BUILD_ERA5=1
+  auto_select_source pangu "${PANGU_REUSE_DATA_DIR}" BUILD_PANGU
+  auto_select_source tianji "${TIANJI_REUSE_DATA_DIR}" BUILD_TIANJI
+  auto_select_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}" BUILD_ERA5
 else
-  preflight_source pangu "${PANGU_REUSE_DATA_DIR}" || {
-    echo "ERROR: strict reuse requested (BUILD_DATA=0), but Pangu input failed preflight." >&2
-    exit 2
-  }
-  preflight_source tianji "${TIANJI_REUSE_DATA_DIR}" || {
-    echo "ERROR: strict reuse requested (BUILD_DATA=0), but Tianji input failed preflight." >&2
-    exit 2
-  }
-  preflight_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}" || {
-    echo "ERROR: strict reuse requested (BUILD_DATA=0), but ERA5 input failed preflight." >&2
-    exit 2
-  }
+  require_reusable_source pangu "${PANGU_REUSE_DATA_DIR}"
+  require_reusable_source tianji "${TIANJI_REUSE_DATA_DIR}"
+  require_reusable_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}"
 fi
 
 if [[ "${BUILD_PANGU}" == "1" ]]; then
@@ -146,6 +206,7 @@ submit() {
 echo "T925--moisture diagnostic-only chain"
 echo "RUN_TAG=${RUN_TAG}"
 echo "BUILD_DATA=${BUILD_DATA}"
+echo "PREFLIGHT_PYTHON=${PREFLIGHT_PYTHON}"
 echo "TRAINING_JOBS=0"
 echo "PANGU_ACTION=${PANGU_ACTION}"
 echo "TIANJI_ACTION=${TIANJI_ACTION}"

@@ -128,6 +128,76 @@ class T925PreflightTest(unittest.TestCase):
         self.assertNotIn("t925_diag_era5_data", output)
         self.assertEqual(output.count("[DRY-RUN]"), 2)
 
+    @unittest.skipUnless(BASH_EXE, "bash is required for submitter dry-run regression")
+    def test_submitter_auto_resolves_python3(self) -> None:
+        pangu = self.write_dataset("pangu")
+        tianji = self.write_dataset("tianji")
+        era5 = self.write_dataset("era5_reference_analysis")
+        env = os.environ.copy()
+        env.pop("PREFLIGHT_PYTHON", None)
+        env.update(
+            {
+                "RUN_TAG": "unit_test_t925_python_resolver",
+                "DRY_RUN": "1",
+                "BUILD_DATA": "auto",
+                "BASELINE_DIR": str(Path(__file__).resolve().parent),
+                "PANGU_REUSE_DATA_DIR": str(pangu),
+                "TIANJI_REUSE_DATA_DIR": str(tianji),
+                "ERA5_REUSE_DATA_DIR": str(era5),
+                "DATA_ROOT": str(self.root / "rebuilt"),
+                "OUT_ROOT": str(self.root / "out"),
+            }
+        )
+        result = subprocess.run(
+            [str(BASH_EXE), str(Path(__file__).resolve().parent / "submit_q_core_t925_diagnostics.sh")],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
+        self.assertIn("PREFLIGHT_PYTHON=", output)
+        self.assertIn("PANGU_ACTION=reuse", output)
+        self.assertIn("TIANJI_ACTION=reuse", output)
+        self.assertIn("ERA5_ACTION=reuse", output)
+        self.assertEqual(output.count("[DRY-RUN]"), 1)
+
+    @unittest.skipUnless(BASH_EXE, "bash is required for submitter dry-run regression")
+    def test_preflight_program_failure_aborts_without_sbatch(self) -> None:
+        pangu = self.write_dataset("pangu")
+        tianji = self.write_dataset("tianji")
+        era5 = self.write_dataset("era5_reference_analysis")
+        crashing_preflight = self.root / "crashing_preflight.py"
+        crashing_preflight.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        env = os.environ.copy()
+        env.update(
+            {
+                "RUN_TAG": "unit_test_t925_preflight_crash",
+                "DRY_RUN": "1",
+                "BUILD_DATA": "auto",
+                "BASELINE_DIR": str(Path(__file__).resolve().parent),
+                "PREFLIGHT_PYTHON": sys.executable,
+                "PREFLIGHT_SCRIPT": str(crashing_preflight),
+                "PANGU_REUSE_DATA_DIR": str(pangu),
+                "TIANJI_REUSE_DATA_DIR": str(tianji),
+                "ERA5_REUSE_DATA_DIR": str(era5),
+                "DATA_ROOT": str(self.root / "rebuilt"),
+                "OUT_ROOT": str(self.root / "out"),
+            }
+        )
+        result = subprocess.run(
+            [str(BASH_EXE), str(Path(__file__).resolve().parent / "submit_q_core_t925_diagnostics.sh")],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("preflight infrastructure failed", output)
+        self.assertIn("no jobs were submitted", output)
+        self.assertNotIn("[DRY-RUN]", output)
+
 
 if __name__ == "__main__":
     unittest.main()
