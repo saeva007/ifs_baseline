@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Paper-grade T925--moisture joint-structure diagnosis for Pangu versus Tianji.
 
-The default diagnostic-only mode combines two new evidence layers with the
+The default diagnostic-only mode combines four evidence layers with the
 already-completed MTW/mt2pw performance experiment:
 
 1. paired source quality against ERA5 reference analysis;
-2. joint-state errors in existing Tianji-hit/Pangu-miss cases.
+2. joint-state errors in existing Tianji-hit/Pangu-miss cases;
+3. paired automatic-station T2M/WSPD10 RMSE uncertainty;
+4. paired near-saturation POD/CSI uncertainty in predeclared strata.
 
 An explicitly optional factorial-confirmatory mode can additionally read a
 retrained M x T925 interaction. It is not required for the default diagnosis.
@@ -42,11 +44,15 @@ from typing import Dict, Iterable, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+import analyze_q_core_hybrid_factorial as hybrid_analysis
 from preflight_q_core_t925_diagnostic_inputs import FEATURES, validate_dataset
 
 
 SOURCES = ("pangu", "tianji", "era5_reference_analysis")
 FORECAST_SOURCES = ("pangu", "tianji")
+SUPPLEMENT_FORECAST_FEATURES = ("T2M", "WSPD10")
+EXTRACT_FEATURES = FEATURES + SUPPLEMENT_FORECAST_FEATURES
+SUPPLEMENT_SCOPES = ("all_paired_test", "true_low_visibility", "elevation_le_500m")
 SOURCE_LABELS = {
     "pangu": "Pangu",
     "tianji": "Tianji",
@@ -98,6 +104,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--low-vis-threshold-m", type=float, default=1000.0)
     ap.add_argument("--near-saturation-quantile", type=float, default=0.10)
     ap.add_argument("--min-event-coverage", type=float, default=0.80)
+    ap.add_argument("--obs-root", default="", help="Automatic-station observation directory for paired RMSE inference.")
+    ap.add_argument("--paper-eval-dir", default="/public/home/putianshu/vis_mlp/paper_eval")
     ap.add_argument("--no-figures", action="store_true")
     return ap.parse_args()
 
@@ -172,17 +180,33 @@ def balanced_day_subset(keys: pd.DataFrame, max_rows: int, seed: int) -> np.ndar
     return np.sort(np.asarray(selected[:max_rows], dtype=np.int64))
 
 
-def extract_sequences(layout: DatasetLayout, split: str, rows: np.ndarray, chunk: int = 20000) -> Dict[str, np.ndarray]:
+def extract_sequences(
+    layout: DatasetLayout,
+    split: str,
+    rows: np.ndarray,
+    include_supplement: bool = False,
+    chunk: int = 20000,
+) -> Dict[str, np.ndarray]:
     x = np.load(layout.path / f"X_{split}.npy", mmap_mode="r")
     if int(x.shape[1]) - layout.window * layout.dyn_vars - layout.fe_dim != 6:
         raise ValueError(f"{layout.path}/{split}: expected six static features")
+    missing = [name for name in EXTRACT_FEATURES if name not in layout.order]
+    if missing:
+        raise ValueError(f"{layout.path}: diagnostic layout is missing {missing}")
+    selected = FEATURES + (SUPPLEMENT_FORECAST_FEATURES if include_supplement else ())
     result = {
-        name: np.empty((len(rows), layout.window), dtype=np.float32)
-        for name in FEATURES
+        name: np.empty(
+            (len(rows), layout.window if name in FEATURES else 1), dtype=np.float32
+        )
+        for name in selected
     }
     flat_columns = {
-        name: [step * layout.dyn_vars + layout.order.index(name) for step in range(layout.window)]
-        for name in FEATURES
+        name: (
+            [step * layout.dyn_vars + layout.order.index(name) for step in range(layout.window)]
+            if name in FEATURES
+            else [(layout.window - 1) * layout.dyn_vars + layout.order.index(name)]
+        )
+        for name in selected
     }
     for start in range(0, len(rows), chunk):
         end = min(start + chunk, len(rows))
@@ -197,6 +221,7 @@ def align_split(
     split: str,
     max_rows: int,
     seed: int,
+    include_supplement: bool = False,
 ) -> AlignedSplit:
     frames = {source: metadata(layout.path, split) for source, layout in layouts.items()}
     reference = frames["pangu"]
@@ -217,7 +242,7 @@ def align_split(
             raise RuntimeError(f"{split}/{source}: aligned rows disappeared")
         positions[source] = pos.to_numpy(dtype=np.int64)
     values = {
-        source: extract_sequences(layout, split, positions[source])
+        source: extract_sequences(layout, split, positions[source], include_supplement=include_supplement)
         for source, layout in layouts.items()
     }
     labels = {
@@ -456,6 +481,97 @@ def bootstrap_pair_loss(
     }
 
 
+def daily_confusion_counts(
+    observed: np.ndarray,
+    predicted: np.ndarray,
+    dates: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    obs = np.asarray(observed, dtype=bool)
+    pred = np.asarray(predicted, dtype=bool)
+    day_values = np.asarray(dates)
+    if not (len(obs) == len(pred) == len(day_values)):
+        raise ValueError("Observed, predicted and date arrays must be paired")
+    unique, codes = np.unique(day_values, return_inverse=True)
+    n_days = len(unique)
+    counts = np.column_stack(
+        [
+            np.bincount(codes, weights=(obs & pred).astype(np.int64), minlength=n_days),
+            np.bincount(codes, weights=(~obs & pred).astype(np.int64), minlength=n_days),
+            np.bincount(codes, weights=(obs & ~pred).astype(np.int64), minlength=n_days),
+            np.bincount(codes, weights=(~obs & ~pred).astype(np.int64), minlength=n_days),
+        ]
+    ).astype(np.float64)
+    return unique, counts
+
+
+def binary_score_from_counts(counts: np.ndarray, metric: str) -> np.ndarray:
+    values = np.asarray(counts, dtype=np.float64)
+    tp, fp, fn = values[..., 0], values[..., 1], values[..., 2]
+    if metric == "pod":
+        numerator, denominator = tp, tp + fn
+    elif metric == "csi":
+        numerator, denominator = tp, tp + fp + fn
+    else:
+        raise ValueError(f"Unsupported binary bootstrap metric: {metric}")
+    return np.divide(
+        numerator,
+        denominator,
+        out=np.full(np.shape(denominator), np.nan, dtype=np.float64),
+        where=denominator > 0.0,
+    )
+
+
+def bootstrap_binary_pair(
+    observed: np.ndarray,
+    pangu_predicted: np.ndarray,
+    tianji_predicted: np.ndarray,
+    dates: np.ndarray,
+    iterations: int,
+    seed: int,
+) -> Dict[str, Dict[str, float]]:
+    unique, p_counts = daily_confusion_counts(observed, pangu_predicted, dates)
+    unique_t, t_counts = daily_confusion_counts(observed, tianji_predicted, dates)
+    if not np.array_equal(unique, unique_t):
+        raise RuntimeError("Paired binary day aggregates differ across sources")
+    if len(unique) < 2:
+        raise ValueError("UTC-date bootstrap requires at least two represented dates")
+    rng = np.random.default_rng(seed)
+    p_draw_counts = np.empty((iterations, 4), dtype=np.float64)
+    t_draw_counts = np.empty((iterations, 4), dtype=np.float64)
+    for index in range(iterations):
+        chosen = rng.integers(0, len(unique), size=len(unique))
+        weights = np.bincount(chosen, minlength=len(unique)).astype(np.float64)
+        p_draw_counts[index] = weights @ p_counts
+        t_draw_counts[index] = weights @ t_counts
+    point_p = np.sum(p_counts, axis=0)
+    point_t = np.sum(t_counts, axis=0)
+    output: Dict[str, Dict[str, float]] = {}
+    for metric in ("pod", "csi"):
+        p_draw = binary_score_from_counts(p_draw_counts, metric)
+        t_draw = binary_score_from_counts(t_draw_counts, metric)
+        delta = p_draw - t_draw
+        valid = np.isfinite(delta) & np.isfinite(p_draw) & np.isfinite(t_draw)
+        if not valid.any():
+            raise RuntimeError(f"No valid {metric} UTC-date bootstrap draws")
+        p_point = float(binary_score_from_counts(point_p, metric))
+        t_point = float(binary_score_from_counts(point_t, metric))
+        output[metric] = {
+            "pangu": p_point,
+            "tianji": t_point,
+            "delta_pangu_minus_tianji": p_point - t_point,
+            "delta_ci_low": float(np.quantile(delta[valid], 0.025)),
+            "delta_ci_high": float(np.quantile(delta[valid], 0.975)),
+            "pangu_ci_low": float(np.quantile(p_draw[valid], 0.025)),
+            "pangu_ci_high": float(np.quantile(p_draw[valid], 0.975)),
+            "tianji_ci_low": float(np.quantile(t_draw[valid], 0.025)),
+            "tianji_ci_high": float(np.quantile(t_draw[valid], 0.975)),
+            "valid_bootstrap_draws": int(valid.sum()),
+            "valid_bootstrap_fraction": float(valid.mean()),
+            "represented_utc_dates": int(len(unique)),
+        }
+    return output
+
+
 def bootstrap_mmd_pair(
     p_sums: np.ndarray,
     p_counts: np.ndarray,
@@ -505,6 +621,23 @@ def valid_masks(split: AlignedSplit, low_vis_threshold_m: float = 1000.0) -> Dic
         "true_low_visibility": finite & np.isfinite(split.visibility_m) & (split.visibility_m <= low_vis_threshold_m),
         "elevation_le_500m": finite & np.isfinite(split.orography_m) & (split.orography_m <= 500.0),
     }
+
+
+def closure_provenance(source: str) -> str:
+    if source == "pangu":
+        return (
+            "RH_925 is derived from native Pangu T_925 and Q_925 in the canonical station product; "
+            "closure is algebraically coupled"
+        )
+    if source == "era5_reference_analysis":
+        return (
+            "Q_925 may be derived from ERA5 T_925 and RH_925 by the shared dataset builder; "
+            "closure is algebraically coupled"
+        )
+    return (
+        "Tianji T_925, Q_925 and RH_925 are read from source-product fields; upstream prognostic "
+        "versus diagnostic lineage is not established here"
+    )
 
 
 def source_quality(
@@ -560,7 +693,9 @@ def source_quality(
                 "closure_mae_rh_pct": float(np.nanmean(np.abs(closure))),
                 "closure_rmse_rh_pct": float(np.sqrt(np.nanmean(closure * closure))),
                 "fraction_abs_closure_gt_2pct": float(np.nanmean(np.abs(closure) > 2.0)),
-                "role": "thermodynamic closure QC, not an independent skill metric",
+                "independent_skill_metric": False,
+                "provenance_caveat": closure_provenance(source),
+                "role": "thermodynamic closure QC only; excluded from evidence gates and source-skill claims",
             }
         )
 
@@ -675,6 +810,207 @@ def source_quality(
         pd.DataFrame(qc_rows),
         details,
     )
+
+
+def supplemental_scope_masks(test: AlignedSplit, low_vis_threshold_m: float) -> Dict[str, np.ndarray]:
+    n = len(test.keys)
+    return {
+        "all_paired_test": np.ones(n, dtype=bool),
+        "true_low_visibility": np.isfinite(test.visibility_m) & (test.visibility_m <= low_vis_threshold_m),
+        "elevation_le_500m": np.isfinite(test.orography_m) & (test.orography_m <= 500.0),
+    }
+
+
+def observation_rmse_bootstrap(
+    test: AlignedSplit,
+    args: argparse.Namespace,
+) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    if not args.obs_root:
+        return pd.DataFrame(), {
+            "enabled": False,
+            "reason": "--obs-root was not provided",
+            "evidence_role": "supplemental paired uncertainty analysis; no model selection",
+        }
+    frame = test.keys[["time_utc", "station_key"]].copy()
+    frame["_aligned_row"] = np.arange(len(frame), dtype=np.int64)
+    for source in FORECAST_SOURCES:
+        for feature in SUPPLEMENT_FORECAST_FEATURES:
+            frame[f"{feature}_{source}"] = np.asarray(test.values[source][feature][:, -1], dtype=np.float64)
+    frame, obs_info = hybrid_analysis.attach_observations(
+        frame,
+        Path(args.obs_root).expanduser().resolve(),
+        Path(args.paper_eval_dir).expanduser().resolve(),
+    )
+    if len(frame) != len(test.keys) or frame["_aligned_row"].duplicated().any():
+        raise RuntimeError("Observation attachment changed the paired test-row cardinality")
+    frame = frame.sort_values("_aligned_row", kind="stable").reset_index(drop=True)
+    if not np.array_equal(frame["_aligned_row"].to_numpy(dtype=np.int64), np.arange(len(frame))):
+        raise RuntimeError("Observation attachment changed paired test-row order")
+
+    mapping = {"T2M": "tem", "WSPD10": "win_s_avg_10mi"}
+    masks = supplemental_scope_masks(test, args.low_vis_threshold_m)
+    dates_all = test.keys["time_utc"].dt.strftime("%Y-%m-%d").to_numpy()
+    rows = []
+    pair_counts: Dict[str, Dict[str, int]] = {}
+    offset = 0
+    for feature, obs_column in mapping.items():
+        if obs_column not in frame:
+            raise KeyError(f"Observation attachment lacks required column {obs_column}")
+        obs = hybrid_analysis.clean_observation_values(obs_column, frame[obs_column])
+        forecasts = {
+            source: frame[f"{feature}_{source}"].to_numpy(dtype=np.float64)
+            for source in FORECAST_SOURCES
+        }
+        if feature == "T2M":
+            for source in FORECAST_SOURCES:
+                finite = forecasts[source][np.isfinite(forecasts[source])]
+                if finite.size and float(np.nanmedian(finite)) > 150.0:
+                    forecasts[source] = forecasts[source] - 273.15
+        pair_counts[feature] = {}
+        for scope in SUPPLEMENT_SCOPES:
+            scope_mask = masks[scope]
+            valid = (
+                scope_mask
+                & np.isfinite(obs)
+                & np.isfinite(forecasts["pangu"])
+                & np.isfinite(forecasts["tianji"])
+            )
+            n = int(valid.sum())
+            if n == 0:
+                raise RuntimeError(f"No paired {feature} observation rows for scope={scope}")
+            pair_counts[feature][scope] = n
+            result = bootstrap_pair_loss(
+                (forecasts["pangu"][valid] - obs[valid]) ** 2,
+                (forecasts["tianji"][valid] - obs[valid]) ** 2,
+                dates_all[valid],
+                args.bootstrap_iters,
+                args.bootstrap_seed + 101 + offset,
+                square_root=True,
+            )
+            rows.append(
+                {
+                    "feature": feature,
+                    "observation_column": obs_column,
+                    "reference": "automatic station observations",
+                    "unit": "degC" if feature == "T2M" else "m s-1",
+                    "scope": scope,
+                    "metric": "rmse",
+                    "n": n,
+                    "represented_utc_dates": int(np.unique(dates_all[valid]).size),
+                    **result,
+                    "bootstrap_iterations": int(args.bootstrap_iters),
+                    "bootstrap_seed": int(args.bootstrap_seed + 101 + offset),
+                    "bootstrap_unit": "UTC_valid_date",
+                    "delta_direction": "positive means Pangu has larger RMSE",
+                }
+            )
+            offset += 1
+    table = pd.DataFrame(rows)
+    return table, {
+        "enabled": True,
+        **obs_info,
+        "paired_rows_by_feature_and_scope": pair_counts,
+        "scopes": list(SUPPLEMENT_SCOPES),
+        "bootstrap_unit": "UTC_valid_date",
+        "evidence_role": "supplemental paired uncertainty analysis; no model selection",
+    }
+
+
+def near_saturation_bootstrap(
+    fit: AlignedSplit,
+    test: AlignedSplit,
+    args: argparse.Namespace,
+) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    fit_mask = valid_masks(fit, args.low_vis_threshold_m)["all_finite"]
+    fit_deficit = {
+        source: saturation_deficit_gkg(
+            fit.values[source]["T_925"][:, -1], fit.values[source]["Q_925"][:, -1]
+        )
+        for source in SOURCES
+    }
+    quantile = float(args.near_saturation_quantile)
+    reference_threshold = float(
+        np.nanquantile(fit_deficit["era5_reference_analysis"][fit_mask], quantile)
+    )
+    source_thresholds = {
+        source: float(np.nanquantile(fit_deficit[source][fit_mask], quantile))
+        for source in FORECAST_SOURCES
+    }
+    test_deficit = {
+        source: saturation_deficit_gkg(
+            test.values[source]["T_925"][:, -1], test.values[source]["Q_925"][:, -1]
+        )
+        for source in SOURCES
+    }
+    dates_all = test.keys["time_utc"].dt.strftime("%Y-%m-%d").to_numpy()
+    masks = supplemental_scope_masks(test, args.low_vis_threshold_m)
+    finite = np.logical_and.reduce(
+        [np.isfinite(test_deficit[source]) for source in SOURCES]
+    )
+    rows = []
+    offset = 0
+    for scope in SUPPLEMENT_SCOPES:
+        valid = masks[scope] & finite
+        n = int(valid.sum())
+        if n == 0:
+            raise RuntimeError(f"No finite near-saturation rows for scope={scope}")
+        observed = test_deficit["era5_reference_analysis"][valid] <= reference_threshold
+        dates = dates_all[valid]
+        for method in ("exact_reference_threshold", "quantile_matched"):
+            if method == "exact_reference_threshold":
+                thresholds = {source: reference_threshold for source in FORECAST_SOURCES}
+            else:
+                thresholds = source_thresholds
+            predictions = {
+                source: test_deficit[source][valid] <= thresholds[source]
+                for source in FORECAST_SOURCES
+            }
+            inferred = bootstrap_binary_pair(
+                observed,
+                predictions["pangu"],
+                predictions["tianji"],
+                dates,
+                args.bootstrap_iters,
+                args.bootstrap_seed + 201 + offset,
+            )
+            for metric in ("pod", "csi"):
+                rows.append(
+                    {
+                        "scope": scope,
+                        "method": method,
+                        "metric": metric,
+                        "quantile": quantile,
+                        "n": n,
+                        "reference_positive_rows": int(observed.sum()),
+                        "reference_threshold_gkg": reference_threshold,
+                        "pangu_threshold_gkg": thresholds["pangu"],
+                        "tianji_threshold_gkg": thresholds["tianji"],
+                        **inferred[metric],
+                        "bootstrap_iterations": int(args.bootstrap_iters),
+                        "bootstrap_seed": int(args.bootstrap_seed + 201 + offset),
+                        "bootstrap_unit": "UTC_valid_date",
+                        "threshold_selection_split": "aligned_train",
+                        "delta_direction": "negative means Tianji has larger POD/CSI",
+                    }
+                )
+            offset += 1
+    table = pd.DataFrame(rows)
+    return table, {
+        "enabled": True,
+        "scopes": list(SUPPLEMENT_SCOPES),
+        "metrics": ["pod", "csi"],
+        "methods": ["exact_reference_threshold", "quantile_matched"],
+        "near_saturation_quantile": quantile,
+        "threshold_fit_rows": int(fit_mask.sum()),
+        "reference_threshold_gkg": reference_threshold,
+        "source_quantile_thresholds_gkg": source_thresholds,
+        "threshold_selection_split": "aligned_train",
+        "test_threshold_refitting": False,
+        "bootstrap_unit": "UTC_valid_date",
+        "minimum_valid_bootstrap_fraction": float(table["valid_bootstrap_fraction"].min()),
+        "zero_denominator_policy": "exclude undefined POD/CSI draws and report the retained fraction",
+        "evidence_role": "supplemental tail-placement uncertainty analysis; ERA5 is reference analysis, not truth",
+    }
 
 
 def dependence_and_bootstrap(
@@ -1042,8 +1378,12 @@ def main() -> None:
         ),
     }
     fit = align_split(layouts, "train", args.fit_max_rows, args.bootstrap_seed)
-    test = align_split(layouts, "test", args.test_max_rows, args.bootstrap_seed + 1)
+    test = align_split(
+        layouts, "test", args.test_max_rows, args.bootstrap_seed + 1, include_supplement=True
+    )
     marginal, closure, temporal, tails, qc, quality_info = source_quality(fit, test, args)
+    observation_bootstrap, observation_info = observation_rmse_bootstrap(test, args)
+    saturation_bootstrap, saturation_info = near_saturation_bootstrap(fit, test, args)
     dependence, bootstrap, losses = dependence_and_bootstrap(fit, test, args)
     performance: Dict[str, object] | None = None
     coherence = pd.DataFrame()
@@ -1065,6 +1405,11 @@ def main() -> None:
     qc.to_csv(out_dir / "joint_structure_source_qc.csv", index=False)
     dependence.to_csv(out_dir / "t925_q925_empirical_copula_quality.csv", index=False)
     bootstrap.to_csv(out_dir / "joint_structure_utc_date_bootstrap_ci.csv", index=False)
+    saturation_bootstrap.to_csv(out_dir / "near_saturation_utc_date_bootstrap_ci.csv", index=False)
+    if not observation_bootstrap.empty:
+        observation_bootstrap.to_csv(
+            out_dir / "observation_anchored_rmse_utc_date_bootstrap_ci.csv", index=False
+        )
     if not coherence.empty:
         coherence.to_csv(out_dir / "m_t925_coherence_contrasts_by_seed.csv", index=False)
     if not events.empty:
@@ -1107,8 +1452,16 @@ def main() -> None:
         "new_training_models_used": 0 if args.analysis_mode == "diagnostic_only" else 27,
         "quality_against_reference_analysis_supported": quality_supported,
         "copula_rff_ranking_confirmed_by_exact_subset": exact_subset_rank_stable,
+        "copula_expected_pangu_worse_order_confirmed_by_exact_subset": exact_subset_rank_stable,
         "predictive_m_t925_interaction_supported": performance_supported,
         "tianji_hit_pangu_miss_linkage_supported": event_supported,
+        "thermodynamic_closure_used_for_evidence": False,
+        "supplemental_uncertainty_outputs": {
+            "observation_rmse_available": bool(not observation_bootstrap.empty),
+            "near_saturation_available": bool(not saturation_bootstrap.empty),
+            "pass_fail_gate_applied": False,
+            "reason": "supplemental uncertainty quantification; not a new model-selection gate",
+        },
         "performance": performance,
         "event_linkage": event_info,
         "minimum_event_coverage": args.min_event_coverage,
@@ -1128,10 +1481,12 @@ def main() -> None:
         ),
         "claim_limit": (
             "Diagnostic-only results are associative mechanism evidence, not a direct T925 intervention. The experiment "
-            "does not prove violation of atmospheric governing equations and must not be generalized to all AI models."
+            "does not prove violation of atmospheric governing equations and must not be generalized to all AI models. "
+            "Thermodynamic closure is lineage-sensitive QC and is excluded from source-skill claims."
             if args.analysis_mode == "diagnostic_only"
             else "The experiment does not prove violation of atmospheric governing equations and must not be generalized "
-            "to all AI weather models. Factorial interactions can also reflect representation and distribution shift."
+            "to all AI weather models. Factorial interactions can also reflect representation and distribution shift. "
+            "Thermodynamic closure is lineage-sensitive QC and is excluded from source-skill claims."
         ),
     }
     report = {
@@ -1155,7 +1510,11 @@ def main() -> None:
             "approximation": "fixed random Fourier features",
             "rff_dim": args.rff_dim,
             "exact_subset_audit_rows": int(dependence["exact_subset_n"].iloc[0]),
-            "exact_subset_ranking_confirmed": exact_subset_rank_stable,
+            "expected_pangu_worse_order_confirmed_by_exact_subset": exact_subset_rank_stable,
+            "ranking_note": (
+                "This flag tests the pre-specified Pangu-worse ordering; false does not by itself imply "
+                "RFF approximation failure. Inspect exact and RFF values directly."
+            ),
         },
         "provenance": {
             source: {
@@ -1178,6 +1537,19 @@ def main() -> None:
             "test_key_sha256": paired_key_sha256(test.keys),
         },
         "quality": quality_info,
+        "task_relevant_quality_supplement": {
+            "analysis_class": "supplemental paired uncertainty quantification; no new training or model selection",
+            "observation_anchored_rmse": observation_info,
+            "near_saturation_placement": saturation_info,
+        },
+        "variable_provenance_notes": {
+            "pangu_RH_925": closure_provenance("pangu"),
+            "era5_reference_analysis_Q_925": closure_provenance("era5_reference_analysis"),
+            "tianji_T_Q_RH_925": closure_provenance("tianji"),
+            "thermodynamic_closure_role": (
+                "QC only; it is excluded from evidence gates because derived-variable lineage makes the comparison asymmetric"
+            ),
+        },
         "figure_contract": {
             "backend": "Python/matplotlib only",
             "one_claim_per_figure": True,

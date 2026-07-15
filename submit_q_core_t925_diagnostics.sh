@@ -19,11 +19,17 @@ PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-}"
 PREFLIGHT_SCRIPT="${PREFLIGHT_SCRIPT:-${BASELINE_DIR}/preflight_q_core_t925_diagnostic_inputs.py}"
 ALLOW_EXISTING_OUTPUT="${ALLOW_EXISTING_OUTPUT:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
+BOOTSTRAP_SEED="${BOOTSTRAP_SEED:-20260714}"
 FIT_MAX_ROWS="${FIT_MAX_ROWS:-200000}"
 TEST_MAX_ROWS="${TEST_MAX_ROWS:-0}"
 RFF_DIM="${RFF_DIM:-512}"
 RFF_BANDWIDTH_SAMPLE="${RFF_BANDWIDTH_SAMPLE:-2000}"
+LOW_VIS_THRESHOLD_M="${LOW_VIS_THRESHOLD_M:-1000}"
+NEAR_SATURATION_QUANTILE="${NEAR_SATURATION_QUANTILE:-0.10}"
 MIN_EVENT_COVERAGE="${MIN_EVENT_COVERAGE:-0.80}"
+NO_FIGURES="${NO_FIGURES:-0}"
+OBS_ROOT="${OBS_ROOT:-${BASE}/auto_station}"
+PAPER_EVAL_DIR="${PAPER_EVAL_DIR:-${BASE}/paper_eval}"
 MT2PW_RUN_TAG="${MT2PW_RUN_TAG:-qcore_hybrid_mt2pw_formal_v1_20260708}"
 EVENT_ANALYSIS_DIR="${EVENT_ANALYSIS_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/${MT2PW_RUN_TAG}/analysis}"
 OUT_ROOT="${OUT_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_t925_diagnostics/${RUN_TAG}}"
@@ -165,6 +171,14 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "ERROR: completed MTW/mt2pw event table is missing: ${EVENT_ANALYSIS_DIR}" >&2
     exit 2
   }
+  [[ -d "${OBS_ROOT}" ]] || {
+    echo "ERROR: automatic-station observation directory is missing: ${OBS_ROOT}" >&2
+    exit 2
+  }
+  [[ -s "${PAPER_EVAL_DIR}/analyze_key_variable_quality.py" ]] || {
+    echo "ERROR: observation alignment helper is missing: ${PAPER_EVAL_DIR}/analyze_key_variable_quality.py" >&2
+    exit 2
+  }
   if [[ "${ALLOW_EXISTING_OUTPUT}" != "1" && -e "${OUT_ROOT}" ]]; then
     echo "ERROR: output root already exists; use a fresh RUN_TAG: ${OUT_ROOT}" >&2
     exit 2
@@ -215,7 +229,13 @@ echo "PANGU_DATA_DIR=${PANGU_DATA_DIR}"
 echo "TIANJI_DATA_DIR=${TIANJI_DATA_DIR}"
 echo "ERA5_DATA_DIR=${ERA5_DATA_DIR}"
 echo "EVENT_ANALYSIS_DIR=${EVENT_ANALYSIS_DIR}"
+echo "OBS_ROOT=${OBS_ROOT}"
+echo "PAPER_EVAL_DIR=${PAPER_EVAL_DIR}"
 echo "OUT_DIR=${OUT_DIR}"
+echo "BOOTSTRAP_SEED=${BOOTSTRAP_SEED}"
+echo "LOW_VIS_THRESHOLD_M=${LOW_VIS_THRESHOLD_M}"
+echo "NEAR_SATURATION_QUANTILE=${NEAR_SATURATION_QUANTILE}"
+echo "NO_FIGURES=${NO_FIGURES}"
 
 data_jobs=""
 if [[ "${BUILD_TIANJI}" == "1" ]]; then
@@ -239,7 +259,7 @@ fi
 
 analysis_args=(
   --job-name="qcore_t925_diag"
-  --export="ALL,RUN_TAG=${RUN_TAG},ANALYSIS_MODE=diagnostic_only,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},ERA5_DATA_DIR=${ERA5_DATA_DIR},EVENT_ANALYSIS_DIR=${EVENT_ANALYSIS_DIR},EVAL_ROOT=${OUT_ROOT},OUT_DIR=${OUT_DIR},FIT_MAX_ROWS=${FIT_MAX_ROWS},TEST_MAX_ROWS=${TEST_MAX_ROWS},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},RFF_DIM=${RFF_DIM},RFF_BANDWIDTH_SAMPLE=${RFF_BANDWIDTH_SAMPLE},MIN_EVENT_COVERAGE=${MIN_EVENT_COVERAGE}"
+  --export="ALL,RUN_TAG=${RUN_TAG},ANALYSIS_MODE=diagnostic_only,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},ERA5_DATA_DIR=${ERA5_DATA_DIR},EVENT_ANALYSIS_DIR=${EVENT_ANALYSIS_DIR},OBS_ROOT=${OBS_ROOT},PAPER_EVAL_DIR=${PAPER_EVAL_DIR},EVAL_ROOT=${OUT_ROOT},OUT_DIR=${OUT_DIR},FIT_MAX_ROWS=${FIT_MAX_ROWS},TEST_MAX_ROWS=${TEST_MAX_ROWS},BOOTSTRAP_ITERS=${BOOTSTRAP_ITERS},BOOTSTRAP_SEED=${BOOTSTRAP_SEED},RFF_DIM=${RFF_DIM},RFF_BANDWIDTH_SAMPLE=${RFF_BANDWIDTH_SAMPLE},LOW_VIS_THRESHOLD_M=${LOW_VIS_THRESHOLD_M},NEAR_SATURATION_QUANTILE=${NEAR_SATURATION_QUANTILE},MIN_EVENT_COVERAGE=${MIN_EVENT_COVERAGE},NO_FIGURES=${NO_FIGURES}"
 )
 if [[ -n "${data_jobs}" && "${DRY_RUN}" != "1" ]]; then
   analysis_args+=(--dependency="afterok:${data_jobs}")
@@ -261,6 +281,12 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "tianji_data_dir=${TIANJI_DATA_DIR}"
     echo "era5_data_dir=${ERA5_DATA_DIR}"
     echo "event_analysis_dir=${EVENT_ANALYSIS_DIR}"
+    echo "obs_root=${OBS_ROOT}"
+    echo "paper_eval_dir=${PAPER_EVAL_DIR}"
+    echo "bootstrap_iterations=${BOOTSTRAP_ITERS}"
+    echo "bootstrap_seed=${BOOTSTRAP_SEED}"
+    echo "low_visibility_threshold_m=${LOW_VIS_THRESHOLD_M}"
+    echo "near_saturation_quantile=${NEAR_SATURATION_QUANTILE}"
     echo "analysis_job=${analysis_job}"
     echo "claim_limit=association_between_joint_structure_discrepancy_and_existing_hit_miss_outcomes"
   } > "${OUT_ROOT}/submission_manifest_${RUN_TAG}.txt"

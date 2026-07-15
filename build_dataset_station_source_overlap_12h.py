@@ -120,6 +120,53 @@ RAW_ALIASES = {
     "T1000": "T_1000",
 }
 
+PANGU2025_DERIVED_FEATURE_PROVENANCE = {
+    "RH_1000": "derived from native Pangu T_1000 and Q_1000",
+    "RH_925": "derived from native Pangu T_925 and Q_925",
+    "DP_1000": "derived from native Pangu Q_1000",
+    "DP_925": "derived from native Pangu Q_925",
+    "WSPD10": "derived from native Pangu U10 and V10",
+    "WDIR10": "derived from native Pangu U10 and V10",
+    "WSPD1000": "derived from native Pangu U_1000 and V_1000",
+    "WDIR1000": "derived from native Pangu U_1000 and V_1000",
+    "WSPD925": "derived from native Pangu U_925 and V_925",
+    "WDIR925": "derived from native Pangu U_925 and V_925",
+    "INVERSION": "derived as Pangu T_925 minus T2M",
+}
+
+
+def classify_source_feature_provenance(
+    ds: xr.Dataset,
+    original_features: Sequence[str],
+    source_tag: str,
+) -> Tuple[List[str], List[str], Dict[str, str]]:
+    """Separate source-product fields from diagnostics already present in that product."""
+    available = {str(name) for name in ds.data_vars}
+    original = {str(name) for name in original_features}
+    derived = available - original
+    tag = str(source_tag).lower().replace("-", "").replace("_", "")
+    if tag == "pangu2025":
+        derived |= available.intersection(PANGU2025_DERIVED_FEATURE_PROVENANCE)
+    for name in original:
+        provenance = str(ds[name].attrs.get("provenance", "")) if name in ds else ""
+        if "derived" in provenance.lower():
+            derived.add(name)
+    native = original - derived
+    provenance_by_feature: Dict[str, str] = {}
+    for name in sorted(available):
+        attr = str(ds[name].attrs.get("provenance", "")).strip()
+        if name in PANGU2025_DERIVED_FEATURE_PROVENANCE and tag == "pangu2025":
+            provenance_by_feature[name] = PANGU2025_DERIVED_FEATURE_PROVENANCE[name]
+        elif attr:
+            provenance_by_feature[name] = attr
+        elif name in derived and name not in original:
+            provenance_by_feature[name] = "derived by shared station-source dataset builder"
+        elif name in derived:
+            provenance_by_feature[name] = "derived field read from source product"
+        else:
+            provenance_by_feature[name] = "native/read directly from source product"
+    return sorted(native), sorted(derived), provenance_by_feature
+
 
 def _open_dataset(path: str) -> xr.Dataset:
     try:
@@ -454,9 +501,11 @@ def main() -> None:
         ds_source = _load_station_nc(paths)
         source_inputs = paths
     ds_source = _rename_canonical(_normalize_station_dims(ds_source))
-    native_source_features = sorted(str(v) for v in ds_source.data_vars)
+    original_source_features = sorted(str(v) for v in ds_source.data_vars)
     ds_source = _ensure_derived(ds_source)
-    derived_source_features = sorted(set(str(v) for v in ds_source.data_vars) - set(native_source_features))
+    native_source_features, derived_source_features, source_feature_provenance = (
+        classify_source_feature_provenance(ds_source, original_source_features, args.source_tag)
+    )
     target = _load_target(args.target_file)
 
     source_stations = ds_source["station_id"].values
@@ -663,6 +712,7 @@ def main() -> None:
         "source_inputs": source_inputs,
         "native_source_features": native_source_features,
         "derived_source_features": derived_source_features,
+        "source_feature_provenance": source_feature_provenance,
         "year": args.year,
         "target_file": args.target_file,
         "target_time_tolerance_minutes": args.target_time_tolerance_minutes,

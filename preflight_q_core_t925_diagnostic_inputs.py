@@ -19,6 +19,8 @@ from pathlib import Path
 
 
 FEATURES = ("T_925", "Q_925", "RH_925")
+SUPPLEMENT_FEATURES = ("T2M", "WSPD10")
+REQUIRED_DYNAMIC_FEATURES = FEATURES + SUPPLEMENT_FEATURES
 ALLOWED_FEATURE_SETS = {"source_full", "q_core_t925_no_rh2m"}
 EXPECTED_UNIT_POLICY = "pmst_canonical_units_v2_20260630"
 EXPECTED_UNITS = {"T_925": "K", "Q_925": "kg kg-1", "RH_925": "%"}
@@ -55,7 +57,7 @@ def validate_dataset(data_dir: Path, source: str) -> dict[str, object]:
         raise PreflightError(f"{cfg_path} must contain a JSON object")
 
     order = tuple(str(value) for value in cfg.get("dynamic_feature_order", []))
-    missing_features = [name for name in FEATURES if name not in order]
+    missing_features = [name for name in REQUIRED_DYNAMIC_FEATURES if name not in order]
     if missing_features:
         raise PreflightError(f"q-core+T925 layout is missing {missing_features}; order={order}")
     if len(order) != len(set(order)):
@@ -98,6 +100,15 @@ def validate_dataset(data_dir: Path, source: str) -> dict[str, object]:
             )
 
     if source == "pangu":
+        provenance = cfg.get("source_feature_provenance")
+        if provenance is not None:
+            if not isinstance(provenance, Mapping):
+                raise PreflightError("source_feature_provenance must be a mapping when present")
+            rh_lineage = str(provenance.get("RH_925", ""))
+            if "derived" not in rh_lineage.lower() or "RH_925" in native or "RH_925" not in derived:
+                raise PreflightError(
+                    "new Pangu configs must classify RH_925 as derived from T_925/Q_925, not native"
+                )
         lead = cfg.get("source_forecast_lead")
         if not isinstance(lead, Mapping) or not bool(lead.get("available")):
             raise PreflightError("Pangu forecast-lead provenance is missing")

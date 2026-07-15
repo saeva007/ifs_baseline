@@ -40,8 +40,8 @@ class T925PreflightTest(unittest.TestCase):
             (data_dir / name).write_bytes(b"test")
         config = {
             "feature_set": "source_full",
-            "dynamic_feature_order": ["T2M", "T_925", "Q_925", "RH_925"],
-            "dyn_vars": 4,
+            "dynamic_feature_order": ["T2M", "WSPD10", "T_925", "Q_925", "RH_925"],
+            "dyn_vars": 5,
             "window": 12,
             "fe_dim": 8,
             "canonical_unit_policy": policy,
@@ -82,6 +82,16 @@ class T925PreflightTest(unittest.TestCase):
         with self.assertRaisesRegex(PreflightError, "X_test.npy"):
             validate_dataset(data_dir, "tianji")
 
+    def test_missing_observation_supplement_feature_fails_preflight(self) -> None:
+        data_dir = self.write_dataset("tianji")
+        cfg_path = data_dir / "dataset_build_config.json"
+        config = json.loads(cfg_path.read_text(encoding="utf-8"))
+        config["dynamic_feature_order"].remove("WSPD10")
+        config["dyn_vars"] = len(config["dynamic_feature_order"])
+        cfg_path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(PreflightError, "WSPD10"):
+            validate_dataset(data_dir, "tianji")
+
     def test_noncanonical_pangu_lead_fails(self) -> None:
         data_dir = self.write_dataset("pangu")
         cfg_path = data_dir / "dataset_build_config.json"
@@ -89,6 +99,15 @@ class T925PreflightTest(unittest.TestCase):
         config["source_forecast_lead"]["max_hours"] = 24.0
         cfg_path.write_text(json.dumps(config), encoding="utf-8")
         with self.assertRaisesRegex(PreflightError, "12--23 h"):
+            validate_dataset(data_dir, "pangu")
+
+    def test_new_pangu_provenance_metadata_must_mark_rh925_derived(self) -> None:
+        data_dir = self.write_dataset("pangu")
+        cfg_path = data_dir / "dataset_build_config.json"
+        config = json.loads(cfg_path.read_text(encoding="utf-8"))
+        config["source_feature_provenance"] = {"RH_925": "native/read directly from source product"}
+        cfg_path.write_text(json.dumps(config), encoding="utf-8")
+        with self.assertRaisesRegex(PreflightError, "RH_925 as derived"):
             validate_dataset(data_dir, "pangu")
 
     @unittest.skipUnless(BASH_EXE, "bash is required for submitter dry-run regression")
@@ -123,6 +142,8 @@ class T925PreflightTest(unittest.TestCase):
         self.assertIn("PANGU_ACTION=rebuild", output)
         self.assertIn("TIANJI_ACTION=reuse", output)
         self.assertIn("ERA5_ACTION=reuse", output)
+        self.assertIn("OBS_ROOT=", output)
+        self.assertIn("PAPER_EVAL_DIR=", output)
         self.assertIn("t925_diag_pangu_data", output)
         self.assertNotIn("t925_diag_tianji_data", output)
         self.assertNotIn("t925_diag_era5_data", output)
