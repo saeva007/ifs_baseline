@@ -452,8 +452,10 @@ within the same weather day remain together, following the case-resampling
 principle of
 [Hamill (1999)](https://journals.ametsoc.org/abstract/journals/wefo/14/2/1520-0434_1999_014_0155_htfenp_2_0_co_2.xml).
 
-First run a scheduler dry run. It must print `TRAINING_JOBS=0` and exactly one
-analysis job when the existing canonical source-full datasets are reusable:
+First run a scheduler dry run. The default `BUILD_DATA=auto` preflights every
+source on the login node before `sbatch`. It prints `TRAINING_JOBS=0`, reuses
+each compliant dataset, rebuilds only each noncompliant dataset, and finally
+submits exactly one dependent analysis job:
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline
@@ -474,9 +476,10 @@ bash submit_q_core_t925_diagnostics.sh
 The analyzer accepts different source-full feature orders but hard-fails unless
 all three configs use the canonical unit policy, explicitly UTC time, native
 T925 provenance, paired visibility labels, and the canonical Pangu 12--23 h
-lead. If an older source-full dataset fails this preflight, rebuild only the
-three diagnostic datasets; this schedules three data jobs followed by one
-analysis job and still schedules zero training jobs:
+lead. The submitter mirrors all config and artifact checks before scheduling,
+so an old unit policy is detected without consuming a compute allocation. In
+auto mode, only failed sources are rebuilt. To force a clean rebuild of all
+three diagnostic datasets, use:
 
 ```bash
 RUN_TAG=qcore_t925_diag_rebuild_v1_20260714 \

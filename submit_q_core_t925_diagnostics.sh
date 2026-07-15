@@ -1,11 +1,10 @@
 #!/bin/bash
 # Submit the default T925--moisture diagnosis with zero model training.
 #
-# Reuse mode (one analysis job):
+# Auto mode preflights each source and rebuilds only invalid inputs:
 #   RUN_TAG=qcore_t925_diag_v1_20260714 bash submit_q_core_t925_diagnostics.sh
 #
-# If existing source-full configs fail the strict provenance/unit preflight,
-# rebuild only the three diagnostic datasets (still zero training):
+# Force rebuilding all three diagnostic datasets (still zero training):
 #   RUN_TAG=qcore_t925_diag_rebuild_v1_20260714 BUILD_DATA=1 \
 #     bash submit_q_core_t925_diagnostics.sh
 
@@ -15,7 +14,8 @@ BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 RUN_TAG="${RUN_TAG:?RUN_TAG is required and must be a fresh diagnostic tag}"
 DRY_RUN="${DRY_RUN:-0}"
-BUILD_DATA="${BUILD_DATA:-0}"
+BUILD_DATA="${BUILD_DATA:-auto}"
+PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-python}"
 ALLOW_EXISTING_OUTPUT="${ALLOW_EXISTING_OUTPUT:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 FIT_MAX_ROWS="${FIT_MAX_ROWS:-200000}"
@@ -29,24 +29,76 @@ OUT_ROOT="${OUT_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_t925_d
 OUT_DIR="${OUT_DIR:-${OUT_ROOT}/analysis}"
 PANGU2025_STATION_FILE="${PANGU2025_STATION_FILE:-${BASELINE_DIR}/pangu_station/pangu_station_2025_lead12_23h_canonical.nc}"
 
-if [[ "${BUILD_DATA}" == "1" ]]; then
-  DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/q_core_t925_diagnostic_datasets/${RUN_TAG}}"
-  PANGU_DATA_DIR="${PANGU_DATA_DIR:-${DATA_ROOT}/pangu2025}"
-  TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${DATA_ROOT}/tianji}"
-  ERA5_DATA_DIR="${ERA5_DATA_DIR:-${DATA_ROOT}/era5_2025}"
-else
-  DATA_ROOT="${DATA_ROOT:-}"
-  PANGU_DATA_DIR="${PANGU_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_source_full}"
-  TIANJI_DATA_DIR="${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full}"
-  ERA5_DATA_DIR="${ERA5_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full}"
-fi
+DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/q_core_t925_diagnostic_datasets/${RUN_TAG}}"
+PANGU_REUSE_DATA_DIR="${PANGU_REUSE_DATA_DIR:-${PANGU_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_pangu2025_12h_pm10_pm25_source_full}}"
+TIANJI_REUSE_DATA_DIR="${TIANJI_REUSE_DATA_DIR:-${TIANJI_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_tianji_12h_pm10_pm25_source_full}}"
+ERA5_REUSE_DATA_DIR="${ERA5_REUSE_DATA_DIR:-${ERA5_DATA_DIR:-${BASELINE_DIR}/ml_dataset_overlap_era5_2025_12h_pm10_pm25_source_full}}"
+PANGU_BUILD_DATA_DIR="${PANGU_BUILD_DATA_DIR:-${DATA_ROOT}/pangu2025}"
+TIANJI_BUILD_DATA_DIR="${TIANJI_BUILD_DATA_DIR:-${DATA_ROOT}/tianji}"
+ERA5_BUILD_DATA_DIR="${ERA5_BUILD_DATA_DIR:-${DATA_ROOT}/era5_2025}"
 
 case "${RUN_TAG}" in
   *[!A-Za-z0-9_.-]*|"") echo "ERROR: invalid RUN_TAG=${RUN_TAG}" >&2; exit 2 ;;
 esac
-[[ "${BUILD_DATA}" == "0" || "${BUILD_DATA}" == "1" ]] || {
-  echo "ERROR: BUILD_DATA must be 0 or 1" >&2; exit 2;
+[[ "${BUILD_DATA}" == "auto" || "${BUILD_DATA}" == "0" || "${BUILD_DATA}" == "1" ]] || {
+  echo "ERROR: BUILD_DATA must be auto, 0, or 1" >&2; exit 2;
 }
+
+preflight_source() {
+  local source="$1"
+  local data_dir="$2"
+  "${PREFLIGHT_PYTHON}" "${BASELINE_DIR}/preflight_q_core_t925_diagnostic_inputs.py" \
+    --source "${source}" --data-dir "${data_dir}"
+}
+
+BUILD_PANGU=0
+BUILD_TIANJI=0
+BUILD_ERA5=0
+if [[ "${BUILD_DATA}" == "1" ]]; then
+  BUILD_PANGU=1
+  BUILD_TIANJI=1
+  BUILD_ERA5=1
+elif [[ "${BUILD_DATA}" == "auto" ]]; then
+  preflight_source pangu "${PANGU_REUSE_DATA_DIR}" || BUILD_PANGU=1
+  preflight_source tianji "${TIANJI_REUSE_DATA_DIR}" || BUILD_TIANJI=1
+  preflight_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}" || BUILD_ERA5=1
+else
+  preflight_source pangu "${PANGU_REUSE_DATA_DIR}" || {
+    echo "ERROR: strict reuse requested (BUILD_DATA=0), but Pangu input failed preflight." >&2
+    exit 2
+  }
+  preflight_source tianji "${TIANJI_REUSE_DATA_DIR}" || {
+    echo "ERROR: strict reuse requested (BUILD_DATA=0), but Tianji input failed preflight." >&2
+    exit 2
+  }
+  preflight_source era5_reference_analysis "${ERA5_REUSE_DATA_DIR}" || {
+    echo "ERROR: strict reuse requested (BUILD_DATA=0), but ERA5 input failed preflight." >&2
+    exit 2
+  }
+fi
+
+if [[ "${BUILD_PANGU}" == "1" ]]; then
+  PANGU_DATA_DIR="${PANGU_BUILD_DATA_DIR}"
+  PANGU_ACTION="rebuild"
+else
+  PANGU_DATA_DIR="${PANGU_REUSE_DATA_DIR}"
+  PANGU_ACTION="reuse"
+fi
+if [[ "${BUILD_TIANJI}" == "1" ]]; then
+  TIANJI_DATA_DIR="${TIANJI_BUILD_DATA_DIR}"
+  TIANJI_ACTION="rebuild"
+else
+  TIANJI_DATA_DIR="${TIANJI_REUSE_DATA_DIR}"
+  TIANJI_ACTION="reuse"
+fi
+if [[ "${BUILD_ERA5}" == "1" ]]; then
+  ERA5_DATA_DIR="${ERA5_BUILD_DATA_DIR}"
+  ERA5_ACTION="rebuild"
+else
+  ERA5_DATA_DIR="${ERA5_REUSE_DATA_DIR}"
+  ERA5_ACTION="reuse"
+fi
+BUILD_ANY=$((BUILD_PANGU || BUILD_TIANJI || BUILD_ERA5))
 
 if [[ "${DRY_RUN}" != "1" ]]; then
   [[ -s "${EVENT_ANALYSIS_DIR}/event_case_control_samples.csv.gz" ]] || {
@@ -57,23 +109,17 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "ERROR: output root already exists; use a fresh RUN_TAG: ${OUT_ROOT}" >&2
     exit 2
   fi
-  if [[ "${BUILD_DATA}" == "1" ]]; then
+  if [[ "${BUILD_PANGU}" == "1" ]]; then
     [[ -s "${PANGU2025_STATION_FILE}" ]] || {
       echo "ERROR: canonical Pangu station product is missing: ${PANGU2025_STATION_FILE}" >&2
       exit 2
     }
+  fi
+  if [[ "${BUILD_ANY}" == "1" ]]; then
     [[ ! -e "${DATA_ROOT}" ]] || {
       echo "ERROR: fresh diagnostic DATA_ROOT already exists: ${DATA_ROOT}" >&2
       exit 2
     }
-  else
-    for dir in "${PANGU_DATA_DIR}" "${TIANJI_DATA_DIR}" "${ERA5_DATA_DIR}"; do
-      [[ -s "${dir}/dataset_build_config.json" ]] || {
-        echo "ERROR: reusable source-full dataset is missing its config: ${dir}" >&2
-        echo "Rerun with BUILD_DATA=1 to build diagnostic-only data without training." >&2
-        exit 2
-      }
-    done
   fi
 fi
 
@@ -101,6 +147,9 @@ echo "T925--moisture diagnostic-only chain"
 echo "RUN_TAG=${RUN_TAG}"
 echo "BUILD_DATA=${BUILD_DATA}"
 echo "TRAINING_JOBS=0"
+echo "PANGU_ACTION=${PANGU_ACTION}"
+echo "TIANJI_ACTION=${TIANJI_ACTION}"
+echo "ERA5_ACTION=${ERA5_ACTION}"
 echo "PANGU_DATA_DIR=${PANGU_DATA_DIR}"
 echo "TIANJI_DATA_DIR=${TIANJI_DATA_DIR}"
 echo "ERA5_DATA_DIR=${ERA5_DATA_DIR}"
@@ -108,17 +157,23 @@ echo "EVENT_ANALYSIS_DIR=${EVENT_ANALYSIS_DIR}"
 echo "OUT_DIR=${OUT_DIR}"
 
 data_jobs=""
-if [[ "${BUILD_DATA}" == "1" ]]; then
+if [[ "${BUILD_TIANJI}" == "1" ]]; then
   tianji_job=$(submit t925_diag_tianji_data \
     --export="ALL,FEATURE_SET=q_core_t925_no_rh2m,OUT_DIR=${TIANJI_DATA_DIR}" \
     sub_tianji_overlap_data.slurm)
+  data_jobs="${tianji_job}"
+fi
+if [[ "${BUILD_PANGU}" == "1" ]]; then
   pangu_job=$(submit t925_diag_pangu_data \
     --export="ALL,SOURCE_KIND=station_nc,SOURCE_TAG=pangu2025,YEAR=2025,FEATURE_SET=q_core_t925_no_rh2m,SOURCE_FILE=${PANGU2025_STATION_FILE},OUT_DIR=${PANGU_DATA_DIR},EXPECTED_LEAD_MIN_HOURS=12,EXPECTED_LEAD_MAX_HOURS=23,INFER_PANGU_LEAD12_23_FROM_VALID_TIME=1" \
     sub_station_source_overlap_data.slurm)
+  data_jobs="${data_jobs:+${data_jobs}:}${pangu_job}"
+fi
+if [[ "${BUILD_ERA5}" == "1" ]]; then
   era5_job=$(submit t925_diag_era5_data \
     --export="ALL,SOURCE_KIND=era5_feature_dir,SOURCE_TAG=era5_2025,YEAR=2025,FEATURE_SET=q_core_t925_no_rh2m,OUT_DIR=${ERA5_DATA_DIR}" \
     sub_station_source_overlap_data.slurm)
-  data_jobs="${tianji_job}:${pangu_job}:${era5_job}"
+  data_jobs="${data_jobs:+${data_jobs}:}${era5_job}"
 fi
 
 analysis_args=(
@@ -137,7 +192,10 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "analysis_mode=diagnostic_only"
     echo "new_training_jobs=0"
     echo "run_tag=${RUN_TAG}"
-    echo "build_data=${BUILD_DATA}"
+    echo "build_data_mode=${BUILD_DATA}"
+    echo "pangu_action=${PANGU_ACTION}"
+    echo "tianji_action=${TIANJI_ACTION}"
+    echo "era5_action=${ERA5_ACTION}"
     echo "pangu_data_dir=${PANGU_DATA_DIR}"
     echo "tianji_data_dir=${TIANJI_DATA_DIR}"
     echo "era5_data_dir=${ERA5_DATA_DIR}"

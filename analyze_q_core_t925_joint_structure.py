@@ -42,13 +42,11 @@ from typing import Dict, Iterable, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from preflight_q_core_t925_diagnostic_inputs import FEATURES, validate_dataset
+
 
 SOURCES = ("pangu", "tianji", "era5_reference_analysis")
 FORECAST_SOURCES = ("pangu", "tianji")
-FEATURES = ("T_925", "Q_925", "RH_925")
-ALLOWED_FEATURE_SETS = {"source_full", "q_core_t925_no_rh2m"}
-EXPECTED_UNIT_POLICY = "pmst_canonical_units_v2_20260630"
-EXPECTED_UNITS = {"T_925": "K", "Q_925": "kg kg-1", "RH_925": "%"}
 SOURCE_LABELS = {
     "pangu": "Pangu",
     "tianji": "Tianji",
@@ -105,53 +103,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_layout(path: Path, source: str) -> DatasetLayout:
-    cfg_path = path / "dataset_build_config.json"
-    with cfg_path.open("r", encoding="utf-8") as f:
-        cfg = json.load(f)
+    cfg = validate_dataset(path, source)
     order = tuple(str(value) for value in cfg.get("dynamic_feature_order", []))
-    missing = [name for name in FEATURES if name not in order]
-    if missing:
-        raise ValueError(f"{path}: q-core+T925 layout is missing {missing}; order={order}")
     feature_set = str(cfg.get("feature_set", "")).strip().lower().replace("-", "_")
-    if feature_set not in ALLOWED_FEATURE_SETS:
-        raise ValueError(f"{path}: feature_set={feature_set!r}; expected one of {sorted(ALLOWED_FEATURE_SETS)}")
-    if str(cfg.get("canonical_unit_policy", "")) != EXPECTED_UNIT_POLICY:
-        raise ValueError(
-            f"{path}: canonical_unit_policy predates {EXPECTED_UNIT_POLICY}; rebuild data before diagnosis"
-        )
-    declared_units = cfg.get("canonical_dynamic_units")
-    if not isinstance(declared_units, Mapping):
-        raise ValueError(f"{path}: canonical_dynamic_units metadata is missing")
-    mismatch = {
-        feature: (declared_units.get(feature), expected)
-        for feature, expected in EXPECTED_UNITS.items()
-        if declared_units.get(feature) != expected
-    }
-    if mismatch:
-        raise ValueError(f"{path}: canonical unit mismatch: {mismatch}")
-    if str(cfg.get("time_coordinate", "")).upper() != "UTC":
-        raise ValueError(f"{path}: time_coordinate must be explicitly recorded as UTC")
-    native = {str(value) for value in cfg.get("native_source_features", [])}
-    derived = {str(value) for value in cfg.get("derived_source_features", [])}
-    if "T_925" not in native:
-        raise ValueError(f"{path}: T_925 must be documented as a native source field")
-    if source in {"pangu", "tianji"} and "Q_925" not in native:
-        raise ValueError(f"{path}: {source} Q_925 must be documented as native")
-    if source == "era5_reference_analysis" and "Q_925" not in native:
-        if "Q_925" not in derived or not {"T_925", "RH_925"}.issubset(native):
-            raise ValueError(f"{path}: ERA5 Q_925 needs native Q or documented derivation from native T925/RH925")
-    if source == "pangu":
-        lead = cfg.get("source_forecast_lead")
-        if not isinstance(lead, Mapping) or not bool(lead.get("available")):
-            raise ValueError(f"{path}: Pangu forecast-lead provenance is missing")
-        lead_min = float(lead.get("min_hours", math.nan))
-        lead_max = float(lead.get("max_hours", math.nan))
-        if not (math.isclose(lead_min, 12.0, abs_tol=1.0e-6) and math.isclose(lead_max, 23.0, abs_tol=1.0e-6)):
-            raise ValueError(f"{path}: expected canonical Pangu 12--23 h lead, got {lead}")
     window = int(cfg["window"])
     dyn_vars = int(cfg["dyn_vars"])
-    if window != 12 or dyn_vars != len(order):
-        raise ValueError(f"{path}: invalid window/dyn_vars metadata")
     return DatasetLayout(
         path=path,
         order=order,
