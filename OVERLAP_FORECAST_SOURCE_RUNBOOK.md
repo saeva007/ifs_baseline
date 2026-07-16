@@ -1119,7 +1119,7 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v6`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v7`.
 
 The manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
@@ -1140,7 +1140,9 @@ Every claim is a separate figure, in presentation order:
 7. station-observation 10-m wind-speed quality for the same two regimes;
 8. paired pressure-level quality against ERA5 reference analysis;
 9. validation-matched endpoint-specific Low-vis hits;
-10. observation-anchored Tianji source advantage within Tianji-only hits.
+10. observation-anchored Tianji source advantage within Tianji-only hits;
+11. paired Tianji-minus-Pangu forecast-state contrasts in Tianji-only hits,
+    with Pangu-only hits as the reverse-disagreement control.
 
 The optional argmax overview uses the formal `0000` Pangu and `1111` Tianji
 q-core endpoints, bars for three-seed means, and open circles for individual
@@ -1153,6 +1155,15 @@ with 1000 joint UTC-valid-date bootstrap draws. T2M is converted from K to °C
 and MSLP from Pa to hPa before matching automatic-station observations. It is a
 descriptive analysis of endpoint-selected station-time samples, not a causal
 source intervention.
+
+The forecast-state figure uses the same paired station-time samples to report
+T2M, WSPD10, RH925 and MSLP differences (`Tianji minus Pangu`). Its primary
+diagnostic is the between-case delta-delta: the mean source difference within
+Tianji-only hits minus the corresponding difference within Pangu-only hits.
+All variables and both categories share the same 1000 UTC-valid-date bootstrap
+draws. This reverse-disagreement comparison tests whether the cool, moist and
+weak-wind contrast is specific to Tianji-only hits, but it remains conditioned
+on model outcomes and therefore is not a causal fog-mechanism estimate.
 
 MSLP quality, the endpoint-specific hit-count figure, and pressure-level
 physical QC are supplementary candidates. Subtle vertical dashed major grids

@@ -51,6 +51,7 @@ FIGURE_SIZES = {
     "pressure": (FIGURE_WIDTH, 2.90),
     "events": (FIGURE_WIDTH, 2.25),
     "event_quality": (FIGURE_WIDTH, 2.95),
+    "event_state": (FIGURE_WIDTH, 4.60),
     "qc": (FIGURE_WIDTH, 2.65),
 }
 plt.rcParams.update(
@@ -174,6 +175,10 @@ FIGURE_SPECS: Mapping[str, Mapping[str, str]] = {
         "placement": "main",
         "claim": "Within Tianji-only Low-vis hits, Tianji has lower observation-referenced T2M and WSPD10 RMSE, whereas MSLP is non-robust.",
     },
+    "09b_disagreement_case_forecast_state": {
+        "placement": "main_or_supplement",
+        "claim": "Tianji-only Low-vis hits show a stronger Tianji-minus-Pangu cool, moist and weak-wind state contrast than reverse disagreement cases.",
+    },
     "10_pressure_qc": {
         "placement": "supplement",
         "claim": "Pangu contains a small but explicit fraction of non-physical negative pressure-level specific humidity values.",
@@ -192,6 +197,7 @@ FIGURE_SIZE_KEYS = {
     "07_pressure_level_quality": "pressure",
     "08_unique_event_hits": "events",
     "09_observation_anchored_tianji_only_advantage": "event_quality",
+    "09b_disagreement_case_forecast_state": "event_state",
     "10_pressure_qc": "qc",
 }
 
@@ -206,6 +212,8 @@ EVENT_OBSERVATION_COLUMNS = [
     "WSPD10_pangu",
     "WSPD10_tianji",
     "win_s_avg_10mi",
+    "RH_925_pangu",
+    "RH_925_tianji",
     "MSLP_pangu",
     "MSLP_tianji",
     "prs_sea",
@@ -230,7 +238,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v6).",
+        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v7).",
     )
     parser.add_argument(
         "--surface-view",
@@ -1357,6 +1365,319 @@ def plot_event_observation_advantage(
     )
 
 
+def event_forecast_state_contrast_source(
+    samples: pd.DataFrame,
+    iterations: int = 1000,
+    seed: int = 20260702,
+) -> pd.DataFrame:
+    """Diagnose paired Tianji-minus-Pangu states in endpoint disagreements.
+
+    The primary category is Tianji-hit/Pangu-miss.  Pangu-hit/Tianji-miss is
+    retained as a reverse-disagreement control, and the reported specificity
+    contrast is the difference between their two paired source differences.
+    All confidence intervals use the same UTC-valid-date bootstrap draws for
+    every variable and both categories so that day-scale spatial dependence and
+    cross-variable covariance are retained.
+    """
+
+    categories = [
+        ("tianji_hit_pangu_miss", "Tianji-only hit"),
+        ("pangu_hit_tianji_miss", "Pangu-only hit"),
+    ]
+    category_keys = [item[0] for item in categories]
+    required = [
+        "time_utc",
+        "station_key",
+        "case_category",
+        "vis_raw_m",
+        "T2M_pangu",
+        "T2M_tianji",
+        "WSPD10_pangu",
+        "WSPD10_tianji",
+        "RH_925_pangu",
+        "RH_925_tianji",
+        "MSLP_pangu",
+        "MSLP_tianji",
+    ]
+    require_columns(samples, required, "event_case_control_samples")
+    target = samples[samples["case_category"].isin(category_keys)].copy()
+    counts_by_category = target["case_category"].value_counts()
+    missing_categories = [key for key in category_keys if int(counts_by_category.get(key, 0)) == 0]
+    if missing_categories:
+        raise ValueError(f"Missing disagreement categories {missing_categories}")
+    target["time_utc"] = pd.to_datetime(target["time_utc"], errors="raise", utc=True)
+    target["utc_valid_date"] = target["time_utc"].dt.floor("D")
+    if target[["time_utc", "station_key"]].duplicated().any():
+        raise ValueError("Disagreement event samples contain duplicate station-time rows")
+    visibility = pd.to_numeric(target["vis_raw_m"], errors="coerce")
+    if visibility.isna().any() or bool((visibility >= 1000.0).any()):
+        raise ValueError("Disagreement event samples must all satisfy observed visibility <1000 m")
+    dates = pd.Index(sorted(target["utc_valid_date"].unique()), name="utc_valid_date")
+    if len(dates) < 10:
+        raise ValueError(f"State diagnosis requires at least 10 UTC dates, got {len(dates)}")
+    if iterations < 200:
+        raise ValueError("Use at least 200 UTC-date bootstrap iterations")
+    rng = np.random.default_rng(seed)
+    date_draws = rng.integers(0, len(dates), size=(iterations, len(dates)))
+
+    feature_specs = [
+        {
+            "feature": "T2M",
+            "label": "2-m temperature",
+            "unit": "K",
+            "pangu": "T2M_pangu",
+            "tianji": "T2M_tianji",
+            "conversion_factor": 1.0,
+            "direction": "negative = cooler in Tianji; positive = warmer in Tianji",
+        },
+        {
+            "feature": "WSPD10",
+            "label": "10-m wind speed",
+            "unit": "m s-1",
+            "pangu": "WSPD10_pangu",
+            "tianji": "WSPD10_tianji",
+            "conversion_factor": 1.0,
+            "direction": "negative = weaker in Tianji; positive = stronger in Tianji",
+        },
+        {
+            "feature": "RH_925",
+            "label": "925-hPa relative humidity",
+            "unit": "percentage points",
+            "pangu": "RH_925_pangu",
+            "tianji": "RH_925_tianji",
+            "conversion_factor": 1.0,
+            "direction": "negative = drier in Tianji; positive = moister in Tianji",
+        },
+        {
+            "feature": "MSLP",
+            "label": "Mean sea-level pressure",
+            "unit": "hPa",
+            "pangu": "MSLP_pangu",
+            "tianji": "MSLP_tianji",
+            "conversion_factor": 0.01,
+            "direction": "negative = lower in Tianji; positive = higher in Tianji",
+        },
+    ]
+
+    rows: List[Dict[str, object]] = []
+    for spec in feature_specs:
+        frame = target[
+            ["utc_valid_date", "case_category", spec["pangu"], spec["tianji"]]
+        ].copy()
+        pangu = pd.to_numeric(frame[spec["pangu"]], errors="coerce").to_numpy(dtype=float)
+        tianji = pd.to_numeric(frame[spec["tianji"]], errors="coerce").to_numpy(dtype=float)
+        difference = (tianji - pangu) * float(spec["conversion_factor"])
+        finite = np.isfinite(difference)
+        complete = frame.loc[finite, ["utc_valid_date", "case_category"]].copy()
+        complete["difference"] = difference[finite]
+
+        category_statistics: Dict[str, Dict[str, object]] = {}
+        for category_key, category_label in categories:
+            part = complete[complete["case_category"] == category_key]
+            if len(part) < 100:
+                raise ValueError(
+                    f"{spec['feature']}/{category_key}: fewer than 100 complete paired rows"
+                )
+            daily = (
+                part.groupby("utc_valid_date", sort=True)["difference"]
+                .agg(["sum", "count"])
+                .reindex(dates, fill_value=0)
+            )
+            daily_sum = daily["sum"].to_numpy(dtype=float)
+            daily_count = daily["count"].to_numpy(dtype=float)
+            draw_counts = daily_count[date_draws].sum(axis=1)
+            if bool((draw_counts <= 0).any()):
+                raise ValueError(f"{spec['feature']}/{category_key}: empty date-bootstrap draw")
+            draws = daily_sum[date_draws].sum(axis=1) / draw_counts
+            estimate = float(part["difference"].mean())
+            ci_low, ci_high = np.quantile(draws, [0.025, 0.975])
+            category_statistics[category_key] = {
+                "estimate": estimate,
+                "draws": draws,
+                "n_complete": int(len(part)),
+                "represented_utc_dates": int(np.count_nonzero(daily_count)),
+            }
+            rows.append(
+                {
+                    "feature": spec["feature"],
+                    "label": spec["label"],
+                    "unit": spec["unit"],
+                    "contrast": category_key,
+                    "contrast_label": category_label,
+                    "contrast_role": "within_disagreement_category",
+                    "estimate": estimate,
+                    "ci_low": float(ci_low),
+                    "ci_high": float(ci_high),
+                    "ci_excludes_zero": bool(ci_low > 0.0 or ci_high < 0.0),
+                    "n_complete": int(len(part)),
+                    "represented_utc_dates": int(np.count_nonzero(daily_count)),
+                    "source_difference": "Tianji_minus_Pangu",
+                    "effect_definition": "mean(Tianji - Pangu) within disagreement category",
+                    "direction": spec["direction"],
+                    "bootstrap_unit": "UTC_valid_date",
+                    "bootstrap_iterations": int(iterations),
+                    "bootstrap_seed": int(seed),
+                    "selection_note": "descriptive endpoint-conditioned contrast; not a causal source intervention",
+                }
+            )
+
+        primary = category_statistics["tianji_hit_pangu_miss"]
+        reverse = category_statistics["pangu_hit_tianji_miss"]
+        specificity_draws = np.asarray(primary["draws"]) - np.asarray(reverse["draws"])
+        specificity = float(primary["estimate"]) - float(reverse["estimate"])
+        ci_low, ci_high = np.quantile(specificity_draws, [0.025, 0.975])
+        rows.append(
+            {
+                "feature": spec["feature"],
+                "label": spec["label"],
+                "unit": spec["unit"],
+                "contrast": "tianji_only_minus_pangu_only",
+                "contrast_label": "Between-case delta-delta",
+                "contrast_role": "reverse_disagreement_specificity",
+                "estimate": specificity,
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "ci_excludes_zero": bool(ci_low > 0.0 or ci_high < 0.0),
+                "n_complete": int(primary["n_complete"]) + int(reverse["n_complete"]),
+                "represented_utc_dates": int(len(dates)),
+                "source_difference": "Tianji_minus_Pangu",
+                "effect_definition": (
+                    "mean(Tianji - Pangu | Tianji-only hit) - "
+                    "mean(Tianji - Pangu | Pangu-only hit)"
+                ),
+                "direction": spec["direction"],
+                "bootstrap_unit": "joint_UTC_valid_date",
+                "bootstrap_iterations": int(iterations),
+                "bootstrap_seed": int(seed),
+                "selection_note": (
+                    "reverse-disagreement specificity check; both groups remain endpoint-conditioned"
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_event_forecast_state_contrast(
+    source: pd.DataFrame,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    """Draw one compact quantitative grid for the shared state-contrast claim."""
+
+    feature_specs = [
+        ("T2M", "2-m temperature", "Cooler", "warmer", "K", 2),
+        ("WSPD10", "10-m wind speed", "Weaker", "stronger", r"m s$^{-1}$", 2),
+        ("RH_925", "925-hPa relative humidity", "Drier", "moister", "percentage points", 1),
+        ("MSLP", "Mean sea-level pressure", "Lower", "higher", "hPa", 2),
+    ]
+    categories = [
+        ("tianji_hit_pangu_miss", "Tianji-only hit", TIANJI, SOURCE_MARKERS["tianji"]),
+        ("pangu_hit_tianji_miss", "Pangu-only hit", PANGU, SOURCE_MARKERS["pangu"]),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=FIGURE_SIZES["event_state"])
+    fig.subplots_adjust(left=0.145, right=0.98, top=0.855, bottom=0.115, hspace=0.72, wspace=0.43)
+    fig.suptitle(
+        "Forecast-state contrast in model-disagreement Low-vis cases",
+        x=0.145,
+        y=0.975,
+        ha="left",
+        va="top",
+        fontsize=11.4,
+        fontweight="bold",
+        color=INK,
+    )
+
+    for ax, (feature, label, left_word, right_word, unit, decimals) in zip(
+        axes.flat, feature_specs
+    ):
+        part = source[
+            (source["feature"] == feature)
+            & (source["contrast_role"] == "within_disagreement_category")
+        ].set_index("contrast")
+        specificity_rows = source[
+            (source["feature"] == feature)
+            & (source["contrast_role"] == "reverse_disagreement_specificity")
+        ]
+        if set(part.index) != {item[0] for item in categories} or len(specificity_rows) != 1:
+            raise ValueError(f"Incomplete disagreement-state source rows for {feature}")
+        y_positions = [1.0, 0.0]
+        for y, (category, _category_label, color, marker) in zip(y_positions, categories):
+            row = part.loc[category]
+            estimate = float(row["estimate"])
+            ci_low = float(row["ci_low"])
+            ci_high = float(row["ci_high"])
+            ax.errorbar(
+                estimate,
+                y,
+                xerr=np.array([[max(0.0, estimate - ci_low)], [max(0.0, ci_high - estimate)]]),
+                fmt=marker,
+                markersize=7.2,
+                markerfacecolor=color,
+                markeredgecolor="white",
+                markeredgewidth=0.7,
+                ecolor=color,
+                elinewidth=2.0,
+                capsize=0,
+                zorder=3,
+            )
+            ax.annotate(
+                f"{estimate:+.{decimals}f}",
+                (estimate, y),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=7.7,
+                fontweight="bold",
+                color=color,
+            )
+
+        specificity = specificity_rows.iloc[0]
+        ax.set_title(label, loc="left", pad=20, fontsize=9.4, fontweight="bold", color=INK)
+        ax.text(
+            0.0,
+            1.015,
+            (
+                f"Between-case ΔΔ {float(specificity['estimate']):+.{decimals}f} "
+                f"[{float(specificity['ci_low']):+.{decimals}f}, "
+                f"{float(specificity['ci_high']):+.{decimals}f}]"
+            ),
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=7.2,
+            fontweight="bold" if bool(specificity["ci_excludes_zero"]) else "normal",
+            color=INK,
+        )
+        all_limits = np.r_[
+            part["ci_low"].to_numpy(dtype=float),
+            part["ci_high"].to_numpy(dtype=float),
+            [0.0],
+        ]
+        span = max(float(all_limits.max() - all_limits.min()), 0.25)
+        ax.set_xlim(
+            float(all_limits.min() - 0.14 * span),
+            float(all_limits.max() + 0.14 * span),
+        )
+        ax.set_ylim(-0.38, 1.38)
+        ax.axvline(0.0, color=INK, linewidth=0.85, zorder=1)
+        ax.set_yticks(y_positions, [item[1] for item in categories])
+        for tick, color in zip(ax.get_yticklabels(), (TIANJI, PANGU_DARK)):
+            tick.set_color(color)
+            tick.set_fontweight("bold")
+        ax.set_xlabel(f"{left_word}  ←  Tianji−Pangu ({unit})  →  {right_word}")
+        ax.xaxis.set_major_locator(plt.MaxNLocator(5))
+        style_axis(ax, horizontal_grid=False, vertical_grid=True)
+
+    return save_figure(
+        fig,
+        out_dir / "09b_disagreement_case_forecast_state",
+        formats,
+        dpi,
+    )
+
+
 def qc_source(qc: pd.DataFrame) -> pd.DataFrame:
     order = ["Q_1000", "Q_925"]
     sources = ["pangu", "tianji", "era5_reference_analysis"]
@@ -1398,6 +1719,7 @@ def write_guide(
     formal_report: Mapping[str, object],
     quality_report: Mapping[str, object],
     event_quality: pd.DataFrame,
+    event_state: pd.DataFrame,
     surface_scopes: Sequence[str],
     upper_scope: str,
 ) -> None:
@@ -1418,16 +1740,18 @@ quick review.
 7. `07_pressure_level_quality`: show the mixed pressure-level ranking and prevent a uniform-RMSE overclaim.
 8. `08_unique_event_hits`: establish the asymmetric number of endpoint-specific Low-vis hits.
 9. `09_observation_anchored_tianji_only_advantage`: show that Tianji T2M and WSPD10 are closer to station observations within Tianji-only hits, with MSLP as a non-robust control.
+10. `09b_disagreement_case_forecast_state`: compare Tianji-minus-Pangu low-level states in Tianji-only hits against the reverse disagreement category and report the between-case specificity contrast.
 
 Use `02a_qcore_argmax_lowvis_overview` in a methods/results presentation, or in
 the supplement, when readers need the familiar argmax Precision/Recall/CSI/FPR
 overview. It is not a replacement for the threshold-free AP and matched-FPR
 primary endpoints.
 
-Move `06_surface_mslp_quality`, `08_unique_event_hits`, and `10_pressure_qc` to
+Move `06_surface_mslp_quality`, `08_unique_event_hits`,
+`09b_disagreement_case_forecast_state`, and `10_pressure_qc` to
 the supplement if the event-conditioned observation figure is used in the main
 text, unless a reviewer specifically asks for the hit counts, negative control,
-or QC rate in the main text.
+state contrast, or QC rate in the main text.
 
 ## Caption essentials
 
@@ -1460,6 +1784,13 @@ or QC rate in the main text.
   MSLP from Pa to hPa before comparison with automatic-station observations.
   This is a descriptive endpoint-conditioned association, not an independent
   source intervention or a causal estimate.
+- `09b`: points are mean paired `Tianji minus Pangu` forecast-state differences
+  within Tianji-hit/Pangu-miss and Pangu-hit/Tianji-miss Low-vis samples; bars
+  are 95% CIs from 1000 joint UTC-valid-date bootstrap draws. `Between-case
+  delta-delta` is the Tianji-only contrast minus the reverse-disagreement
+  contrast, using identical date draws. This reverse group strengthens the
+  specificity check but does not remove endpoint-selection conditioning or
+  establish a causal fog mechanism.
 
 ## Formal claim boundary
 
@@ -1475,7 +1806,7 @@ equations, and it must not be generalized to all AI weather models.
 - height is tightened by information density rather than padded to one master
   aspect ratio
 - subtle vertical dashed major grids are used only for horizontal numerical
-  comparisons (`03`--`09`); endpoint plots retain horizontal value grids, and
+  comparisons (`03`--`09b`); endpoint plots retain horizontal value grids, and
   workflow/QC figures keep their semantically appropriate treatment
 - typography: editable sans-serif text in SVG/PDF
 - source palette: Tianji `#2E5A87` (dark blue), Pangu `#8E6BBE`
@@ -1488,6 +1819,12 @@ equations, and it must not be generalized to all AI weather models.
 - Tianji-only observation analysis: `{int(event_quality['target_category_rows'].iloc[0])}`
   station-time samples, `{int(event_quality['represented_utc_dates'].max())}` UTC dates,
   1000 joint UTC-date bootstrap draws
+- disagreement-state diagnosis: `{int(event_state.loc[event_state['contrast'] == 'tianji_hit_pangu_miss', 'n_complete'].max())}`
+  complete Tianji-only rows and
+  `{int(event_state.loc[event_state['contrast'] == 'pangu_hit_tianji_miss', 'n_complete'].max())}`
+  complete Pangu-only rows across
+  `{int(event_state['represented_utc_dates'].max())}` UTC dates; 1000 joint
+  UTC-date bootstrap draws
 - ERA5 role: reference-analysis benchmark, not truth or a third forecast
 
 ## Provenance summary
@@ -1507,7 +1844,7 @@ def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
     quality_dir = resolve_quality_dir(args.paired_quality_dir)
-    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v6")).expanduser().resolve()
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v7")).expanduser().resolve()
     formats = ordered_formats(args.formats)
     if args.dpi < 300:
         raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
@@ -1522,6 +1859,7 @@ def main() -> None:
         quality_dir, "true_low_visibility" in surface_scopes
     )
     event_quality = event_observation_advantage_source(formal["event_samples"])
+    event_state = event_forecast_state_contrast_source(formal["event_samples"])
     expected_target_rows = int(
         formal["events"].set_index("case_category").loc["tianji_hit_pangu_miss", "n"]
     )
@@ -1529,11 +1867,20 @@ def main() -> None:
         raise ValueError(
             "Tianji-only event sample count differs between event summary and sample table"
         )
+    expected_reverse_rows = int(
+        formal["events"].set_index("case_category").loc["pangu_hit_tianji_miss", "n"]
+    )
+    state_counts = event_state[event_state["contrast_role"] == "within_disagreement_category"]
+    state_counts = state_counts.groupby("contrast")["n_complete"].max()
+    if int(state_counts["tianji_hit_pangu_miss"]) != expected_target_rows:
+        raise ValueError("Tianji-only state rows differ between event summary and sample table")
+    if int(state_counts["pangu_hit_tianji_miss"]) != expected_reverse_rows:
+        raise ValueError("Pangu-only state rows differ between event summary and sample table")
     print(
         "[validation] formal and paired-quality inputs passed: "
         f"mt2pw={formal_report.get('status')} artifact_audit={audit.get('status')} "
         f"quality={quality_report.get('status')} rows={quality_report.get('test_rows')} "
-        f"tianji_only_rows={expected_target_rows}"
+        f"tianji_only_rows={expected_target_rows} pangu_only_rows={expected_reverse_rows}"
     )
     if args.validate_only:
         return
@@ -1622,6 +1969,13 @@ def main() -> None:
         plot_event_observation_advantage(event_quality, out_dir, formats, args.dpi)
     )
 
+    event_state.to_csv(
+        source_dir / "09b_disagreement_case_forecast_state.csv", index=False
+    )
+    generated["09b_disagreement_case_forecast_state"] = (
+        plot_event_forecast_state_contrast(event_state, out_dir, formats, args.dpi)
+    )
+
     if not args.main_only:
         qc = qc_source(quality["qc"])
         qc.to_csv(source_dir / "10_pressure_qc.csv", index=False)
@@ -1632,6 +1986,7 @@ def main() -> None:
         formal_report,
         quality_report,
         event_quality,
+        event_state,
         surface_scopes,
         args.upper_scope,
     )

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from plot_pangu_qcore_mechanism_ppt import (
+    event_forecast_state_contrast_source,
     event_observation_advantage_source,
     ordered_formats,
     qcore_argmax_source,
@@ -42,9 +43,31 @@ def synthetic_event_samples() -> pd.DataFrame:
                     "WSPD10_pangu": 2.0,
                     "WSPD10_tianji": 1.5,
                     "win_s_avg_10mi": 1.0,
+                    "RH_925_pangu": 70.0,
+                    "RH_925_tianji": 78.0,
                     "MSLP_pangu": 101000.0,
-                    "MSLP_tianji": 101000.0,
-                    "prs_sea": 1000.0,
+                    "MSLP_tianji": 101100.0,
+                    "prs_sea": 1010.5,
+                }
+            )
+            rows.append(
+                {
+                    "time_utc": pd.Timestamp("2025-01-01", tz="UTC")
+                    + pd.Timedelta(days=day, hours=station),
+                    "station_key": f"R{station:03d}",
+                    "case_category": "pangu_hit_tianji_miss",
+                    "vis_raw_m": 500.0,
+                    "T2M_pangu": 285.15,
+                    "T2M_tianji": 284.90,
+                    "tem": 10.0,
+                    "WSPD10_pangu": 2.0,
+                    "WSPD10_tianji": 1.9,
+                    "win_s_avg_10mi": 1.0,
+                    "RH_925_pangu": 72.0,
+                    "RH_925_tianji": 74.0,
+                    "MSLP_pangu": 101000.0,
+                    "MSLP_tianji": 101020.0,
+                    "prs_sea": 1010.0,
                 }
             )
     return pd.DataFrame(rows)
@@ -109,6 +132,40 @@ class EventObservationAdvantageTest(unittest.TestCase):
         samples.loc[0, "vis_raw_m"] = 1000.0
         with self.assertRaisesRegex(ValueError, "visibility <1000 m"):
             event_observation_advantage_source(samples, iterations=200, seed=17)
+
+    def test_disagreement_state_contrast_and_reverse_control(self) -> None:
+        source = event_forecast_state_contrast_source(
+            synthetic_event_samples(), iterations=200, seed=17
+        ).set_index(["feature", "contrast"])
+        self.assertEqual(len(source), 12)
+        expected = {
+            ("T2M", "tianji_hit_pangu_miss"): -1.0,
+            ("T2M", "pangu_hit_tianji_miss"): -0.25,
+            ("T2M", "tianji_only_minus_pangu_only"): -0.75,
+            ("WSPD10", "tianji_hit_pangu_miss"): -0.5,
+            ("WSPD10", "pangu_hit_tianji_miss"): -0.1,
+            ("WSPD10", "tianji_only_minus_pangu_only"): -0.4,
+            ("RH_925", "tianji_hit_pangu_miss"): 8.0,
+            ("RH_925", "pangu_hit_tianji_miss"): 2.0,
+            ("RH_925", "tianji_only_minus_pangu_only"): 6.0,
+            ("MSLP", "tianji_hit_pangu_miss"): 1.0,
+            ("MSLP", "pangu_hit_tianji_miss"): 0.2,
+            ("MSLP", "tianji_only_minus_pangu_only"): 0.8,
+        }
+        for key, value in expected.items():
+            self.assertAlmostEqual(float(source.loc[key, "estimate"]), value)
+            self.assertTrue(bool(source.loc[key, "ci_excludes_zero"]))
+            self.assertEqual(int(source.loc[key, "represented_utc_dates"]), 12)
+        self.assertEqual(
+            source.loc[("T2M", "tianji_only_minus_pangu_only"), "bootstrap_unit"],
+            "joint_UTC_valid_date",
+        )
+
+    def test_state_contrast_rejects_duplicate_station_time_rows(self) -> None:
+        samples = synthetic_event_samples()
+        samples = pd.concat([samples, samples.iloc[[0]]], ignore_index=True)
+        with self.assertRaisesRegex(ValueError, "duplicate station-time"):
+            event_forecast_state_contrast_source(samples, iterations=200, seed=17)
 
     @unittest.skipUnless(BASH_EXE, "bash is required for submitter regression")
     def test_reuse_quality_submits_without_empty_dependency_array(self) -> None:
