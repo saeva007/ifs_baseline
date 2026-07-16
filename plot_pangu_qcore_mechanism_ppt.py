@@ -45,6 +45,7 @@ SINGLE_COLUMN_WIDTH = 3.504
 FIGURE_SIZES = {
     "flow": (FIGURE_WIDTH, 2.65),
     "endpoint": (SINGLE_COLUMN_WIDTH, 3.10),
+    "argmax": (SINGLE_COLUMN_WIDTH, 3.05),
     "shapley": (FIGURE_WIDTH, 3.15),
     "surface": (FIGURE_WIDTH, 2.75),
     "pressure": (FIGURE_WIDTH, 2.90),
@@ -141,6 +142,10 @@ FIGURE_SPECS: Mapping[str, Mapping[str, str]] = {
         "placement": "main",
         "claim": "At validation-matched false-alarm rates, Tianji-trained models recover more low-visibility cases.",
     },
+    "02a_qcore_argmax_lowvis_overview": {
+        "placement": "supplement_or_ppt",
+        "claim": "Under argmax, Tianji gains Low-vis recall and CSI with a slightly higher false-positive rate than Pangu.",
+    },
     "03_source_block_shapley": {
         "placement": "main",
         "claim": "T2M and moisture dominate the controlled source contribution, wind is smaller, and MSLP is near zero.",
@@ -179,6 +184,7 @@ FIGURE_SIZE_KEYS = {
     "00_qcore_full_experiment_flow": "flow",
     "01_qcore_lowvis_ap": "endpoint",
     "02_qcore_matched_fpr_recall": "endpoint",
+    "02a_qcore_argmax_lowvis_overview": "argmax",
     "03_source_block_shapley": "shapley",
     "04_surface_t2m_quality": "surface",
     "05_surface_wspd10_quality": "surface",
@@ -224,7 +230,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v5).",
+        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v6).",
     )
     parser.add_argument(
         "--surface-view",
@@ -361,6 +367,10 @@ def load_formal(
             "low_vis_recall_matched_fpr",
             "low_vis_csi_matched_fpr",
             "low_vis_fpr_matched_fpr",
+            "low_vis_precision_argmax",
+            "low_vis_recall_argmax",
+            "low_vis_csi_argmax",
+            "low_vis_fpr_argmax",
         ],
         filenames["metrics"],
     )
@@ -726,6 +736,154 @@ def plot_endpoint(
     ax.set_ylabel(metric_label)
     style_axis(ax)
     return save_figure(fig, out_dir / output_name, formats, dpi)
+
+
+def qcore_argmax_source(metrics: pd.DataFrame) -> pd.DataFrame:
+    """Return the two fair q-core endpoints in long form for argmax display."""
+
+    metric_specs = [
+        ("Precision", "low_vis_precision_argmax", "higher"),
+        ("Recall", "low_vis_recall_argmax", "higher"),
+        ("CSI", "low_vis_csi_argmax", "higher"),
+        ("FPR", "low_vis_fpr_argmax", "lower"),
+    ]
+    source_specs = [("tianji", "1111"), ("pangu", "0000")]
+    rows: List[Dict[str, object]] = []
+    for source, mask in source_specs:
+        endpoint = metrics[metrics["mask"] == mask].copy()
+        if set(endpoint["seed"].astype(int)) != {42, 2025, 20260702}:
+            raise ValueError(f"Argmax endpoint {mask} does not contain the three formal seeds")
+        for label, column, direction in metric_specs:
+            values = pd.to_numeric(endpoint[column], errors="raise")
+            for seed, value in zip(endpoint["seed"].astype(int), values):
+                rows.append(
+                    {
+                        "source": source,
+                        "mask": mask,
+                        "seed": int(seed),
+                        "metric": label,
+                        "metric_column": column,
+                        "preferred_direction": direction,
+                        "value": float(value),
+                    }
+                )
+            rows.append(
+                {
+                    "source": source,
+                    "mask": mask,
+                    "seed": "mean",
+                    "metric": label,
+                    "metric_column": column,
+                    "preferred_direction": direction,
+                    "value": float(values.mean()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def plot_qcore_argmax_overview(
+    source: pd.DataFrame,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    """Draw a compact fair-input argmax overview with seed-level transparency."""
+
+    metric_order = ["Precision", "Recall", "CSI", "FPR"]
+    source_order = ["tianji", "pangu"]
+    mean_rows = source[source["seed"].astype(str) == "mean"].copy()
+    seed_rows = source[source["seed"].astype(str) != "mean"].copy()
+    fig, ax = plt.subplots(figsize=FIGURE_SIZES["argmax"])
+    fig.subplots_adjust(left=0.18, right=0.98, top=0.68, bottom=0.20)
+    x = np.arange(len(metric_order), dtype=float)
+    width = 0.32
+    offsets = {"tianji": -width / 2, "pangu": width / 2}
+    jitter = {-1: -0.035, 0: 0.0, 1: 0.035}
+    seed_order = [42, 2025, 20260702]
+
+    for source_key in source_order:
+        means = (
+            mean_rows[mean_rows["source"] == source_key]
+            .set_index("metric")
+            .reindex(metric_order)
+        )
+        xpos = x + offsets[source_key]
+        bars = ax.bar(
+            xpos,
+            means["value"].to_numpy(dtype=float),
+            width=width * 0.88,
+            color=SOURCE_COLORS[source_key],
+            label=SOURCE_LABELS[source_key],
+            zorder=2,
+        )
+        for seed_index, seed in enumerate(seed_order):
+            values = (
+                seed_rows[
+                    (seed_rows["source"] == source_key)
+                    & (seed_rows["seed"].astype(int) == seed)
+                ]
+                .set_index("metric")
+                .reindex(metric_order)["value"]
+                .to_numpy(dtype=float)
+            )
+            ax.scatter(
+                xpos + jitter[seed_index - 1],
+                values,
+                s=13,
+                marker="o",
+                facecolor="white",
+                edgecolor=SOURCE_DARK_COLORS[source_key],
+                linewidth=0.65,
+                zorder=3,
+            )
+        for metric, bar, value in zip(metric_order, bars, means["value"]):
+            seed_max = float(
+                seed_rows[
+                    (seed_rows["source"] == source_key)
+                    & (seed_rows["metric"] == metric)
+                ]["value"].max()
+            )
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                max(float(value), seed_max) + 0.012,
+                f"{float(value):.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=7.3,
+                fontweight="bold",
+                color=SOURCE_DARK_COLORS[source_key],
+                rotation=90,
+            )
+
+    ymax = max(0.84, float(source["value"].max()) + 0.09)
+    ax.set_ylim(0.0, ymax)
+    ax.set_xticks(x, ["Precision ↑", "Recall ↑", "CSI ↑", "FPR ↓"])
+    ax.set_ylabel("Score on paired test samples")
+    fig.text(
+        0.18,
+        0.95,
+        "Fair q-core argmax performance",
+        ha="left",
+        va="top",
+        fontsize=10.7,
+        fontweight="bold",
+        color=INK,
+    )
+    ax.legend(
+        loc="upper left",
+        bbox_to_anchor=(0.18, 0.86),
+        bbox_transform=fig.transFigure,
+        ncol=2,
+        columnspacing=1.3,
+        handletextpad=0.45,
+    )
+    style_axis(ax)
+    return save_figure(
+        fig,
+        out_dir / "02a_qcore_argmax_lowvis_overview",
+        formats,
+        dpi,
+    )
 
 
 def shapley_source(shapley: pd.DataFrame) -> pd.DataFrame:
@@ -1261,6 +1419,11 @@ quick review.
 8. `08_unique_event_hits`: establish the asymmetric number of endpoint-specific Low-vis hits.
 9. `09_observation_anchored_tianji_only_advantage`: show that Tianji T2M and WSPD10 are closer to station observations within Tianji-only hits, with MSLP as a non-robust control.
 
+Use `02a_qcore_argmax_lowvis_overview` in a methods/results presentation, or in
+the supplement, when readers need the familiar argmax Precision/Recall/CSI/FPR
+overview. It is not a replacement for the threshold-free AP and matched-FPR
+primary endpoints.
+
 Move `06_surface_mslp_quality`, `08_unique_event_hits`, and `10_pressure_qc` to
 the supplement if the event-conditioned observation figure is used in the main
 text, unless a reviewer specifically asks for the hit counts, negative control,
@@ -1272,6 +1435,10 @@ or QC rate in the main text.
   three-seed means, and the reported difference CI is a joint UTC-date block
   bootstrap. The AP endpoint is threshold-free; matched-FPR thresholds were
   selected on validation and frozen before test evaluation.
+- `02a`: bars are three-seed means and open circles are individual seeds on
+  identical paired q-core test rows. All values use argmax. Arrows encode the
+  preferred direction; F1 is omitted because it is a monotonic transformation
+  of CSI for the same binary event and would duplicate information.
 - `03`: horizontal intervals are 95% UTC-date bootstrap CIs from exact group
   Shapley attribution over all 16 retrained source-block combinations. Interpret
   these as package contributions, not single-variable causal effects.
@@ -1303,8 +1470,7 @@ equations, and it must not be generalized to all AI weather models.
 
 ## Figure contract
 
-- `01` and `02`: 3.504 in (89-mm Nature single-column width), because each
-  figure contains only two endpoint means and three paired seed trajectories
+- `01`, `02`, and `02a`: 3.504 in (89-mm Nature single-column width)
 - all denser comparison figures: at most 7.205 in (183-mm two-column width)
 - height is tightened by information density rather than padded to one master
   aspect ratio
@@ -1341,7 +1507,7 @@ def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
     quality_dir = resolve_quality_dir(args.paired_quality_dir)
-    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v5")).expanduser().resolve()
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v6")).expanduser().resolve()
     formats = ordered_formats(args.formats)
     if args.dpi < 300:
         raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
@@ -1405,6 +1571,14 @@ def main() -> None:
         formats,
         args.dpi,
         "Thresholds were selected on validation at one target FPR and then frozen for test.",
+    )
+
+    argmax = qcore_argmax_source(formal["metrics"])
+    argmax.to_csv(
+        source_dir / "02a_qcore_argmax_lowvis_overview.csv", index=False
+    )
+    generated["02a_qcore_argmax_lowvis_overview"] = (
+        plot_qcore_argmax_overview(argmax, out_dir, formats, args.dpi)
     )
 
     shapley = shapley_source(formal["shapley"])

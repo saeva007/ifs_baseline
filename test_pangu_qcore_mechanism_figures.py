@@ -16,6 +16,7 @@ import pandas as pd
 from plot_pangu_qcore_mechanism_ppt import (
     event_observation_advantage_source,
     ordered_formats,
+    qcore_argmax_source,
 )
 
 
@@ -55,6 +56,31 @@ class EventObservationAdvantageTest(unittest.TestCase):
             ordered_formats("svg:pdf:png:tiff"),
             ["svg", "pdf", "png", "tiff"],
         )
+
+    def test_argmax_overview_uses_only_fair_endpoints_and_seed_means(self) -> None:
+        rows = []
+        for mask, base in (("0000", 0.10), ("1111", 0.20)):
+            for index, seed in enumerate((42, 2025, 20260702)):
+                rows.append(
+                    {
+                        "mask": mask,
+                        "seed": seed,
+                        "low_vis_precision_argmax": base + 0.01 * index,
+                        "low_vis_recall_argmax": base + 0.10 + 0.01 * index,
+                        "low_vis_csi_argmax": base + 0.02 + 0.01 * index,
+                        "low_vis_fpr_argmax": base - 0.05 + 0.01 * index,
+                    }
+                )
+        source = qcore_argmax_source(pd.DataFrame(rows))
+        self.assertEqual(set(source["source"]), {"pangu", "tianji"})
+        self.assertEqual(set(source["metric"]), {"Precision", "Recall", "CSI", "FPR"})
+        self.assertEqual(len(source), 32)
+        mean = source[
+            (source["source"] == "tianji")
+            & (source["metric"] == "Recall")
+            & (source["seed"].astype(str) == "mean")
+        ]
+        self.assertAlmostEqual(float(mean.iloc[0]["value"]), 0.31)
 
     def test_unit_conversion_and_utc_date_bootstrap(self) -> None:
         source = event_observation_advantage_source(

@@ -1119,7 +1119,7 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v5`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v6`.
 
 The manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
@@ -1133,13 +1133,19 @@ Every claim is a separate figure, in presentation order:
 1. complete experimental logic and claim boundary;
 2. threshold-free Low-vis AP;
 3. validation-matched-FPR Low-vis recall;
-4. exact four-package Shapley attribution from the 16 retrained combinations;
-5. station-observation T2M quality, showing both all samples and observed
+4. optional argmax Low-vis Precision/Recall/CSI/FPR overview for PPT or supplement;
+5. exact four-package Shapley attribution from the 16 retrained combinations;
+6. station-observation T2M quality, showing both all samples and observed
    visibility below 1 km;
-6. station-observation 10-m wind-speed quality for the same two regimes;
-7. paired pressure-level quality against ERA5 reference analysis;
-8. validation-matched endpoint-specific Low-vis hits;
-9. observation-anchored Tianji source advantage within Tianji-only hits.
+7. station-observation 10-m wind-speed quality for the same two regimes;
+8. paired pressure-level quality against ERA5 reference analysis;
+9. validation-matched endpoint-specific Low-vis hits;
+10. observation-anchored Tianji source advantage within Tianji-only hits.
+
+The optional argmax overview uses the formal `0000` Pangu and `1111` Tianji
+q-core endpoints, bars for three-seed means, and open circles for individual
+seeds. F1 is intentionally omitted because it duplicates CSI ordering for the
+same binary event. AP and matched-FPR recall remain the primary endpoints.
 
 The new event-conditioned figure reports
 `100 * (RMSE_Pangu - RMSE_Tianji) / RMSE_Pangu` for T2M, WSPD10 and MSLP,
