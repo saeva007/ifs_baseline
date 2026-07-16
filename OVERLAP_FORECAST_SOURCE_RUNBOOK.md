@@ -1119,9 +1119,9 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v3`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v4`.
 
-The v3 manuscript palette is source-stable across every panel: Tianji is dark
+The v4 manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
 grey (`#9A9A9A`).  The shared contract lives in `paper_source_palette.py`;
 marker shape is retained as a second cue.  Figure width is fixed at the
@@ -1137,13 +1137,21 @@ Every claim is a separate figure, in presentation order:
    visibility below 1 km;
 6. station-observation 10-m wind-speed quality for the same two regimes;
 7. paired pressure-level quality against ERA5 reference analysis;
-8. validation-matched unique event hits.
+8. validation-matched endpoint-specific Low-vis hits;
+9. observation-anchored Tianji source advantage within Tianji-only hits.
 
-MSLP quality (also shown for both regimes) and pressure-level physical QC are
-supplementary figures. All figures use the 183-mm Nature two-column width with
-content-specific compact heights, minimal in-figure annotation, a stable
-source-color mapping, and are exported
-as editable SVG/PDF, 600-dpi PNG/TIFF, plus one source-data CSV per figure.
+The new event-conditioned figure reports
+`100 * (RMSE_Pangu - RMSE_Tianji) / RMSE_Pangu` for T2M, WSPD10 and MSLP,
+with 1000 joint UTC-valid-date bootstrap draws. T2M is converted from K to °C
+and MSLP from Pa to hPa before matching automatic-station observations. It is a
+descriptive analysis of endpoint-selected station-time samples, not a causal
+source intervention.
+
+MSLP quality, the endpoint-specific hit-count figure, and pressure-level
+physical QC are supplementary candidates. All figures use the 183-mm Nature
+two-column width with content-specific compact heights, minimal in-figure
+annotation, a stable source-color mapping, and are exported as editable
+SVG/PDF, 600-dpi PNG/TIFF, plus one source-data CSV per figure.
 `qcore_evidence_story_manifest.json` records evidence roles and file hashes;
 `QCORE_EVIDENCE_STORY_GUIDE.md` records the slide order, scope, and bounded
 wording. Pressure-level comparisons use ERA5 as a reference analysis, not as

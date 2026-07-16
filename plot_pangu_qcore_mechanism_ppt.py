@@ -48,6 +48,7 @@ FIGURE_SIZES = {
     "surface": (FIGURE_WIDTH, 2.75),
     "pressure": (FIGURE_WIDTH, 2.90),
     "events": (FIGURE_WIDTH, 2.25),
+    "event_quality": (FIGURE_WIDTH, 2.95),
     "qc": (FIGURE_WIDTH, 2.65),
 }
 plt.rcParams.update(
@@ -163,7 +164,11 @@ FIGURE_SPECS: Mapping[str, Mapping[str, str]] = {
         "placement": "main_or_supplement",
         "claim": "Tianji uniquely detects more low-visibility samples than Pangu at validation-matched operating points.",
     },
-    "09_pressure_qc": {
+    "09_observation_anchored_tianji_only_advantage": {
+        "placement": "main",
+        "claim": "Within Tianji-only Low-vis hits, Tianji has lower observation-referenced T2M and WSPD10 RMSE, whereas MSLP is non-robust.",
+    },
+    "10_pressure_qc": {
         "placement": "supplement",
         "claim": "Pangu contains a small but explicit fraction of non-physical negative pressure-level specific humidity values.",
     },
@@ -179,8 +184,25 @@ FIGURE_SIZE_KEYS = {
     "06_surface_mslp_quality": "surface",
     "07_pressure_level_quality": "pressure",
     "08_unique_event_hits": "events",
-    "09_pressure_qc": "qc",
+    "09_observation_anchored_tianji_only_advantage": "event_quality",
+    "10_pressure_qc": "qc",
 }
+
+EVENT_OBSERVATION_COLUMNS = [
+    "time_utc",
+    "station_key",
+    "case_category",
+    "vis_raw_m",
+    "T2M_pangu",
+    "T2M_tianji",
+    "tem",
+    "WSPD10_pangu",
+    "WSPD10_tianji",
+    "win_s_avg_10mi",
+    "MSLP_pangu",
+    "MSLP_tianji",
+    "prs_sea",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,7 +223,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v3).",
+        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v4).",
     )
     parser.add_argument(
         "--surface-view",
@@ -313,13 +335,19 @@ def load_formal(
         "shapley": "hybrid_exact_shapley_effects.csv",
         "gap_draws": "hybrid_total_gap_bootstrap_draws.csv.gz",
         "events": "event_case_control_environment_summary.csv",
+        "event_samples": "event_case_control_samples.csv.gz",
     }
     tables: Dict[str, pd.DataFrame] = {}
     for key, filename in filenames.items():
         path = analysis / filename
         if not path.is_file():
             raise FileNotFoundError(path)
-        kwargs = {"dtype": {"mask": str}} if key == "metrics" else {}
+        if key == "metrics":
+            kwargs = {"dtype": {"mask": str}}
+        elif key == "event_samples":
+            kwargs = {"usecols": EVENT_OBSERVATION_COLUMNS}
+        else:
+            kwargs = {}
         tables[key] = pd.read_csv(path, **kwargs)
 
     metrics = tables["metrics"]
@@ -354,6 +382,9 @@ def load_formal(
     if tables["gap_draws"]["iteration"].nunique() != 1000:
         raise ValueError("Total-gap draw table must contain 1000 bootstrap iterations")
     require_columns(tables["events"], ["case_category", "n"], filenames["events"])
+    require_columns(
+        tables["event_samples"], EVENT_OBSERVATION_COLUMNS, filenames["event_samples"]
+    )
     return report, audit, tables
 
 
@@ -918,6 +949,226 @@ def plot_events(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi
     return save_figure(fig, out_dir / "08_unique_event_hits", formats, dpi)
 
 
+def event_observation_advantage_source(
+    samples: pd.DataFrame,
+    iterations: int = 1000,
+    seed: int = 20260702,
+) -> pd.DataFrame:
+    """Observation-anchored source RMSE within Tianji-hit/Pangu-miss samples.
+
+    Dates, rather than station-time rows, are resampled to retain the spatial
+    dependence shared by stations within the same weather day.  The same date
+    draw is used for all three variables in every bootstrap iteration.
+    """
+
+    target_category = "tianji_hit_pangu_miss"
+    target = samples[samples["case_category"] == target_category].copy()
+    if target.empty:
+        raise ValueError(f"No event samples for category={target_category}")
+    target["time_utc"] = pd.to_datetime(target["time_utc"], errors="raise", utc=True)
+    target["utc_valid_date"] = target["time_utc"].dt.floor("D")
+    if target[["time_utc", "station_key"]].duplicated().any():
+        raise ValueError("Tianji-only event samples contain duplicate station-time rows")
+    visibility = pd.to_numeric(target["vis_raw_m"], errors="coerce")
+    if visibility.isna().any() or bool((visibility >= 1000.0).any()):
+        raise ValueError("Tianji-only event samples must all satisfy observed visibility <1000 m")
+
+    dates = pd.Index(sorted(target["utc_valid_date"].unique()), name="utc_valid_date")
+    if len(dates) < 10:
+        raise ValueError(f"Event analysis requires at least 10 UTC dates, got {len(dates)}")
+    if iterations < 200:
+        raise ValueError("Use at least 200 UTC-date bootstrap iterations")
+    rng = np.random.default_rng(seed)
+    date_draws = rng.integers(0, len(dates), size=(iterations, len(dates)))
+
+    feature_specs = [
+        {
+            "feature": "T2M",
+            "label": "2-m temperature",
+            "unit": "°C",
+            "pangu": "T2M_pangu",
+            "tianji": "T2M_tianji",
+            "observation": "tem",
+            "conversion": "forecast K minus 273.15; station observation in degC",
+        },
+        {
+            "feature": "WSPD10",
+            "label": "10-m wind speed",
+            "unit": "m s-1",
+            "pangu": "WSPD10_pangu",
+            "tianji": "WSPD10_tianji",
+            "observation": "win_s_avg_10mi",
+            "conversion": "forecast and station observation in m s-1",
+        },
+        {
+            "feature": "MSLP",
+            "label": "Mean sea-level pressure",
+            "unit": "hPa",
+            "pangu": "MSLP_pangu",
+            "tianji": "MSLP_tianji",
+            "observation": "prs_sea",
+            "conversion": "forecast Pa divided by 100; station observation in hPa",
+        },
+    ]
+
+    rows: List[Dict[str, object]] = []
+    for spec in feature_specs:
+        frame = target[["utc_valid_date", spec["pangu"], spec["tianji"], spec["observation"]]].copy()
+        pangu = pd.to_numeric(frame[spec["pangu"]], errors="coerce").to_numpy(dtype=float)
+        tianji = pd.to_numeric(frame[spec["tianji"]], errors="coerce").to_numpy(dtype=float)
+        observation = pd.to_numeric(frame[spec["observation"]], errors="coerce").to_numpy(dtype=float)
+        if spec["feature"] == "T2M":
+            pangu = pangu - 273.15
+            tianji = tianji - 273.15
+        elif spec["feature"] == "MSLP":
+            pangu = pangu / 100.0
+            tianji = tianji / 100.0
+        finite = np.isfinite(pangu) & np.isfinite(tianji) & np.isfinite(observation)
+        if int(finite.sum()) < 100:
+            raise ValueError(f"{spec['feature']}: fewer than 100 complete event-observation rows")
+        errors = pd.DataFrame(
+            {
+                "utc_valid_date": frame.loc[finite, "utc_valid_date"].to_numpy(),
+                "pangu_squared_error": np.square(pangu[finite] - observation[finite]),
+                "tianji_squared_error": np.square(tianji[finite] - observation[finite]),
+            }
+        )
+        daily = errors.groupby("utc_valid_date", sort=True).agg(
+            pangu_squared_error=("pangu_squared_error", "sum"),
+            tianji_squared_error=("tianji_squared_error", "sum"),
+            n=("pangu_squared_error", "size"),
+        ).reindex(dates, fill_value=0)
+        pangu_sum = daily["pangu_squared_error"].to_numpy(dtype=float)
+        tianji_sum = daily["tianji_squared_error"].to_numpy(dtype=float)
+        counts = daily["n"].to_numpy(dtype=float)
+
+        def statistic(indices: np.ndarray) -> Tuple[float, float, float]:
+            total_n = float(counts[indices].sum())
+            if total_n <= 0:
+                raise ValueError(f"{spec['feature']}: empty UTC-date bootstrap draw")
+            pangu_rmse = math.sqrt(float(pangu_sum[indices].sum()) / total_n)
+            tianji_rmse = math.sqrt(float(tianji_sum[indices].sum()) / total_n)
+            if pangu_rmse <= 0:
+                raise ValueError(f"{spec['feature']}: Pangu RMSE must be positive")
+            reduction = 100.0 * (pangu_rmse - tianji_rmse) / pangu_rmse
+            return pangu_rmse, tianji_rmse, reduction
+
+        all_indices = np.arange(len(dates), dtype=int)
+        pangu_rmse, tianji_rmse, reduction = statistic(all_indices)
+        draws = np.array([statistic(indices)[2] for indices in date_draws], dtype=float)
+        ci_low, ci_high = np.quantile(draws, [0.025, 0.975])
+        rows.append(
+            {
+                "feature": spec["feature"],
+                "label": spec["label"],
+                "unit": spec["unit"],
+                "category": target_category,
+                "target_category_rows": int(len(target)),
+                "n_complete": int(finite.sum()),
+                "represented_utc_dates": int(np.count_nonzero(counts)),
+                "pangu_rmse": pangu_rmse,
+                "tianji_rmse": tianji_rmse,
+                "relative_rmse_reduction_percent": reduction,
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "ci_excludes_zero": bool(ci_low > 0.0 or ci_high < 0.0),
+                "bootstrap_unit": "UTC_valid_date",
+                "bootstrap_iterations": int(iterations),
+                "bootstrap_seed": int(seed),
+                "reference": "automatic-station observation",
+                "unit_conversion": spec["conversion"],
+                "formula": "100 * (RMSE_Pangu - RMSE_Tianji) / RMSE_Pangu",
+                "interpretation": "descriptive endpoint-conditioned association; not a causal source intervention",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_event_observation_advantage(
+    source: pd.DataFrame,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    fig, ax = plt.subplots(figsize=FIGURE_SIZES["event_quality"])
+    fig.subplots_adjust(left=0.29, right=0.96, top=0.77, bottom=0.22)
+    y = np.arange(len(source))[::-1]
+    for yi, row in zip(y, source.itertuples(index=False)):
+        supported = bool(row.ci_low > 0.0)
+        line_color = TIANJI if supported else ERA5_DARK
+        marker_color = TIANJI if supported else ERA5
+        ax.plot(
+            [row.ci_low, row.ci_high],
+            [yi, yi],
+            color=line_color,
+            linewidth=2.2,
+            solid_capstyle="round",
+        )
+        ax.scatter(
+            row.relative_rmse_reduction_percent,
+            yi,
+            s=55,
+            marker=SOURCE_MARKERS["tianji"] if supported else SOURCE_MARKERS["baseline"],
+            color=marker_color,
+            edgecolor="white",
+            linewidth=0.7,
+            zorder=3,
+        )
+        ax.text(
+            float(row.ci_high) + 1.1,
+            yi,
+            f"{row.relative_rmse_reduction_percent:.1f}%",
+            ha="left",
+            va="center",
+            fontsize=8.4,
+            fontweight="bold",
+            color=line_color,
+        )
+    ax.axvline(0.0, color=INK, linewidth=0.85)
+    ax.set_yticks(y, source["label"])
+    xmin = min(-15.0, float(source["ci_low"].min()) - 3.0)
+    xmax = max(60.0, float(source["ci_high"].max()) + 8.0)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(-0.52, len(source) - 0.28)
+    ax.set_xlabel("Tianji RMSE reduction relative to Pangu (%)")
+    ax.set_title(
+        "Observation-anchored source advantage within Tianji-only hits",
+        loc="left",
+        pad=10,
+        fontweight="bold",
+        fontsize=11.0,
+    )
+    ax.text(
+        0.01,
+        0.985,
+        "← Pangu closer",
+        transform=ax.transAxes,
+        fontsize=7.4,
+        fontweight="bold",
+        color=PANGU_DARK,
+        ha="left",
+        va="top",
+    )
+    ax.text(
+        0.99,
+        0.985,
+        "Tianji closer →",
+        transform=ax.transAxes,
+        fontsize=7.4,
+        fontweight="bold",
+        color=TIANJI,
+        ha="right",
+        va="top",
+    )
+    style_axis(ax, horizontal_grid=False)
+    return save_figure(
+        fig,
+        out_dir / "09_observation_anchored_tianji_only_advantage",
+        formats,
+        dpi,
+    )
+
+
 def qc_source(qc: pd.DataFrame) -> pd.DataFrame:
     order = ["Q_1000", "Q_925"]
     sources = ["pangu", "tianji", "era5_reference_analysis"]
@@ -951,13 +1202,14 @@ def plot_qc(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: in
     ax.set_title("Pangu contains rare out-of-range specific humidity", loc="left", pad=10, fontweight="bold")
     ax.legend(loc="upper right", ncol=3, columnspacing=1.0, handletextpad=0.4)
     style_axis(ax)
-    return save_figure(fig, out_dir / "09_pressure_qc", formats, dpi)
+    return save_figure(fig, out_dir / "10_pressure_qc", formats, dpi)
 
 
 def write_guide(
     out_dir: Path,
     formal_report: Mapping[str, object],
     quality_report: Mapping[str, object],
+    event_quality: pd.DataFrame,
     surface_scopes: Sequence[str],
     upper_scope: str,
 ) -> None:
@@ -976,10 +1228,13 @@ quick review.
 5. `04_surface_t2m_quality`: connect the largest package contribution to station-observed T2M quality.
 6. `05_surface_wspd10_quality`: connect the wind contribution to station-observed wind quality.
 7. `07_pressure_level_quality`: show the mixed pressure-level ranking and prevent a uniform-RMSE overclaim.
-8. `08_unique_event_hits`: optional event-level closure.
+8. `08_unique_event_hits`: establish the asymmetric number of endpoint-specific Low-vis hits.
+9. `09_observation_anchored_tianji_only_advantage`: show that Tianji T2M and WSPD10 are closer to station observations within Tianji-only hits, with MSLP as a non-robust control.
 
-Move `06_surface_mslp_quality` and `09_pressure_qc` to the supplement unless a
-reviewer specifically asks for the negative control or QC rate in the main text.
+Move `06_surface_mslp_quality`, `08_unique_event_hits`, and `10_pressure_qc` to
+the supplement if the event-conditioned observation figure is used in the main
+text, unless a reviewer specifically asks for the hit counts, negative control,
+or QC rate in the main text.
 
 ## Caption essentials
 
@@ -1000,6 +1255,14 @@ reviewer specifically asks for the negative control or QC rate in the main text.
   derived and is not independent truth.
 - `08`: endpoint probabilities are averaged across seeds; source-specific
   operating thresholds were fixed on validation at the common target FPR.
+- `09`: the analysis is restricted to
+  `tianji_hit_pangu_miss` station-time samples defined by the validation-frozen
+  endpoint thresholds. Values are `100 × (RMSE_Pangu − RMSE_Tianji) /
+  RMSE_Pangu`; horizontal intervals are 95% CIs from 1000 joint
+  UTC-valid-date bootstrap draws. Forecast T2M is converted from K to °C and
+  MSLP from Pa to hPa before comparison with automatic-station observations.
+  This is a descriptive endpoint-conditioned association, not an independent
+  source intervention or a causal estimate.
 
 ## Formal claim boundary
 
@@ -1020,6 +1283,9 @@ equations, and it must not be generalized to all AI weather models.
 - pressure-level scope: `{upper_scope}` ({scope_label(upper_scope)})
 - surface uncertainty: 95% UTC-valid-date block bootstrap
 - performance variability: three training seeds plus UTC-date bootstrap
+- Tianji-only observation analysis: `{int(event_quality['target_category_rows'].iloc[0])}`
+  station-time samples, `{int(event_quality['represented_utc_dates'].max())}` UTC dates,
+  1000 joint UTC-date bootstrap draws
 - ERA5 role: reference-analysis benchmark, not truth or a third forecast
 
 ## Provenance summary
@@ -1039,7 +1305,7 @@ def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
     quality_dir = resolve_quality_dir(args.paired_quality_dir)
-    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v3")).expanduser().resolve()
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v4")).expanduser().resolve()
     formats = ordered_formats(args.formats)
     if args.dpi < 300:
         raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
@@ -1053,10 +1319,19 @@ def main() -> None:
     quality_report, quality = load_quality(
         quality_dir, "true_low_visibility" in surface_scopes
     )
+    event_quality = event_observation_advantage_source(formal["event_samples"])
+    expected_target_rows = int(
+        formal["events"].set_index("case_category").loc["tianji_hit_pangu_miss", "n"]
+    )
+    if int(event_quality["target_category_rows"].iloc[0]) != expected_target_rows:
+        raise ValueError(
+            "Tianji-only event sample count differs between event summary and sample table"
+        )
     print(
         "[validation] formal and paired-quality inputs passed: "
         f"mt2pw={formal_report.get('status')} artifact_audit={audit.get('status')} "
-        f"quality={quality_report.get('status')} rows={quality_report.get('test_rows')}"
+        f"quality={quality_report.get('status')} rows={quality_report.get('test_rows')} "
+        f"tianji_only_rows={expected_target_rows}"
     )
     if args.validate_only:
         return
@@ -1130,12 +1405,26 @@ def main() -> None:
     events.drop(columns=["color"]).to_csv(source_dir / "08_unique_event_hits.csv", index=False)
     generated["08_unique_event_hits"] = plot_events(events, out_dir, formats, args.dpi)
 
+    event_quality.to_csv(
+        source_dir / "09_observation_anchored_tianji_only_advantage.csv", index=False
+    )
+    generated["09_observation_anchored_tianji_only_advantage"] = (
+        plot_event_observation_advantage(event_quality, out_dir, formats, args.dpi)
+    )
+
     if not args.main_only:
         qc = qc_source(quality["qc"])
-        qc.to_csv(source_dir / "09_pressure_qc.csv", index=False)
-        generated["09_pressure_qc"] = plot_qc(qc, out_dir, formats, args.dpi)
+        qc.to_csv(source_dir / "10_pressure_qc.csv", index=False)
+        generated["10_pressure_qc"] = plot_qc(qc, out_dir, formats, args.dpi)
 
-    write_guide(out_dir, formal_report, quality_report, surface_scopes, args.upper_scope)
+    write_guide(
+        out_dir,
+        formal_report,
+        quality_report,
+        event_quality,
+        surface_scopes,
+        args.upper_scope,
+    )
     manifest = {
         "status": "passed",
         "eval_root": str(eval_root),
