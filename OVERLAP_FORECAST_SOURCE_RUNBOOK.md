@@ -1106,7 +1106,8 @@ passed, run the zero-training chain below. It first refreshes the paired source
 quality report with the model-consistent low-visibility definition
 `visibility < 1000 m`, then renders figures only after that diagnosis succeeds.
 It reuses all factorial checkpoints and inference outputs; no S1 or S2 model is
-trained.
+trained. If the strict paired-quality report already exists, the submitter
+reuses it and schedules only the plotting job.
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline
@@ -1118,21 +1119,31 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v3`.
+
+The v3 manuscript palette is source-stable across every panel: Tianji is dark
+blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
+grey (`#9A9A9A`).  The shared contract lives in `paper_source_palette.py`;
+marker shape is retained as a second cue.  Figure width is fixed at the
+Nature two-column width, while height is selected per figure to avoid empty
+canvas space in two- or three-row comparisons.
 Every claim is a separate figure, in presentation order:
 
 1. complete experimental logic and claim boundary;
 2. threshold-free Low-vis AP;
 3. validation-matched-FPR Low-vis recall;
 4. exact four-package Shapley attribution from the 16 retrained combinations;
-5. station-observation T2M quality;
-6. station-observation 10-m wind-speed quality;
+5. station-observation T2M quality, showing both all samples and observed
+   visibility below 1 km;
+6. station-observation 10-m wind-speed quality for the same two regimes;
 7. paired pressure-level quality against ERA5 reference analysis;
 8. validation-matched unique event hits.
 
-MSLP quality and pressure-level physical QC are supplementary figures. All
-figures use a stable source-color mapping and are exported as editable SVG/PDF,
-600-dpi PNG/TIFF, plus one source-data CSV per figure.
+MSLP quality (also shown for both regimes) and pressure-level physical QC are
+supplementary figures. All figures use the 183-mm Nature two-column width with
+content-specific compact heights, minimal in-figure annotation, a stable
+source-color mapping, and are exported
+as editable SVG/PDF, 600-dpi PNG/TIFF, plus one source-data CSV per figure.
 `qcore_evidence_story_manifest.json` records evidence roles and file hashes;
 `QCORE_EVIDENCE_STORY_GUIDE.md` records the slide order, scope, and bounded
 wording. Pressure-level comparisons use ERA5 as a reference analysis, not as
