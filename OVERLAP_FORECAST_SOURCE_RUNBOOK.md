@@ -1119,14 +1119,15 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v4`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v5`.
 
-The v4 manuscript palette is source-stable across every panel: Tianji is dark
+The manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
 grey (`#9A9A9A`).  The shared contract lives in `paper_source_palette.py`;
-marker shape is retained as a second cue.  Figure width is fixed at the
-Nature two-column width, while height is selected per figure to avoid empty
-canvas space in two- or three-row comparisons.
+marker shape is retained as a second cue. The two endpoint-performance plots
+use the 89-mm Nature single-column width; denser comparison figures use the
+183-mm two-column width. Height is selected per figure to avoid empty canvas
+space in sparse comparisons.
 Every claim is a separate figure, in presentation order:
 
 1. complete experimental logic and claim boundary;
@@ -1148,10 +1149,12 @@ descriptive analysis of endpoint-selected station-time samples, not a causal
 source intervention.
 
 MSLP quality, the endpoint-specific hit-count figure, and pressure-level
-physical QC are supplementary candidates. All figures use the 183-mm Nature
-two-column width with content-specific compact heights, minimal in-figure
-annotation, a stable source-color mapping, and are exported as editable
-SVG/PDF, 600-dpi PNG/TIFF, plus one source-data CSV per figure.
+physical QC are supplementary candidates. Subtle vertical dashed major grids
+are limited to horizontal numerical comparisons; the endpoint plots use
+horizontal value grids, and the workflow has no grid. All figures use
+content-specific compact heights, minimal in-figure annotation, a stable
+source-color mapping, and are exported as editable SVG/PDF, 600-dpi PNG/TIFF,
+plus one source-data CSV per figure.
 `qcore_evidence_story_manifest.json` records evidence roles and file hashes;
 `QCORE_EVIDENCE_STORY_GUIDE.md` records the slide order, scope, and bounded
 wording. Pressure-level comparisons use ERA5 as a reference analysis, not as

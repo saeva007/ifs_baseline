@@ -13,7 +13,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from plot_pangu_qcore_mechanism_ppt import event_observation_advantage_source
+from plot_pangu_qcore_mechanism_ppt import (
+    event_observation_advantage_source,
+    ordered_formats,
+)
 
 
 BASH_EXE = shutil.which("bash")
@@ -47,6 +50,12 @@ def synthetic_event_samples() -> pd.DataFrame:
 
 
 class EventObservationAdvantageTest(unittest.TestCase):
+    def test_colon_delimited_slurm_formats_are_supported(self) -> None:
+        self.assertEqual(
+            ordered_formats("svg:pdf:png:tiff"),
+            ["svg", "pdf", "png", "tiff"],
+        )
+
     def test_unit_conversion_and_utc_date_bootstrap(self) -> None:
         source = event_observation_advantage_source(
             synthetic_event_samples(), iterations=200, seed=17
@@ -86,8 +95,14 @@ class EventObservationAdvantageTest(unittest.TestCase):
                 "{}\n", encoding="utf-8"
             )
             fake_sbatch = root / "fake_sbatch.sh"
-            fake_sbatch.write_text("#!/bin/bash\nprintf '12345\\n'\n", encoding="utf-8")
+            fake_sbatch.write_text(
+                "#!/bin/bash\n"
+                "printf '%s\\n' \"$@\" > \"${SBATCH_CAPTURE:?}\"\n"
+                "printf '12345\\n'\n",
+                encoding="utf-8",
+            )
             fake_sbatch.chmod(0o755)
+            capture = root / "sbatch_args.txt"
             env = os.environ.copy()
             env.update(
                 {
@@ -96,6 +111,8 @@ class EventObservationAdvantageTest(unittest.TestCase):
                     "OUT_DIR": (root / "out").as_posix(),
                     "REUSE_QUALITY": "auto",
                     "SBATCH_BIN": fake_sbatch.as_posix(),
+                    "SBATCH_CAPTURE": capture.as_posix(),
+                    "FORMATS": "svg,pdf,png,tiff",
                 }
             )
             result = subprocess.run(
@@ -109,6 +126,9 @@ class EventObservationAdvantageTest(unittest.TestCase):
             self.assertIn("quality_job=reused", output)
             self.assertIn("plot_job=12345", output)
             self.assertNotIn("unbound variable", output)
+            submitted_args = capture.read_text(encoding="utf-8")
+            self.assertIn("FORMATS=svg:pdf:png:tiff", submitted_args)
+            self.assertNotIn("FORMATS=svg,pdf", submitted_args)
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

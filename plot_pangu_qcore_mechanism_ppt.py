@@ -37,13 +37,14 @@ from paper_source_palette import (
 )
 
 
-# Nature Communications two-column master width (183 mm).  Width is fixed,
-# while height follows information density so two-row plots do not inherit the
-# empty space required by denser figures.
+# Nature Communications column widths: 89 mm for compact two-endpoint figures
+# and 183 mm for denser comparisons. Height follows information density so
+# sparse figures do not inherit the empty space required by larger plots.
 FIGURE_WIDTH = 7.205
+SINGLE_COLUMN_WIDTH = 3.504
 FIGURE_SIZES = {
     "flow": (FIGURE_WIDTH, 2.65),
-    "endpoint": (FIGURE_WIDTH, 3.05),
+    "endpoint": (SINGLE_COLUMN_WIDTH, 3.10),
     "shapley": (FIGURE_WIDTH, 3.15),
     "surface": (FIGURE_WIDTH, 2.75),
     "pressure": (FIGURE_WIDTH, 2.90),
@@ -223,7 +224,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v4).",
+        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v5).",
     )
     parser.add_argument(
         "--surface-view",
@@ -240,7 +241,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--formats",
         default="svg,pdf,png,tiff",
-        help="Comma-separated formats; SVG is always emitted first.",
+        help="Comma- or colon-separated formats; SVG is always emitted first.",
     )
     parser.add_argument("--dpi", type=int, default=600, help="PNG/TIFF raster resolution.")
     parser.add_argument(
@@ -471,7 +472,11 @@ def load_quality(
 
 def ordered_formats(value: str) -> List[str]:
     supported = {"svg", "pdf", "png", "tiff"}
-    requested = [item.strip().lower() for item in value.split(",") if item.strip()]
+    requested = [
+        item.strip().lower()
+        for item in value.replace(":", ",").split(",")
+        if item.strip()
+    ]
     unknown = sorted(set(requested) - supported)
     if unknown:
         raise ValueError(f"Unsupported formats {unknown}; supported={sorted(supported)}")
@@ -489,8 +494,8 @@ def save_figure(
     saved: List[str] = []
     for fmt in formats:
         path = base.with_suffix(f".{fmt}")
-        # Preserve the exact 183-mm two-column width and the information-aware
-        # height selected by each plot. Explicit margins prevent unpredictable
+        # Preserve the exact journal column width and information-aware height
+        # selected by each plot. Explicit margins prevent unpredictable
         # tight-bbox resizing between SVG, PDF and TIFF exports.
         kwargs: Dict[str, object] = {"facecolor": "white"}
         if fmt in {"png", "tiff"}:
@@ -503,13 +508,26 @@ def save_figure(
     return saved
 
 
-def style_axis(ax: plt.Axes, *, horizontal_grid: bool = True) -> None:
+def style_axis(
+    ax: plt.Axes,
+    *,
+    horizontal_grid: bool = True,
+    vertical_grid: bool = False,
+) -> None:
     ax.tick_params(length=3.2, width=0.8, color=INK, pad=3)
     ax.spines["left"].set_color(INK)
     ax.spines["bottom"].set_color(INK)
     if horizontal_grid:
         ax.yaxis.grid(True, color=GRID_GREY, linewidth=0.65, alpha=0.9)
-        ax.set_axisbelow(True)
+    if vertical_grid:
+        ax.xaxis.grid(
+            True,
+            color=GRID_GREY,
+            linewidth=0.58,
+            linestyle=(0, (2.2, 2.2)),
+            alpha=0.95,
+        )
+    ax.set_axisbelow(True)
 
 
 def sha256_file(path: Path) -> str:
@@ -649,7 +667,7 @@ def plot_endpoint(
     seed_rows = source[source["seed"].astype(str) != "mean"].copy()
     mean_rows = source[source["seed"].astype(str) == "mean"].set_index("source")
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["endpoint"])
-    fig.subplots_adjust(left=0.13, right=0.96, top=0.82, bottom=0.18)
+    fig.subplots_adjust(left=0.25, right=0.96, top=0.70, bottom=0.22)
     for seed in sorted(seed_rows["seed"].astype(int).unique()):
         pair = seed_rows[seed_rows["seed"].astype(int) == seed].set_index("source")
         ax.plot(
@@ -666,8 +684,10 @@ def plot_endpoint(
     tianji = float(mean_rows.loc["tianji", "value"])
     ax.scatter(0, pangu, s=84, marker=SOURCE_MARKERS["pangu"], color=PANGU, edgecolor="white", linewidth=0.8, zorder=4)
     ax.scatter(1, tianji, s=84, marker=SOURCE_MARKERS["tianji"], color=TIANJI, edgecolor="white", linewidth=0.8, zorder=4)
-    ax.annotate(f"{pangu:.3f}", (0, pangu), xytext=(-10, -1), textcoords="offset points", ha="right", va="center", fontsize=9.2, fontweight="bold", color=PANGU_DARK)
-    ax.annotate(f"{tianji:.3f}", (1, tianji), xytext=(10, -1), textcoords="offset points", ha="left", va="center", fontsize=9.2, fontweight="bold", color=TIANJI)
+    # Place labels toward the centre of the sparse two-point plot. This avoids
+    # collisions with the y-axis tick labels and the right edge at 89-mm width.
+    ax.annotate(f"{pangu:.3f}", (0, pangu), xytext=(10, -1), textcoords="offset points", ha="left", va="center", fontsize=9.2, fontweight="bold", color=PANGU_DARK)
+    ax.annotate(f"{tianji:.3f}", (1, tianji), xytext=(-10, -1), textcoords="offset points", ha="right", va="center", fontsize=9.2, fontweight="bold", color=TIANJI)
 
     delta = float(mean_rows.loc["tianji", "delta_tianji_minus_pangu"])
     ci_low = float(mean_rows.loc["tianji", "delta_ci_low"])
@@ -677,23 +697,33 @@ def plot_endpoint(
     ymin = max(0.0, float(values.min() - 0.22 * span))
     ymax = float(values.max() + 0.38 * span)
     ax.set_ylim(ymin, ymax)
-    ax.set_xlim(-0.20, 1.20)
+    ax.set_xlim(-0.18, 1.18)
     ax.text(
-        0.995,
-        1.035,
+        0.0,
+        1.075,
         f"Δ Tianji−Pangu {delta:+.3f}  [{ci_low:+.3f}, {ci_high:+.3f}]",
         transform=ax.transAxes,
-        ha="right",
+        ha="left",
         va="bottom",
-        fontsize=8.2,
+        fontsize=8.0,
         fontweight="bold",
         color=TIANJI if delta > 0 else PANGU_DARK,
     )
-    ax.set_xticks([0, 1], ["Pangu-trained", "Tianji-trained"])
+    ax.text(
+        0.0,
+        1.205,
+        title,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10.5,
+        fontweight="bold",
+        color=INK,
+    )
+    ax.set_xticks([0, 1], ["Pangu\ntrained", "Tianji\ntrained"])
     ax.get_xticklabels()[0].set_color(PANGU_DARK)
     ax.get_xticklabels()[1].set_color(TIANJI)
     ax.set_ylabel(metric_label)
-    ax.set_title(title, loc="left", pad=10, fontweight="bold")
     style_axis(ax)
     return save_figure(fig, out_dir / output_name, formats, dpi)
 
@@ -741,7 +771,7 @@ def plot_shapley(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dp
     ax.set_ylim(-0.55, len(source) - 0.35)
     ax.set_xlabel("Exact source-block Shapley contribution to Low-vis AP")
     ax.set_title("Source-block contributions to Low-vis AP", loc="left", pad=10, fontweight="bold")
-    style_axis(ax, horizontal_grid=False)
+    style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / "03_source_block_shapley", formats, dpi)
 
 
@@ -850,7 +880,7 @@ def plot_surface_feature(
             va="center",
             clip_on=False,
         )
-    style_axis(ax, horizontal_grid=False)
+    style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / output_name, formats, dpi)
 
 
@@ -911,7 +941,7 @@ def plot_pressure(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], d
     ax.set_title("Pressure-level error relative to ERA5", loc="left", pad=10, fontweight="bold")
     ax.text(0.01, 0.985, "← Pangu closer", transform=ax.transAxes, fontsize=7.4, fontweight="bold", color=PANGU_DARK, ha="left", va="top")
     ax.text(0.99, 0.985, "Tianji closer →", transform=ax.transAxes, fontsize=7.4, fontweight="bold", color=TIANJI, ha="right", va="top")
-    style_axis(ax, horizontal_grid=False)
+    style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / "07_pressure_level_quality", formats, dpi)
 
 
@@ -945,7 +975,7 @@ def plot_events(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi
     ax.set_xlim(0, max(source["n"]) * 1.30)
     ax.set_xlabel("True Low-vis samples detected by only one endpoint model")
     ax.set_title("Unique Low-vis hits at matched FPR", loc="left", pad=10, fontweight="bold")
-    style_axis(ax, horizontal_grid=False)
+    style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / "08_unique_event_hits", formats, dpi)
 
 
@@ -1160,7 +1190,7 @@ def plot_event_observation_advantage(
         ha="right",
         va="top",
     )
-    style_axis(ax, horizontal_grid=False)
+    style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(
         fig,
         out_dir / "09_observation_anchored_tianji_only_advantage",
@@ -1273,8 +1303,14 @@ equations, and it must not be generalized to all AI weather models.
 
 ## Figure contract
 
-- fixed width: 7.205 in (183-mm Nature two-column width); height is tightened
-  by information density rather than padded to one master aspect ratio
+- `01` and `02`: 3.504 in (89-mm Nature single-column width), because each
+  figure contains only two endpoint means and three paired seed trajectories
+- all denser comparison figures: at most 7.205 in (183-mm two-column width)
+- height is tightened by information density rather than padded to one master
+  aspect ratio
+- subtle vertical dashed major grids are used only for horizontal numerical
+  comparisons (`03`--`09`); endpoint plots retain horizontal value grids, and
+  workflow/QC figures keep their semantically appropriate treatment
 - typography: editable sans-serif text in SVG/PDF
 - source palette: Tianji `#2E5A87` (dark blue), Pangu `#8E6BBE`
   (mid-light violet), baseline/ERA5 `#9A9A9A` (grey); marker shapes remain a
@@ -1305,7 +1341,7 @@ def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
     quality_dir = resolve_quality_dir(args.paired_quality_dir)
-    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v4")).expanduser().resolve()
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v5")).expanduser().resolve()
     formats = ordered_formats(args.formats)
     if args.dpi < 300:
         raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
@@ -1436,7 +1472,8 @@ def main() -> None:
         "upper_scope": args.upper_scope,
         "formats": formats,
         "dpi": args.dpi,
-        "figure_width_inches": FIGURE_WIDTH,
+        "maximum_figure_width_inches": FIGURE_WIDTH,
+        "single_column_width_inches": SINGLE_COLUMN_WIDTH,
         "source_palette": PAPER_SOURCE_COLORS,
         "figures": {
             key: {

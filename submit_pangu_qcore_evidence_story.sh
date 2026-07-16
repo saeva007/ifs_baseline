@@ -19,8 +19,12 @@ SBATCH_BIN="${SBATCH_BIN:-sbatch}"
 
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/${RUN_TAG}}"
 PAIRED_QUALITY_DIR="${PAIRED_QUALITY_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/${QUALITY_RUN_TAG}/analysis}"
-OUT_DIR="${OUT_DIR:-${EVAL_ROOT}/evidence_story_figures_nc_v4}"
-PLOT_EXPORTS="ALL,RUN_TAG=${RUN_TAG},QUALITY_RUN_TAG=${QUALITY_RUN_TAG},EVAL_ROOT=${EVAL_ROOT},PAIRED_QUALITY_DIR=${PAIRED_QUALITY_DIR},OUT_DIR=${OUT_DIR},SURFACE_VIEW=${SURFACE_VIEW},UPPER_SCOPE=${UPPER_SCOPE},FORMATS=${FORMATS},DPI=${DPI}"
+OUT_DIR="${OUT_DIR:-${EVAL_ROOT}/evidence_story_figures_nc_v5}"
+# Slurm uses commas to separate --export entries, so a comma-delimited format
+# value would be truncated to "svg".  Export a colon-delimited value and let
+# the Python entrypoint accept both delimiters.
+FORMATS_EXPORT="${FORMATS//,/:}"
+PLOT_EXPORTS="ALL,RUN_TAG=${RUN_TAG},QUALITY_RUN_TAG=${QUALITY_RUN_TAG},EVAL_ROOT=${EVAL_ROOT},PAIRED_QUALITY_DIR=${PAIRED_QUALITY_DIR},OUT_DIR=${OUT_DIR},SURFACE_VIEW=${SURFACE_VIEW},UPPER_SCOPE=${UPPER_SCOPE},FORMATS=${FORMATS_EXPORT},DPI=${DPI}"
 
 cd "${BASELINE_DIR}"
 mkdir -p logs
