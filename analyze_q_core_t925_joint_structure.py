@@ -618,7 +618,7 @@ def valid_masks(split: AlignedSplit, low_vis_threshold_m: float = 1000.0) -> Dic
     return {
         "all_finite": finite,
         "union_physical": finite & physical,
-        "true_low_visibility": finite & np.isfinite(split.visibility_m) & (split.visibility_m <= low_vis_threshold_m),
+        "true_low_visibility": finite & np.isfinite(split.visibility_m) & (split.visibility_m < low_vis_threshold_m),
         "elevation_le_500m": finite & np.isfinite(split.orography_m) & (split.orography_m <= 500.0),
     }
 
@@ -816,7 +816,7 @@ def supplemental_scope_masks(test: AlignedSplit, low_vis_threshold_m: float) -> 
     n = len(test.keys)
     return {
         "all_paired_test": np.ones(n, dtype=bool),
-        "true_low_visibility": np.isfinite(test.visibility_m) & (test.visibility_m <= low_vis_threshold_m),
+        "true_low_visibility": np.isfinite(test.visibility_m) & (test.visibility_m < low_vis_threshold_m),
         "elevation_le_500m": np.isfinite(test.orography_m) & (test.orography_m <= 500.0),
     }
 

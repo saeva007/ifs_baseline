@@ -1099,33 +1099,45 @@ direct paired differences. `global_shared` rows support all-source comparison;
 whether it was selected, so a truncated smoke run cannot be mistaken for the
 full analysis.
 
-## Pangu q-core mechanism figures for PPT
+## Pangu q-core evidence-story figures for PPT and paper
 
 After the formal `mt2pw` analysis and the 51-triplet artifact audit have both
-passed, draw the standalone presentation figures with the CPU-only plotting
-job. The entrypoint rejects smoke/incomplete matrices and does not import
-Torch/HIP.
+passed, run the zero-training chain below. It first refreshes the paired source
+quality report with the model-consistent low-visibility definition
+`visibility < 1000 m`, then renders figures only after that diagnosis succeeds.
+It reuses all factorial checkpoints and inference outputs; no S1 or S2 model is
+trained.
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline
 mkdir -p logs
 
-sbatch --export=ALL,RUN_TAG=qcore_hybrid_mt2pw_formal_v1_20260708 \
-  sub_pangu_qcore_mechanism_ppt.slurm
+RUN_TAG=qcore_hybrid_mt2pw_formal_v1_20260708 \
+QUALITY_RUN_TAG=qcore_paired_quality_strictlt_v1_20260716 \
+bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/ppt_figures`.
-Each claim is a separate figure: fair q-core endpoints, source-block Shapley
-attribution, observation-anchored low-visibility quality, unique event hits,
-and the ERA5-reference moisture caveat. The conceptual model-principle figure
-is disabled by default and is produced only with `--include-principle`. Every
-figure is written as editable SVG plus PDF/300-dpi PNG, with its own source-data
-CSV.
-`ppt_figure_manifest.json` records the evidence role and claim boundary, while
-`PPT_FIGURE_GUIDE.md` gives the recommended slide order. The physical-consistency
-schematic is a mechanism hypothesis; do not cite it as direct proof that Pangu
-violates governing equations or conservation laws.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures`.
+Every claim is a separate figure, in presentation order:
+
+1. complete experimental logic and claim boundary;
+2. threshold-free Low-vis AP;
+3. validation-matched-FPR Low-vis recall;
+4. exact four-package Shapley attribution from the 16 retrained combinations;
+5. station-observation T2M quality;
+6. station-observation 10-m wind-speed quality;
+7. paired pressure-level quality against ERA5 reference analysis;
+8. validation-matched unique event hits.
+
+MSLP quality and pressure-level physical QC are supplementary figures. All
+figures use a stable source-color mapping and are exported as editable SVG/PDF,
+600-dpi PNG/TIFF, plus one source-data CSV per figure.
+`qcore_evidence_story_manifest.json` records evidence roles and file hashes;
+`QCORE_EVIDENCE_STORY_GUIDE.md` records the slide order, scope, and bounded
+wording. Pressure-level comparisons use ERA5 as a reference analysis, not as
+truth. Package Shapley is a controlled source attribution and is not proof of
+single-variable causality or governing-equation violation.
 
 ## Completion Checklist
 

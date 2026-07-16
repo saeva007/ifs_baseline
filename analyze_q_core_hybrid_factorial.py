@@ -894,7 +894,11 @@ def current_feature_values(data_dir: Path, n: int, feature_names: Sequence[str])
 
 
 def clean_observation_values(column: str, values) -> np.ndarray:
-    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=np.float64)
+    # pandas 2.2+ may expose a read-only zero-copy view here; the QC operations
+    # below intentionally mutate the array, so request an owned buffer.
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(
+        dtype=np.float64, copy=True
+    )
     arr[~np.isfinite(arr)] = np.nan
     arr[np.abs(arr) >= 1.0e5] = np.nan
     if column == "prs_sea":

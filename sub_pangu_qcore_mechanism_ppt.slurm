@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J qcore_ppt_figs
+#SBATCH -J qcore_story_figs
 #SBATCH -p kshcexclu04
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
@@ -16,10 +16,14 @@ BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 RUN_TAG="${RUN_TAG:-qcore_hybrid_mt2pw_formal_v1_20260708}"
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/${RUN_TAG}}"
-OUT_DIR="${OUT_DIR:-${EVAL_ROOT}/ppt_figures}"
+QUALITY_RUN_TAG="${QUALITY_RUN_TAG:-qcore_paired_quality_strictlt_v1_20260716}"
+PAIRED_QUALITY_DIR="${PAIRED_QUALITY_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/${QUALITY_RUN_TAG}/analysis}"
+OUT_DIR="${OUT_DIR:-${EVAL_ROOT}/evidence_story_figures}"
 PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
-FORMATS="${FORMATS:-svg,pdf,png}"
-DPI="${DPI:-300}"
+FORMATS="${FORMATS:-svg,pdf,png,tiff}"
+DPI="${DPI:-600}"
+QUALITY_SCOPE="${QUALITY_SCOPE:-true_low_visibility}"
+UPPER_SCOPE="${UPPER_SCOPE:-all_paired_test}"
 
 mkdir -p "${OUT_DIR}"
 export MPLBACKEND=Agg
@@ -32,7 +36,10 @@ CMD=(
     "${PYTHON_BIN}"
     "${BASELINE_DIR}/plot_pangu_qcore_mechanism_ppt.py"
     --eval-root "${EVAL_ROOT}"
+    --paired-quality-dir "${PAIRED_QUALITY_DIR}"
     --out-dir "${OUT_DIR}"
+    --quality-scope "${QUALITY_SCOPE}"
+    --upper-scope "${UPPER_SCOPE}"
     --formats "${FORMATS}"
     --dpi "${DPI}"
 )

@@ -20,6 +20,7 @@ from analyze_q_core_paired_source_quality import (
     PRESSURE_LEVEL_FEATURES,
     QualitySplit,
     pressure_level_quality,
+    scope_masks,
     surface_observation_quality,
 )
 from preflight_q_core_paired_source_quality import REQUIRED_FEATURES, validate_quality_dataset
@@ -201,6 +202,12 @@ class PairedSourceQualityTest(unittest.TestCase):
         wspd = table[table["feature"] == "WSPD925"]
         self.assertTrue(np.all(~wspd["independent_evidence"].astype(bool)))
         self.assertTrue(np.all(~qc["excluded_from_primary_rmse"].astype(bool)))
+
+    def test_low_visibility_scope_excludes_exact_1000m_boundary(self) -> None:
+        split = synthetic_split()
+        split.visibility_m[:4] = np.array([499.0, 999.0, 1000.0, 1001.0])
+        masks = scope_masks(split, low_vis_threshold_m=1000.0)
+        self.assertEqual(masks["true_low_visibility"][:4].tolist(), [True, True, False, False])
 
     def test_surface_table_includes_era5_on_same_observation_rows(self) -> None:
         split = synthetic_split()

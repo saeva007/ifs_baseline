@@ -288,7 +288,7 @@ def scope_masks(split: QualitySplit, low_vis_threshold_m: float) -> Dict[str, np
     return {
         "all_paired_test": np.ones(n, dtype=bool),
         "true_low_visibility": np.isfinite(split.visibility_m)
-        & (split.visibility_m <= low_vis_threshold_m),
+        & (split.visibility_m < low_vis_threshold_m),
         "elevation_le_500m": np.isfinite(split.orography_m) & (split.orography_m <= 500.0),
     }
 
@@ -648,6 +648,22 @@ def main() -> None:
         "new_training_models_used": 0,
         "test_rows": int(len(split.keys)),
         "represented_utc_dates": int(split.keys["time_utc"].dt.strftime("%Y-%m-%d").nunique()),
+        "low_visibility_definition": {
+            "operator": "<",
+            "threshold_m": float(args.low_vis_threshold_m),
+            "boundary_value_is_clear": True,
+            "visibility_equal_threshold_rows": int(
+                (
+                    np.isfinite(split.visibility_m)
+                    & np.isclose(
+                        split.visibility_m,
+                        float(args.low_vis_threshold_m),
+                        rtol=0.0,
+                        atol=1.0e-6,
+                    )
+                ).sum()
+            ),
+        },
         "paired_key": ["valid_time_utc", "station_id"],
         "sequence_position": (
             "last input step at valid time, matching the observation-anchored pointwise comparison; "

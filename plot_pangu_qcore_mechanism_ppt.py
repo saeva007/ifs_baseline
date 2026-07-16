@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Create one-claim-per-figure PPT graphics for the formal Pangu q-core study.
+"""Draw the complete Pangu--Tianji q-core evidence story as standalone figures.
 
-The script is intentionally independent of Torch.  It consumes only the formal
-``mt2pw`` analysis tables and artifact audit, rejects smoke/incomplete runs, and
-exports editable SVG plus PDF/PNG previews.  Each output is a standalone figure
-with one scientific message; no composite subplot is produced.
+The plotting entrypoint is CPU-only and intentionally independent of Torch.  It
+combines the passed three-seed ``mt2pw`` factorial analysis with the separate
+paired source-quality diagnosis.  Every exported figure carries one scientific
+claim and is written as editable SVG/PDF plus high-resolution PNG/TIFF.
+
+The default surface-quality scope is the model-consistent definition
+``visibility < 1000 m``.  Old quality reports that used ``<= 1000 m`` are
+rejected for formal low-visibility figures.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
@@ -24,78 +30,123 @@ import numpy as np
 import pandas as pd
 
 
-# Mandatory editable-vector and presentation typography settings.
-plt.rcParams["font.family"] = "sans-serif"
-plt.rcParams["font.sans-serif"] = [
-    "Arial",
-    "Liberation Sans",
-    "Noto Sans CJK SC",
-    "DejaVu Sans",
-]
-plt.rcParams["svg.fonttype"] = "none"
-plt.rcParams["pdf.fonttype"] = 42
-plt.rcParams["ps.fonttype"] = 42
-plt.rcParams["font.size"] = 18
-plt.rcParams["axes.titlesize"] = 25
-plt.rcParams["axes.labelsize"] = 19
-plt.rcParams["xtick.labelsize"] = 17
-plt.rcParams["ytick.labelsize"] = 18
-plt.rcParams["axes.linewidth"] = 1.5
-plt.rcParams["axes.spines.top"] = False
-plt.rcParams["axes.spines.right"] = False
-plt.rcParams["legend.frameon"] = False
-plt.rcParams["legend.fontsize"] = 17
-plt.rcParams["figure.facecolor"] = "white"
-plt.rcParams["savefig.facecolor"] = "white"
+# A 13.33 x 7.50 in master scales to a 183-mm two-column paper figure while
+# retaining roughly 9--14 pt text, and is also native to a 16:9 presentation.
+MASTER_SIZE = (13.333, 7.50)
+plt.rcParams.update(
+    {
+        "font.family": "sans-serif",
+        "font.sans-serif": [
+            "Arial",
+            "Liberation Sans",
+            "Noto Sans CJK SC",
+            "DejaVu Sans",
+        ],
+        "svg.fonttype": "none",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "font.size": 18,
+        "axes.titlesize": 25,
+        "axes.labelsize": 20,
+        "xtick.labelsize": 18,
+        "ytick.labelsize": 18,
+        "legend.fontsize": 17,
+        "axes.linewidth": 1.6,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "legend.frameon": False,
+        "figure.facecolor": "white",
+        "savefig.facecolor": "white",
+    }
+)
 
 
-PANGU = "#8E78B7"       # lighter violet: AI forecast source
-PANGU_DARK = "#5D477F"
-TIANJI = "#0F6B78"      # darker teal: NWP-derived forecast source
-TIANJI_LIGHT = "#58A6AE"
-INK = "#252525"
-MID_GREY = "#747474"
-LIGHT_GREY = "#D8D8D8"
-PALE_GREY = "#F2F3F5"
-POSITIVE = "#166F5B"
-NEGATIVE = "#8C5A63"
+# Source colors deliberately differ in hue and lightness.  The same mapping is
+# used in every figure so the story remains visually stable.
+PANGU = "#A98DCE"          # light violet: AI forecast source
+PANGU_DARK = "#654A8A"
+PANGU_PALE = "#F0EBF7"
+TIANJI = "#006C75"         # dark teal: numerical-model forecast source
+TIANJI_LIGHT = "#65AEB4"
+TIANJI_PALE = "#E3F1F2"
+ERA5 = "#777777"           # neutral reference-analysis benchmark
+ERA5_LIGHT = "#B8B8B8"
+ERA5_PALE = "#EEEEEE"
+INK = "#202124"
+MID_GREY = "#686B70"
+LIGHT_GREY = "#D7D9DC"
+PALE_GREY = "#F4F5F6"
+GRID_GREY = "#E4E6E8"
+POSITIVE = "#0B6E4F"
+
+PACKAGE_COLORS = {
+    "T2": "#174A7E",
+    "M": "#007C82",
+    "W": "#7AA6C2",
+    "P": "#9A9A9A",
+}
+SOURCE_COLORS = {
+    "pangu": PANGU,
+    "tianji": TIANJI,
+    "era5_reference_analysis": ERA5,
+}
+SOURCE_LABELS = {
+    "pangu": "Pangu",
+    "tianji": "Tianji",
+    "era5_reference_analysis": "ERA5",
+}
 
 DEFAULT_EVAL_ROOT = Path(
     "/public/home/putianshu/vis_mlp/"
     "paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/"
     "qcore_hybrid_mt2pw_formal_v1_20260708"
 )
-
-PRIMARY_METRICS: Tuple[Tuple[str, str], ...] = (
-    ("low_vis_ap", "Low-vis AP"),
-    ("low_vis_csi_matched_fpr", "Low-vis CSI"),
-    ("low_vis_recall_matched_fpr", "Low-vis recall"),
+DEFAULT_QUALITY_DIR = Path(
+    "/public/home/putianshu/vis_mlp/"
+    "paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/"
+    "qcore_paired_quality_strictlt_v1_20260716/analysis"
 )
 
 FIGURE_SPECS: Mapping[str, Mapping[str, str]] = {
-    "00_weather_model_principle": {
-        "claim": "NWP constrains atmospheric evolution explicitly, whereas Pangu learns the state transition statistically.",
-        "role": "Background mechanism hypothesis; not direct evidence from this experiment.",
+    "00_qcore_full_experiment_flow": {
+        "placement": "main",
+        "claim": "The mechanism claim follows a controlled chain from fair performance to source attribution and independent quality checks.",
     },
-    "01_qcore_fair_performance": {
-        "claim": "Tianji-trained q-core models outperform Pangu-trained models under the same predictors and operating-point protocol.",
-        "role": "Primary fair-performance evidence.",
+    "01_qcore_lowvis_ap": {
+        "placement": "main",
+        "claim": "Tianji-trained q-core models have higher threshold-free Low-vis AP than Pangu-trained models.",
     },
-    "02_source_block_shapley": {
-        "claim": "T2M and moisture are the two dominant positive source blocks; wind is smaller and MSLP is near zero.",
-        "role": "Controlled hybrid-retraining attribution.",
+    "02_qcore_matched_fpr_recall": {
+        "placement": "main",
+        "claim": "At validation-matched false-alarm rates, Tianji-trained models recover more low-visibility cases.",
     },
-    "03_lowvis_observation_quality": {
-        "claim": "During observed low-visibility cases, Tianji has lower T2M, 10-m wind-speed and MSLP MAE than Pangu.",
-        "role": "Observation-anchored source-quality evidence.",
+    "03_source_block_shapley": {
+        "placement": "main",
+        "claim": "T2M and moisture dominate the controlled source contribution, wind is smaller, and MSLP is near zero.",
     },
-    "04_unique_event_hits": {
-        "claim": "At validation-matched FPR, Tianji uniquely detects more than twice as many low-visibility samples as Pangu.",
-        "role": "Event-level closure of the performance gap.",
+    "04_surface_t2m_quality": {
+        "placement": "main",
+        "claim": "Tianji 2-m temperature is closer to station observations in the selected quality scope.",
     },
-    "05_moisture_reference_caveat": {
-        "claim": "Marginal Q error against ERA5 reference analysis does not uniformly favour Tianji.",
-        "role": "Limitation: moisture attribution is not explained by marginal Q MAE alone.",
+    "05_surface_wspd10_quality": {
+        "placement": "main",
+        "claim": "Tianji 10-m wind speed is closer to station observations in the selected quality scope.",
+    },
+    "06_surface_mslp_quality": {
+        "placement": "supplement",
+        "claim": "MSLP provides a source-quality negative control because its contribution to performance is not robust.",
+    },
+    "07_pressure_level_quality": {
+        "placement": "main",
+        "claim": "Pressure-level quality is mixed: Pangu is closer for Q1000 while Tianji is closer for 925-hPa vector wind.",
+    },
+    "08_unique_event_hits": {
+        "placement": "main_or_supplement",
+        "claim": "Tianji uniquely detects more low-visibility samples than Pangu at validation-matched operating points.",
+    },
+    "09_pressure_qc": {
+        "placement": "supplement",
+        "claim": "Pangu contains a small but explicit fraction of non-physical negative pressure-level specific humidity values.",
     },
 }
 
@@ -109,31 +160,49 @@ def parse_args() -> argparse.Namespace:
         help="Formal mt2pw evaluation root containing analysis/ and artifact_audit/.",
     )
     parser.add_argument(
+        "--paired-quality-dir",
+        type=Path,
+        default=Path(os.environ.get("QCORE_PAIRED_QUALITY_DIR", DEFAULT_QUALITY_DIR)),
+        help="Paired quality analysis directory, or its parent containing analysis/.",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/ppt_figures).",
+        help="Output directory (default: <eval-root>/evidence_story_figures).",
+    )
+    parser.add_argument(
+        "--quality-scope",
+        choices=("all_paired_test", "true_low_visibility", "elevation_le_500m"),
+        default="true_low_visibility",
+        help="Scope for the station-observation figures.",
+    )
+    parser.add_argument(
+        "--upper-scope",
+        choices=("all_paired_test", "true_low_visibility", "elevation_le_500m"),
+        default="all_paired_test",
+        help="Scope for the pressure-level quality summary.",
     )
     parser.add_argument(
         "--formats",
-        default="svg,pdf,png",
-        help="Comma-separated output formats. SVG is always emitted first.",
+        default="svg,pdf,png,tiff",
+        help="Comma-separated formats; SVG is always emitted first.",
     )
-    parser.add_argument("--dpi", type=int, default=300, help="PNG resolution.")
+    parser.add_argument("--dpi", type=int, default=600, help="PNG/TIFF raster resolution.")
     parser.add_argument(
-        "--include-principle",
+        "--main-only",
         action="store_true",
-        help="Also draw the conceptual NWP-versus-Pangu schematic (off by default).",
+        help="Skip the MSLP negative-control and pressure-QC supplement figures.",
     )
     parser.add_argument(
         "--allow-missing-artifact-audit",
         action="store_true",
-        help="Permit plotting without artifact_audit (not recommended for formal figures).",
+        help="Permit plotting without the formal 51/51 artifact audit (preview only).",
     )
     parser.add_argument(
         "--validate-only",
         action="store_true",
-        help="Run all formal-input checks without drawing figures.",
+        help="Validate every input and stop before drawing.",
     )
     return parser.parse_args()
 
@@ -155,20 +224,22 @@ def normalized_mask(series: pd.Series) -> pd.Series:
     return series.astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(4)
 
 
-def load_and_validate(
+def resolve_quality_dir(path: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    if (resolved / "paired_source_quality_report.json").is_file():
+        return resolved
+    if (resolved / "analysis" / "paired_source_quality_report.json").is_file():
+        return resolved / "analysis"
+    raise FileNotFoundError(
+        f"Could not find paired_source_quality_report.json under {resolved} or {resolved / 'analysis'}"
+    )
+
+
+def load_formal(
     eval_root: Path,
     allow_missing_artifact_audit: bool,
 ) -> Tuple[Dict[str, object], Dict[str, object], Dict[str, pd.DataFrame]]:
     analysis = eval_root / "analysis"
-    required_files = {
-        "metrics": "hybrid_factorial_metrics_by_seed.csv",
-        "shapley": "hybrid_exact_shapley_effects.csv",
-        "bootstrap": "hybrid_date_block_bootstrap_ci.csv",
-        "gap_draws": "hybrid_total_gap_bootstrap_draws.csv.gz",
-        "quality": "observation_anchored_source_quality.csv",
-        "events": "event_case_control_environment_summary.csv",
-        "q_reference": "q_reference_analysis_quality_and_extreme_placement.csv",
-    }
     report = load_json(analysis / "hybrid_factorial_analysis_report.json")
     if report.get("status") != "passed":
         raise ValueError(f"Formal analysis status is not passed: {report.get('status')!r}")
@@ -179,12 +250,10 @@ def load_and_validate(
     masks = [str(mask).zfill(4) for mask in report.get("masks", [])]
     if len(masks) != 16 or set(masks) != {f"{i:04b}" for i in range(16)}:
         raise ValueError("Formal mt2pw analysis must contain all 16 source masks")
-    if report.get("all0_mask") != "0000" or report.get("all1_mask") != "1111":
-        raise ValueError("Formal endpoint masks must be 0000 and 1111")
-    bootstrap_info = report.get("bootstrap", {})
-    if not isinstance(bootstrap_info, dict) or bootstrap_info.get("unit") != "UTC_valid_date":
-        raise ValueError("Formal uncertainty must use UTC_valid_date block bootstrap")
-    if int(bootstrap_info.get("iterations", 0)) != 1000:
+    bootstrap = report.get("bootstrap", {})
+    if not isinstance(bootstrap, dict) or bootstrap.get("unit") != "UTC_valid_date":
+        raise ValueError("Formal analysis must use UTC_valid_date block bootstrap")
+    if int(bootstrap.get("iterations", 0)) != 1000:
         raise ValueError("Formal analysis must use 1000 bootstrap iterations")
 
     audit_path = eval_root / "artifact_audit" / "primary_training_artifact_audit.json"
@@ -199,16 +268,22 @@ def load_and_validate(
             or int(audit.get("found_triplets", -1)) != expected
             or int(audit.get("passed_triplets", -1)) != expected
         ):
-            raise ValueError(f"Artifact audit is not the passed 51/51 formal mt2pw matrix: {audit}")
+            raise ValueError(f"Artifact audit is not the passed formal 51/51 matrix: {audit}")
     elif allow_missing_artifact_audit:
         audit = {"status": "missing_by_explicit_override"}
     else:
         raise FileNotFoundError(
-            f"Missing {audit_path}; use --allow-missing-artifact-audit only for non-formal previews"
+            f"Missing {audit_path}; use --allow-missing-artifact-audit only for preview work"
         )
 
+    filenames = {
+        "metrics": "hybrid_factorial_metrics_by_seed.csv",
+        "shapley": "hybrid_exact_shapley_effects.csv",
+        "gap_draws": "hybrid_total_gap_bootstrap_draws.csv.gz",
+        "events": "event_case_control_environment_summary.csv",
+    }
     tables: Dict[str, pd.DataFrame] = {}
-    for key, filename in required_files.items():
+    for key, filename in filenames.items():
         path = analysis / filename
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -218,389 +293,702 @@ def load_and_validate(
     metrics = tables["metrics"]
     require_columns(
         metrics,
-        ["seed", "mask", *(metric for metric, _ in PRIMARY_METRICS)],
-        "hybrid_factorial_metrics_by_seed.csv",
+        [
+            "seed",
+            "mask",
+            "low_vis_ap",
+            "low_vis_recall_matched_fpr",
+            "low_vis_csi_matched_fpr",
+            "low_vis_fpr_matched_fpr",
+        ],
+        filenames["metrics"],
     )
     metrics["mask"] = normalized_mask(metrics["mask"])
-    if set(metrics["seed"].astype(int)) != {42, 2025, 20260702}:
-        raise ValueError("Metrics do not contain the three formal seeds")
     expected_pairs = {(seed, mask) for seed in (42, 2025, 20260702) for mask in masks}
     actual_pairs = set(zip(metrics["seed"].astype(int), metrics["mask"]))
     if actual_pairs != expected_pairs:
-        raise ValueError("Metrics do not contain exactly one complete 3-seed x 16-mask matrix")
+        raise ValueError("Metrics do not contain the exact 3-seed x 16-mask formal matrix")
 
     require_columns(
         tables["shapley"],
         ["metric", "group", "group_label", "shapley_mean", "ci_low", "ci_high"],
-        "hybrid_exact_shapley_effects.csv",
+        filenames["shapley"],
     )
     require_columns(
         tables["gap_draws"],
         ["iteration", "metric", "delta_all1_minus_all0"],
-        "hybrid_total_gap_bootstrap_draws.csv.gz",
+        filenames["gap_draws"],
     )
     if tables["gap_draws"]["iteration"].nunique() != 1000:
-        raise ValueError("Gap-draw table must contain 1000 bootstrap iterations")
-    require_columns(
-        tables["quality"],
-        ["feature", "source", "scope", "n", "bias", "mae", "rmse", "correlation"],
-        "observation_anchored_source_quality.csv",
-    )
-    require_columns(tables["events"], ["case_category", "n"], "event_case_control_environment_summary.csv")
-    require_columns(
-        tables["q_reference"],
-        ["feature", "source", "analysis", "mae", "correlation"],
-        "q_reference_analysis_quality_and_extreme_placement.csv",
-    )
+        raise ValueError("Total-gap draw table must contain 1000 bootstrap iterations")
+    require_columns(tables["events"], ["case_category", "n"], filenames["events"])
     return report, audit, tables
 
 
+def load_quality(
+    quality_dir: Path,
+    quality_scope: str,
+) -> Tuple[Dict[str, object], Dict[str, pd.DataFrame]]:
+    report = load_json(quality_dir / "paired_source_quality_report.json")
+    if report.get("status") != "completed":
+        raise ValueError(f"Paired quality status is not completed: {report.get('status')!r}")
+    if report.get("analysis_type") != "diagnostic_only_no_training":
+        raise ValueError("Paired quality input is not the expected zero-training diagnosis")
+    if int(report.get("test_rows", 0)) <= 0 or int(report.get("represented_utc_dates", 0)) <= 1:
+        raise ValueError("Paired quality report has no usable paired test sample")
+    if quality_scope == "true_low_visibility":
+        definition = report.get("low_visibility_definition")
+        if not isinstance(definition, dict):
+            raise ValueError(
+                "Low-visibility figure requires a rebuilt report with low_visibility_definition; "
+                "legacy <=1000 m outputs are not publication-safe"
+            )
+        if definition.get("operator") != "<" or float(definition.get("threshold_m", math.nan)) != 1000.0:
+            raise ValueError(
+                f"Low-visibility quality must use visibility < 1000 m, got {definition!r}"
+            )
+        if definition.get("boundary_value_is_clear") is not True:
+            raise ValueError("Quality report does not explicitly classify the 1000-m boundary as Clear")
+
+    filenames = {
+        "pressure": "pressure_level_paired_rmse_utc_date_bootstrap_ci.csv",
+        "qc": "pressure_level_source_qc.csv",
+        "surface": "surface_observation_three_source_rmse_utc_date_bootstrap_ci.csv",
+        "surface_pairs": "surface_observation_pairwise_rmse_delta_utc_date_bootstrap_ci.csv",
+    }
+    tables = {key: pd.read_csv(quality_dir / filename) for key, filename in filenames.items()}
+    require_columns(
+        tables["pressure"],
+        [
+            "feature",
+            "scope",
+            "pangu",
+            "tianji",
+            "delta_pangu_minus_tianji",
+            "delta_ci_low",
+            "delta_ci_high",
+            "pangu_ci_low",
+            "pangu_ci_high",
+            "tianji_ci_low",
+            "tianji_ci_high",
+        ],
+        filenames["pressure"],
+    )
+    require_columns(
+        tables["surface"],
+        ["feature", "source", "scope", "n", "represented_utc_dates", "rmse", "ci_low", "ci_high"],
+        filenames["surface"],
+    )
+    require_columns(
+        tables["surface_pairs"],
+        [
+            "feature",
+            "left_source",
+            "right_source",
+            "scope",
+            "delta_left_minus_right",
+            "delta_ci_low",
+            "delta_ci_high",
+        ],
+        filenames["surface_pairs"],
+    )
+    require_columns(
+        tables["qc"],
+        ["feature", "source", "rows", "outside_broad_range_rows", "outside_broad_range_fraction", "minimum"],
+        filenames["qc"],
+    )
+    for scope in (quality_scope,):
+        if scope not in set(tables["surface"]["scope"]):
+            raise ValueError(f"Surface quality table lacks scope={scope}")
+    return report, tables
+
+
 def ordered_formats(value: str) -> List[str]:
-    supported = {"svg", "pdf", "png"}
+    supported = {"svg", "pdf", "png", "tiff"}
     requested = [item.strip().lower() for item in value.split(",") if item.strip()]
     unknown = sorted(set(requested) - supported)
     if unknown:
-        raise ValueError(f"Unsupported formats: {unknown}; supported={sorted(supported)}")
+        raise ValueError(f"Unsupported formats {unknown}; supported={sorted(supported)}")
     result = ["svg"]
     result.extend(fmt for fmt in requested if fmt != "svg")
     return list(dict.fromkeys(result))
 
 
-def finish(fig: plt.Figure, base: Path, formats: Sequence[str], dpi: int, *, tight: bool = True) -> List[str]:
-    if tight:
-        fig.tight_layout(pad=1.4)
+def save_figure(
+    fig: plt.Figure,
+    base: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
     saved: List[str] = []
     for fmt in formats:
         path = base.with_suffix(f".{fmt}")
-        kwargs = {"bbox_inches": "tight", "facecolor": "white"}
-        if fmt == "png":
+        # Preserve the exact 16:9 master canvas for predictable PPT placement.
+        # All layouts reserve explicit margins, so tight-bbox cropping is not
+        # needed and would make the exported aspect ratios inconsistent.
+        kwargs: Dict[str, object] = {"facecolor": "white"}
+        if fmt in {"png", "tiff"}:
             kwargs["dpi"] = dpi
+        if fmt == "tiff":
+            kwargs["pil_kwargs"] = {"compression": "tiff_lzw"}
         fig.savefig(path, **kwargs)
         saved.append(path.name)
     plt.close(fig)
     return saved
 
 
-def style_axis(ax: plt.Axes) -> None:
-    ax.tick_params(length=5, width=1.3, color=INK)
+def style_axis(ax: plt.Axes, *, horizontal_grid: bool = True) -> None:
+    ax.tick_params(length=5.5, width=1.4, color=INK)
     ax.spines["left"].set_color(INK)
     ax.spines["bottom"].set_color(INK)
-    ax.title.set_color(INK)
+    if horizontal_grid:
+        ax.yaxis.grid(True, color=GRID_GREY, linewidth=1.0, alpha=0.8)
+        ax.set_axisbelow(True)
 
 
-def plot_principle(out_dir: Path, formats: Sequence[str], dpi: int) -> Tuple[pd.DataFrame, List[str]]:
-    fig, ax = plt.subplots(figsize=(13.0, 7.1))
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def scope_label(scope: str) -> str:
+    return {
+        "all_paired_test": "all paired test samples",
+        "true_low_visibility": "observed Low-vis samples (<1000 m)",
+        "elevation_le_500m": "stations at elevation ≤500 m",
+    }[scope]
+
+
+def draw_box(
+    ax: plt.Axes,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    title: str,
+    body: str,
+    edge: str,
+    fill: str,
+    number: str,
+) -> None:
+    ax.add_patch(
+        FancyBboxPatch(
+            (x, y),
+            width,
+            height,
+            boxstyle="round,pad=0.012,rounding_size=0.018",
+            linewidth=2.2,
+            edgecolor=edge,
+            facecolor=fill,
+        )
+    )
+    ax.add_patch(plt.Circle((x + 0.035, y + height - 0.043), 0.023, color=edge, zorder=3))
+    ax.text(
+        x + 0.035,
+        y + height - 0.043,
+        number,
+        ha="center",
+        va="center",
+        fontsize=13,
+        fontweight="bold",
+        color="white",
+        zorder=4,
+    )
+    ax.text(
+        x + 0.072,
+        y + height - 0.045,
+        title,
+        ha="left",
+        va="center",
+        fontsize=16.5,
+        fontweight="bold",
+        color=edge,
+    )
+    ax.text(
+        x + 0.03,
+        y + height - 0.092,
+        body,
+        ha="left",
+        va="top",
+        fontsize=12.5,
+        linespacing=1.28,
+        color=INK,
+    )
+
+
+def arrow(ax: plt.Axes, start: Tuple[float, float], end: Tuple[float, float], color: str = MID_GREY) -> None:
+    ax.add_patch(
+        FancyArrowPatch(
+            start,
+            end,
+            arrowstyle="-|>",
+            mutation_scale=18,
+            linewidth=2.0,
+            color=color,
+            connectionstyle="arc3,rad=0.0",
+        )
+    )
+
+
+def plot_flow(out_dir: Path, formats: Sequence[str], dpi: int) -> Tuple[pd.DataFrame, List[str]]:
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.025, right=0.985, top=0.975, bottom=0.025)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
     ax.text(
-        0.04,
-        0.93,
-        "NWP and Pangu advance the atmosphere in fundamentally different ways",
+        0.035,
+        0.955,
+        "Evidence chain for the Pangu–Tianji q-core experiment",
         fontsize=27,
         fontweight="bold",
         color=INK,
         ha="left",
         va="center",
     )
-
-    lanes = [
-        {
-            "y": 0.62,
-            "label": "Numerical weather prediction",
-            "color": TIANJI,
-            "fill": "#E3F0F1",
-            "middle": "Dynamical core\n+ physical parameterizations",
-            "callout": "Explicitly integrates governing equations; consistency is constrained, not perfect.",
-        },
-        {
-            "y": 0.29,
-            "label": "Pangu-Weather",
-            "color": PANGU_DARK,
-            "fill": "#EEE9F5",
-            "middle": "3D Earth-specific\nTransformer",
-            "callout": "Learns joint ERA5 transitions; no explicit PDE integration or conservation guarantee.",
-        },
-    ]
-    for lane in lanes:
-        y = float(lane["y"])
-        color = str(lane["color"])
-        ax.add_patch(
-            FancyBboxPatch(
-                (0.035, y - 0.125),
-                0.93,
-                0.245,
-                boxstyle="round,pad=0.012,rounding_size=0.018",
-                linewidth=0,
-                facecolor=str(lane["fill"]),
-                zorder=0,
-            )
-        )
-        ax.text(0.055, y + 0.092, str(lane["label"]), fontsize=20, fontweight="bold", color=color, va="center")
-        boxes = [
-            (0.225, "Initial atmospheric\nstate (analysis)"),
-            (0.515, str(lane["middle"])),
-            (0.805, "Forecast atmospheric\nstate"),
-        ]
-        for x, text in boxes:
-            ax.add_patch(
-                FancyBboxPatch(
-                    (x - 0.102, y - 0.070),
-                    0.204,
-                    0.096,
-                    boxstyle="round,pad=0.011,rounding_size=0.012",
-                    linewidth=1.8,
-                    edgecolor=color,
-                    facecolor="white",
-                )
-            )
-            ax.text(x, y - 0.022, text, fontsize=17, color=INK, ha="center", va="center", linespacing=1.2)
-        for x0, x1 in ((0.332, 0.407), (0.622, 0.697)):
-            ax.add_patch(
-                FancyArrowPatch(
-                    (x0, y - 0.022),
-                    (x1, y - 0.022),
-                    arrowstyle="-|>",
-                    mutation_scale=18,
-                    linewidth=2.1,
-                    color=color,
-                )
-            )
-        ax.text(0.515, y - 0.103, str(lane["callout"]), fontsize=13.2, color=MID_GREY, ha="center", va="center")
-
     ax.text(
-        0.5,
-        0.055,
-        "Mechanism hypothesis for this study: low-visibility prediction depends on the joint T–q–wind structure, not only marginal errors.",
-        fontsize=16,
-        fontweight="bold",
-        color=INK,
-        ha="center",
+        0.035,
+        0.910,
+        "One controlled question per stage; performance attribution is separated from source-quality validation.",
+        fontsize=15.5,
+        color=MID_GREY,
+        ha="left",
         va="center",
     )
+
+    draw_box(
+        ax,
+        0.035,
+        0.625,
+        0.29,
+        0.215,
+        "Fair q-core design",
+        "Identical station–time pairs\nIdentical q-core inputs, model and loss\nCanonical Pangu 12–23 h leads",
+        "#4F5965",
+        PALE_GREY,
+        "1",
+    )
+    draw_box(
+        ax,
+        0.355,
+        0.625,
+        0.29,
+        0.215,
+        "Performance gap",
+        "Threshold-free Low-vis AP\nValidation-matched-FPR recall and CSI\n3 seeds + UTC-date bootstrap",
+        "#3F5F78",
+        "#E9F0F5",
+        "2",
+    )
+    draw_box(
+        ax,
+        0.675,
+        0.625,
+        0.29,
+        0.215,
+        "Factorial attribution",
+        "16 retrained source-block combinations\nMoisture / T2M / wind / MSLP\nExact group Shapley contributions",
+        "#1C6A70",
+        TIANJI_PALE,
+        "3",
+    )
+    arrow(ax, (0.327, 0.733), (0.347, 0.733))
+    arrow(ax, (0.647, 0.733), (0.667, 0.733))
+
+    draw_box(
+        ax,
+        0.115,
+        0.315,
+        0.34,
+        0.205,
+        "Near-surface quality",
+        "T2M / 10-m wind / MSLP\nMatched automatic-station observations\nSame paired rows + UTC-date CIs",
+        TIANJI,
+        TIANJI_PALE,
+        "4a",
+    )
+    draw_box(
+        ax,
+        0.545,
+        0.315,
+        0.34,
+        0.205,
+        "Pressure-level quality",
+        "Q1000 / Q925 / 925-hPa wind\nPointwise ERA5 reference analysis\nElevation sensitivity + physical QC",
+        ERA5,
+        ERA5_PALE,
+        "4b",
+    )
+    arrow(ax, (0.83, 0.618), (0.345, 0.528), color="#5B7F82")
+    arrow(ax, (0.83, 0.618), (0.715, 0.528), color="#7C7C7C")
+
+    draw_box(
+        ax,
+        0.255,
+        0.075,
+        0.58,
+        0.145,
+        "Bounded mechanism conclusion",
+        "Performance, attribution, quality and hit/miss evidence support task-relevant\nsource-information differences—not universal physical-inconsistency proof.",
+        PANGU_DARK,
+        PANGU_PALE,
+        "5",
+    )
+    arrow(ax, (0.285, 0.307), (0.365, 0.225), color="#5B7F82")
+    arrow(ax, (0.715, 0.307), (0.635, 0.225), color="#7C7C7C")
+
     source = pd.DataFrame(
         [
+            {"stage": "1", "title": "Fair q-core comparison", "evidence": "controlled design"},
+            {"stage": "2", "title": "Primary performance", "evidence": "AP and validation-matched FPR"},
+            {"stage": "3", "title": "Controlled source attribution", "evidence": "16 masks x 3 seeds; exact group Shapley"},
+            {"stage": "4a", "title": "Near-surface quality", "evidence": "automatic-station observations"},
+            {"stage": "4b", "title": "Pressure-level quality", "evidence": "ERA5 reference analysis and QC"},
+            {"stage": "5", "title": "Bounded mechanism conclusion", "evidence": "event closure and claim boundary"},
+        ]
+    )
+    return source, save_figure(fig, out_dir / "00_qcore_full_experiment_flow", formats, dpi)
+
+
+def endpoint_source(
+    metrics: pd.DataFrame,
+    gap_draws: pd.DataFrame,
+    metric: str,
+) -> pd.DataFrame:
+    part = metrics[metrics["mask"].isin(["0000", "1111"])][["seed", "mask", metric]].copy()
+    part["source"] = part["mask"].map({"0000": "pangu", "1111": "tianji"})
+    part = part.rename(columns={metric: "value"})
+    draws = pd.to_numeric(
+        gap_draws.loc[gap_draws["metric"] == metric, "delta_all1_minus_all0"],
+        errors="coerce",
+    ).dropna()
+    if len(draws) != 1000:
+        raise ValueError(f"{metric}: expected 1000 finite total-gap draws, got {len(draws)}")
+    means = part.groupby("source", sort=False)["value"].mean()
+    summary = pd.DataFrame(
+        [
             {
-                "system": "Numerical weather prediction",
-                "state_transition": "explicit numerical integration of governing equations plus parameterizations",
-                "physical_consistency": "explicitly constrained but not perfect",
+                "seed": "mean",
+                "mask": "0000",
+                "source": "pangu",
+                "value": float(means["pangu"]),
+                "delta_tianji_minus_pangu": float(means["tianji"] - means["pangu"]),
+                "delta_ci_low": float(draws.quantile(0.025)),
+                "delta_ci_high": float(draws.quantile(0.975)),
             },
             {
-                "system": "Pangu-Weather",
-                "state_transition": "3D Earth-specific Transformer learned from ERA5 state pairs",
-                "physical_consistency": "implicit/statistical; no explicit PDE integration or conservation guarantee",
+                "seed": "mean",
+                "mask": "1111",
+                "source": "tianji",
+                "value": float(means["tianji"]),
+                "delta_tianji_minus_pangu": float(means["tianji"] - means["pangu"]),
+                "delta_ci_low": float(draws.quantile(0.025)),
+                "delta_ci_high": float(draws.quantile(0.975)),
             },
         ]
     )
-    files = finish(fig, out_dir / "00_weather_model_principle", formats, dpi, tight=False)
-    return source, files
+    part["delta_tianji_minus_pangu"] = np.nan
+    part["delta_ci_low"] = np.nan
+    part["delta_ci_high"] = np.nan
+    return pd.concat([part, summary], ignore_index=True)
 
 
-def performance_source(metrics: pd.DataFrame, gap_draws: pd.DataFrame) -> pd.DataFrame:
-    endpoint = metrics.groupby("mask", sort=True)[[metric for metric, _ in PRIMARY_METRICS]].mean()
-    rows: List[Dict[str, object]] = []
-    for metric, label in PRIMARY_METRICS:
-        draws = pd.to_numeric(
-            gap_draws.loc[gap_draws["metric"] == metric, "delta_all1_minus_all0"], errors="coerce"
-        ).dropna()
-        if len(draws) != 1000:
-            raise ValueError(f"{metric}: expected 1000 finite total-gap bootstrap draws, got {len(draws)}")
-        pangu = float(endpoint.loc["0000", metric])
-        tianji = float(endpoint.loc["1111", metric])
-        rows.append(
-            {
-                "metric": metric,
-                "label": label,
-                "pangu_mean": pangu,
-                "tianji_mean": tianji,
-                "delta_tianji_minus_pangu": tianji - pangu,
-                "delta_ci_low": float(draws.quantile(0.025)),
-                "delta_ci_high": float(draws.quantile(0.975)),
-            }
+def plot_endpoint(
+    source: pd.DataFrame,
+    metric_label: str,
+    title: str,
+    output_name: str,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+    protocol_note: str,
+) -> List[str]:
+    seed_rows = source[source["seed"].astype(str) != "mean"].copy()
+    mean_rows = source[source["seed"].astype(str) == "mean"].set_index("source")
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.12, right=0.95, top=0.83, bottom=0.22)
+    for seed in sorted(seed_rows["seed"].astype(int).unique()):
+        pair = seed_rows[seed_rows["seed"].astype(int) == seed].set_index("source")
+        ax.plot(
+            [0, 1],
+            [pair.loc["pangu", "value"], pair.loc["tianji", "value"]],
+            color=LIGHT_GREY,
+            linewidth=2.3,
+            zorder=1,
         )
-    return pd.DataFrame(rows)
+        ax.scatter(0, pair.loc["pangu", "value"], s=115, color=PANGU, alpha=0.62, edgecolor="white", linewidth=1.1, zorder=2)
+        ax.scatter(1, pair.loc["tianji", "value"], s=115, color=TIANJI, alpha=0.62, edgecolor="white", linewidth=1.1, zorder=2)
 
+    pangu = float(mean_rows.loc["pangu", "value"])
+    tianji = float(mean_rows.loc["tianji", "value"])
+    ax.scatter(0, pangu, s=310, marker="D", color=PANGU_DARK, edgecolor="white", linewidth=1.8, zorder=4)
+    ax.scatter(1, tianji, s=310, marker="D", color=TIANJI, edgecolor="white", linewidth=1.8, zorder=4)
+    ax.text(0, pangu, f"  {pangu:.3f}", ha="left", va="center", fontsize=21, fontweight="bold", color=PANGU_DARK)
+    ax.text(1, tianji, f"  {tianji:.3f}", ha="left", va="center", fontsize=21, fontweight="bold", color=TIANJI)
 
-def plot_performance(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
-    fig, ax = plt.subplots(figsize=(12.5, 6.8))
-    y = np.arange(len(source))[::-1]
-    for yi, row in zip(y, source.itertuples(index=False)):
-        pangu = float(row.pangu_mean)
-        tianji = float(row.tianji_mean)
-        ci_lo = pangu + float(row.delta_ci_low)
-        ci_hi = pangu + float(row.delta_ci_high)
-        ax.plot([pangu, tianji], [yi, yi], color=LIGHT_GREY, linewidth=8, solid_capstyle="round", zorder=1)
-        ax.plot([ci_lo, ci_hi], [yi, yi], color=TIANJI_LIGHT, linewidth=3.5, solid_capstyle="round", zorder=2)
-        ax.scatter(pangu, yi, s=180, color=PANGU, edgecolor="white", linewidth=1.5, zorder=3)
-        ax.scatter(tianji, yi, s=180, color=TIANJI, edgecolor="white", linewidth=1.5, zorder=3)
-        ax.text(pangu - 0.012, yi + 0.17, f"{pangu:.3f}", ha="right", va="center", fontsize=15, color=PANGU_DARK)
-        ax.text(tianji + 0.012, yi + 0.17, f"{tianji:.3f}", ha="left", va="center", fontsize=15, color=TIANJI)
-        ax.text(
-            0.825,
-            yi,
-            f"Δ {row.delta_tianji_minus_pangu:+.3f}\n[{row.delta_ci_low:.3f}, {row.delta_ci_high:.3f}]",
-            ha="left",
-            va="center",
-            fontsize=15,
-            color=INK,
-            linespacing=1.25,
-        )
-    ax.set_yticks(y, source["label"])
-    ax.set_xlim(0.13, 0.96)
-    ax.set_ylim(-0.55, len(source) - 0.35)
-    ax.set_xlabel("Test-set score (higher is better)")
-    ax.set_title("Tianji improves all primary q-core endpoints at comparable false-alarm rates", loc="left", pad=18, fontweight="bold")
-    ax.scatter([], [], s=150, color=PANGU, label="Pangu-trained")
-    ax.scatter([], [], s=150, color=TIANJI, label="Tianji-trained")
-    ax.legend(loc="lower right", ncol=2, handletextpad=0.5, columnspacing=1.4)
+    delta = float(mean_rows.loc["tianji", "delta_tianji_minus_pangu"])
+    ci_low = float(mean_rows.loc["tianji", "delta_ci_low"])
+    ci_high = float(mean_rows.loc["tianji", "delta_ci_high"])
+    values = seed_rows["value"].to_numpy(dtype=float)
+    span = max(float(values.max() - values.min()), 0.02)
+    ymin = max(0.0, float(values.min() - 0.55 * span))
+    ymax = float(values.max() + 1.15 * span)
+    ax.set_ylim(ymin, ymax)
+    ax.set_xlim(-0.45, 1.55)
+    annotation_y = ymax - 0.12 * (ymax - ymin)
+    ax.text(
+        0.5,
+        annotation_y,
+        f"Tianji − Pangu = {delta:+.3f}   (95% CI {ci_low:+.3f} to {ci_high:+.3f})",
+        ha="center",
+        va="center",
+        fontsize=19,
+        fontweight="bold",
+        color=POSITIVE if delta > 0 else PANGU_DARK,
+        bbox=dict(boxstyle="round,pad=0.45", facecolor="#F4F8F7", edgecolor="#BFD8CF", linewidth=1.2),
+    )
+    ax.set_xticks([0, 1], ["Pangu-trained", "Tianji-trained"])
+    ax.get_xticklabels()[0].set_color(PANGU_DARK)
+    ax.get_xticklabels()[1].set_color(TIANJI)
+    ax.set_ylabel(metric_label)
+    ax.set_title(title, loc="left", pad=18, fontweight="bold")
     ax.text(
         0.0,
-        -0.22,
-        "Mean across 3 seeds; brackets are 95% UTC-date block-bootstrap CIs for Tianji − Pangu.\n"
-        "CSI and recall use thresholds selected on validation at a common target FPR.",
+        -0.17,
+        f"Small circles: individual training seeds; diamonds: 3-seed means. {protocol_note}\n"
+        "95% CI from joint UTC-valid-date block bootstrap; higher is better.",
         transform=ax.transAxes,
-        fontsize=13.5,
+        fontsize=14.2,
         color=MID_GREY,
         va="top",
     )
     style_axis(ax)
-    return finish(fig, out_dir / "01_qcore_fair_performance", formats, dpi)
+    return save_figure(fig, out_dir / output_name, formats, dpi)
 
 
 def shapley_source(shapley: pd.DataFrame) -> pd.DataFrame:
     order = ["T2", "M", "W", "P"]
     part = shapley[shapley["metric"] == "low_vis_ap"].copy()
-    if set(part["group"]) != set(order):
-        raise ValueError(f"Low-vis AP Shapley rows must be {order}, got {sorted(part['group'].astype(str))}")
+    if set(part["group"].astype(str)) != set(order):
+        raise ValueError(f"Low-vis AP Shapley rows must be {order}")
     part = part.set_index("group").loc[order].reset_index()
-    total_gap = float(part["shapley_mean"].sum())
-    part["share_of_total_gap_percent"] = 100.0 * part["shapley_mean"] / total_gap
-    return part[
-        [
-            "group",
-            "group_label",
-            "shapley_mean",
-            "shapley_seed_sd",
-            "ci_low",
-            "ci_high",
-            "share_of_total_gap_percent",
-        ]
-    ]
+    total = float(part["shapley_mean"].sum())
+    part["share_of_total_gap_percent"] = 100.0 * part["shapley_mean"] / total
+    return part
 
 
 def plot_shapley(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
-    fig, ax = plt.subplots(figsize=(12.2, 6.8))
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.24, right=0.95, top=0.83, bottom=0.22)
     y = np.arange(len(source))[::-1]
-    colors = ["#0F4D92", "#42949E", "#8FBAD9", "#9B9B9B"]
-    for yi, row, color in zip(y, source.itertuples(index=False), colors):
-        ax.plot([row.ci_low, row.ci_high], [yi, yi], color=color, linewidth=4.2, solid_capstyle="round")
-        ax.scatter(row.shapley_mean, yi, s=210, color=color, edgecolor="white", linewidth=1.5, zorder=3)
+    labels = {
+        "T2": "2-m temperature",
+        "M": "Moisture package",
+        "W": "Wind package",
+        "P": "Mean sea-level pressure",
+    }
+    for yi, row in zip(y, source.itertuples(index=False)):
+        color = PACKAGE_COLORS[str(row.group)]
+        ax.plot([row.ci_low, row.ci_high], [yi, yi], color=color, linewidth=5.0, solid_capstyle="round")
+        ax.scatter(row.shapley_mean, yi, s=245, color=color, edgecolor="white", linewidth=1.6, zorder=3)
         ax.text(
-            0.047,
+            max(0.043, float(row.ci_high) + 0.0025),
             yi,
-            f"{row.shapley_mean:+.3f}  ({row.share_of_total_gap_percent:+.1f}%)",
+            f"{row.shapley_mean:+.3f}",
             ha="left",
             va="center",
-            fontsize=16,
+            fontsize=18,
+            fontweight="bold",
             color=INK,
         )
-    ax.axvline(0.0, color=MID_GREY, linestyle="--", linewidth=1.6)
-    ax.set_yticks(y, ["2-m temperature", "Moisture", "Wind", "Mean sea-level pressure"])
-    ax.set_xlim(-0.007, 0.069)
+    ax.axvline(0.0, color=MID_GREY, linestyle="--", linewidth=1.8)
+    ax.set_yticks(y, [labels[group] for group in source["group"]])
+    xmin = min(-0.006, float(source["ci_low"].min()) - 0.002)
+    xmax = max(0.052, float(source["ci_high"].max()) + 0.014)
+    ax.set_xlim(xmin, xmax)
     ax.set_ylim(-0.55, len(source) - 0.35)
-    ax.set_xlabel("Exact group Shapley contribution to Low-vis AP")
-    ax.set_title("T2M and moisture jointly explain most of the source-performance gap", loc="left", pad=18, fontweight="bold")
+    ax.set_xlabel("Exact source-block Shapley contribution to Low-vis AP")
+    ax.set_title("T2M and moisture explain most of the controlled source gap", loc="left", pad=18, fontweight="bold")
     ax.text(
         0.0,
-        -0.19,
+        -0.17,
         "Dots: 3-seed point estimates; lines: 95% UTC-date block-bootstrap CIs.\n"
-        "Controlled block replacement and retraining; contributions are not single-variable causal effects.",
+        "All 16 source-block combinations were retrained; contributions are package-level attribution, not single-variable causality.",
         transform=ax.transAxes,
-        fontsize=13.5,
+        fontsize=14.2,
+        color=MID_GREY,
+        va="top",
+    )
+    style_axis(ax, horizontal_grid=False)
+    return save_figure(fig, out_dir / "03_source_block_shapley", formats, dpi)
+
+
+def surface_feature_source(
+    surface: pd.DataFrame,
+    pairs: pd.DataFrame,
+    feature: str,
+    scope: str,
+) -> pd.DataFrame:
+    order = ["pangu", "tianji", "era5_reference_analysis"]
+    part = surface[(surface["feature"] == feature) & (surface["scope"] == scope)].copy()
+    part = part.set_index("source").reindex(order).reset_index()
+    if part[["rmse", "ci_low", "ci_high"]].isna().any().any():
+        raise ValueError(f"Missing three-source surface RMSE rows for feature={feature}, scope={scope}")
+    pair = pairs[
+        (pairs["feature"] == feature)
+        & (pairs["scope"] == scope)
+        & (pairs["left_source"] == "pangu")
+        & (pairs["right_source"] == "tianji")
+    ]
+    if len(pair) != 1:
+        raise ValueError(f"Expected one paired Pangu-minus-Tianji row for {feature}/{scope}")
+    row = pair.iloc[0]
+    part["pangu_minus_tianji"] = float(row["delta_left_minus_right"])
+    part["pair_delta_ci_low"] = float(row["delta_ci_low"])
+    part["pair_delta_ci_high"] = float(row["delta_ci_high"])
+    return part
+
+
+def plot_surface_feature(
+    source: pd.DataFrame,
+    feature_label: str,
+    unit: str,
+    scope: str,
+    output_name: str,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.12, right=0.95, top=0.83, bottom=0.23)
+    x = np.arange(len(source))
+    for xi, row in zip(x, source.itertuples(index=False)):
+        color = SOURCE_COLORS[str(row.source)]
+        lo = float(row.rmse - row.ci_low)
+        hi = float(row.ci_high - row.rmse)
+        ax.errorbar(
+            xi,
+            row.rmse,
+            yerr=np.array([[max(lo, 0.0)], [max(hi, 0.0)]]),
+            fmt="o",
+            markersize=15,
+            color=color,
+            ecolor=color,
+            elinewidth=3.2,
+            capsize=8,
+            capthick=2.6,
+            markeredgecolor="white",
+            markeredgewidth=1.5,
+            zorder=3,
+        )
+        ax.text(xi, float(row.ci_high) + 0.045 * max(float(source["ci_high"].max()), 1.0), f"{row.rmse:.2f}", ha="center", va="bottom", fontsize=19, fontweight="bold", color=color)
+
+    ymax = float(source["ci_high"].max()) * 1.30
+    ax.set_ylim(0.0, ymax)
+    ax.set_xlim(-0.55, len(source) - 0.45)
+    ax.set_xticks(x, [SOURCE_LABELS[str(item)] for item in source["source"]])
+    for tick, key in zip(ax.get_xticklabels(), source["source"]):
+        tick.set_color(SOURCE_COLORS[str(key)])
+        tick.set_fontweight("bold")
+    ax.set_ylabel(f"RMSE against station observations ({unit})")
+    ax.set_title(f"{feature_label} quality — {scope_label(scope)}", loc="left", pad=18, fontweight="bold")
+
+    delta = float(source["pangu_minus_tianji"].iloc[0])
+    lo = float(source["pair_delta_ci_low"].iloc[0])
+    hi = float(source["pair_delta_ci_high"].iloc[0])
+    n = int(source["n"].min())
+    dates = int(source["represented_utc_dates"].min())
+    ax.text(
+        0.0,
+        -0.18,
+        f"Pangu − Tianji ΔRMSE = {delta:+.2f} {unit} (95% CI {lo:+.2f} to {hi:+.2f}).  "
+        f"n = {n:,} paired rows; {dates} UTC dates.\n"
+        "Automatic-station observations are the reference; ERA5 is an analysis benchmark, not a third forecast.",
+        transform=ax.transAxes,
+        fontsize=14.0,
         color=MID_GREY,
         va="top",
     )
     style_axis(ax)
-    return finish(fig, out_dir / "02_source_block_shapley", formats, dpi)
+    return save_figure(fig, out_dir / output_name, formats, dpi)
 
 
-def quality_source(quality: pd.DataFrame) -> pd.DataFrame:
-    features = [
-        ("T2M", "2-m temperature", "K"),
-        ("WSPD10", "10-m wind speed", r"m s$^{-1}$"),
-        ("MSLP", "Mean sea-level pressure", "hPa"),
+def pressure_source(pressure: pd.DataFrame, scope: str) -> pd.DataFrame:
+    wanted = [
+        ("Q_1000", "Specific humidity at 1000 hPa"),
+        ("Q_925", "Specific humidity at 925 hPa"),
+        ("UV_925_VECTOR", "925-hPa vector wind"),
     ]
-    part = quality[quality["scope"] == "true_low_visibility"].copy()
     rows: List[Dict[str, object]] = []
-    for feature, label, unit in features:
-        item = part[part["feature"] == feature].set_index("source")
-        if not {"pangu", "tianji"}.issubset(item.index):
-            raise ValueError(f"Missing paired low-visibility quality rows for {feature}")
-        pangu = float(item.loc["pangu", "mae"])
-        tianji = float(item.loc["tianji", "mae"])
+    for feature, label in wanted:
+        part = pressure[(pressure["feature"] == feature) & (pressure["scope"] == scope)]
+        if len(part) != 1:
+            raise ValueError(f"Expected one pressure row for {feature}/{scope}")
+        row = part.iloc[0]
+        pangu = float(row["pangu"])
         rows.append(
             {
                 "feature": feature,
                 "label": label,
-                "unit": unit,
-                "n_pangu": int(item.loc["pangu", "n"]),
-                "n_tianji": int(item.loc["tianji", "n"]),
-                "pangu_mae": pangu,
-                "tianji_mae": tianji,
-                "tianji_relative_mae_percent": 100.0 * tianji / pangu,
-                "tianji_mae_reduction_percent": 100.0 * (pangu - tianji) / pangu,
+                "scope": scope,
+                "pangu_rmse": pangu,
+                "tianji_rmse": float(row["tianji"]),
+                "delta_pangu_minus_tianji": float(row["delta_pangu_minus_tianji"]),
+                "delta_ci_low": float(row["delta_ci_low"]),
+                "delta_ci_high": float(row["delta_ci_high"]),
+                "normalized_delta_percent": 100.0 * float(row["delta_pangu_minus_tianji"]) / pangu,
+                "normalized_ci_low_percent": 100.0 * float(row["delta_ci_low"]) / pangu,
+                "normalized_ci_high_percent": 100.0 * float(row["delta_ci_high"]) / pangu,
+                "n": int(row["n"]),
+                "represented_utc_dates": int(row["represented_utc_dates"]),
             }
         )
     return pd.DataFrame(rows)
 
 
-def plot_quality(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
-    fig, ax = plt.subplots(figsize=(12.5, 6.8))
+def plot_pressure(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.28, right=0.95, top=0.82, bottom=0.23)
     y = np.arange(len(source))[::-1]
     for yi, row in zip(y, source.itertuples(index=False)):
-        ratio = float(row.tianji_relative_mae_percent)
-        ax.plot([ratio, 100.0], [yi, yi], color=LIGHT_GREY, linewidth=8, solid_capstyle="round", zorder=1)
-        ax.scatter(100.0, yi, s=180, color=PANGU, edgecolor="white", linewidth=1.5, zorder=3)
-        ax.scatter(ratio, yi, s=180, color=TIANJI, edgecolor="white", linewidth=1.5, zorder=3)
-        ax.text(
-            104.0,
-            yi,
-            f"−{row.tianji_mae_reduction_percent:.1f}%",
-            ha="left",
-            va="center",
-            fontsize=18,
-            fontweight="bold",
-            color=POSITIVE,
-        )
-        ax.text(
-            38.0,
-            yi - 0.25,
-            f"MAE: {row.pangu_mae:.2f} vs {row.tianji_mae:.2f} {row.unit}",
-            ha="left",
-            va="center",
-            fontsize=14.5,
-            color=MID_GREY,
-        )
-    ax.axvline(100.0, color=PANGU_DARK, linestyle=":", linewidth=1.4, alpha=0.7)
+        value = float(row.normalized_delta_percent)
+        lo = float(row.normalized_ci_low_percent)
+        hi = float(row.normalized_ci_high_percent)
+        color = TIANJI if value > 0 else PANGU_DARK
+        ax.plot([lo, hi], [yi, yi], color=color, linewidth=5.0, solid_capstyle="round")
+        ax.scatter(value, yi, s=245, color=color, edgecolor="white", linewidth=1.6, zorder=3)
+        label_x = hi + 0.9 if value >= 0 else lo - 0.9
+        align = "left" if value >= 0 else "right"
+        ax.text(label_x, yi, f"{value:+.1f}%", ha=align, va="center", fontsize=18, fontweight="bold", color=color)
+    ax.axvline(0.0, color=INK, linewidth=1.8)
     ax.set_yticks(y, source["label"])
-    ax.set_xlim(35, 128)
-    ax.set_ylim(-0.65, len(source) - 0.3)
-    ax.set_xlabel("MAE relative to Pangu (%)   —   lower is better")
-    ax.set_title("Tianji is closer to station observations during low-visibility conditions", loc="left", pad=18, fontweight="bold")
-    ax.scatter([], [], s=150, color=PANGU, label="Pangu = 100%")
-    ax.scatter([], [], s=150, color=TIANJI, label="Tianji")
-    ax.legend(loc="lower right", ncol=2, handletextpad=0.5, columnspacing=1.4)
+    xmin = min(-20.0, float(source["normalized_ci_low_percent"].min()) - 5.0)
+    xmax = max(25.0, float(source["normalized_ci_high_percent"].max()) + 5.0)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(-0.55, len(source) - 0.35)
+    ax.set_xlabel("Paired RMSE difference relative to Pangu (%)")
+    ax.set_title("Pressure-level quality is source- and variable-dependent", loc="left", pad=24, fontweight="bold")
+    ax.text(0.17, 1.012, "← Pangu closer", transform=ax.transAxes, fontsize=16, fontweight="bold", color=PANGU_DARK, ha="center")
+    ax.text(0.83, 1.012, "Tianji closer →", transform=ax.transAxes, fontsize=16, fontweight="bold", color=TIANJI, ha="center")
+    scope = str(source["scope"].iloc[0])
+    n = int(source["n"].min())
+    dates = int(source["represented_utc_dates"].min())
     ax.text(
         0.0,
-        -0.19,
-        "Paired 2025 test samples with observed visibility < 1 km. Error reductions are descriptive source-quality comparisons.",
+        -0.18,
+        f"{scope_label(scope)}; n = {n:,}; {dates} UTC dates; 95% UTC-date block-bootstrap CIs.\n"
+        "Positive values mean lower Tianji RMSE; ERA5 is a reference analysis.\n"
+        "ERA5 Q is derived and is not independent truth.",
         transform=ax.transAxes,
-        fontsize=13.5,
+        fontsize=14.0,
         color=MID_GREY,
         va="top",
     )
-    style_axis(ax)
-    return finish(fig, out_dir / "03_lowvis_observation_quality", formats, dpi)
+    style_axis(ax, horizontal_grid=False)
+    return save_figure(fig, out_dir / "07_pressure_level_quality", formats, dpi)
 
 
 def event_source(events: pd.DataFrame) -> pd.DataFrame:
@@ -620,137 +1008,150 @@ def event_source(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_events(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
-    fig, ax = plt.subplots(figsize=(11.8, 6.4))
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.25, right=0.95, top=0.83, bottom=0.22)
     y = np.arange(len(source))[::-1]
-    bars = ax.barh(y, source["n"], color=source["color"], height=0.56, edgecolor="none")
+    bars = ax.barh(y, source["n"], color=source["color"], height=0.54, edgecolor="none")
     for bar, n in zip(bars, source["n"]):
-        ax.text(n + 110, bar.get_y() + bar.get_height() / 2, f"{int(n):,}", ha="left", va="center", fontsize=21, fontweight="bold", color=INK)
+        ax.text(n + 110, bar.get_y() + bar.get_height() / 2, f"{int(n):,}", ha="left", va="center", fontsize=22, fontweight="bold", color=INK)
     ratio = float(source["tianji_to_pangu_unique_hit_ratio"].iloc[0])
-    ax.text(
-        0.69,
-        0.50,
-        f"{ratio:.2f}×",
-        transform=ax.transAxes,
-        fontsize=34,
-        fontweight="bold",
-        color=TIANJI,
-        ha="center",
-        va="center",
-    )
-    ax.text(0.69, 0.39, "more unique hits", transform=ax.transAxes, fontsize=17, color=INK, ha="center", va="center")
+    ax.text(0.74, 0.46, f"{ratio:.2f}×", transform=ax.transAxes, fontsize=40, fontweight="bold", color=TIANJI, ha="center")
+    ax.text(0.74, 0.37, "more unique hits", transform=ax.transAxes, fontsize=18, color=INK, ha="center")
     ax.set_yticks(y, source["label"])
-    ax.set_xlim(0, 5200)
-    ax.set_xlabel("True Low-vis test samples detected by only one source model")
-    ax.set_title("Tianji recovers substantially more low-visibility cases missed by Pangu", loc="left", pad=18, fontweight="bold")
+    ax.set_xlim(0, max(source["n"]) * 1.30)
+    ax.set_xlabel("True Low-vis samples detected by only one endpoint model")
+    ax.set_title("Tianji uniquely detects more low-visibility cases than Pangu", loc="left", pad=18, fontweight="bold")
     ax.text(
         0.0,
-        -0.20,
-        "Seed-mean probabilities; source-specific thresholds fixed on validation to a common target FPR.",
+        -0.16,
+        "Seed-mean endpoint probabilities; source-specific thresholds were fixed on validation at a common target FPR.",
         transform=ax.transAxes,
-        fontsize=13.5,
+        fontsize=14.2,
         color=MID_GREY,
         va="top",
     )
     style_axis(ax)
-    return finish(fig, out_dir / "04_unique_event_hits", formats, dpi)
+    return save_figure(fig, out_dir / "08_unique_event_hits", formats, dpi)
 
 
-def q_source(q_reference: pd.DataFrame) -> pd.DataFrame:
-    part = q_reference[q_reference["analysis"] == "continuous_error_vs_reference_analysis"].copy()
-    wanted = ["Q_1000", "Q_925"]
-    rows: List[Dict[str, object]] = []
-    for feature in wanted:
-        item = part[part["feature"] == feature].set_index("source")
-        if not {"pangu", "tianji"}.issubset(item.index):
-            raise ValueError(f"Missing Pangu/Tianji ERA5-reference continuous-error rows for {feature}")
-        rows.append(
-            {
-                "feature": feature,
-                "label": feature.replace("_", " at ") + " hPa" if "_" in feature else feature,
-                "pangu_mae_g_kg": float(item.loc["pangu", "mae"]),
-                "tianji_mae_g_kg": float(item.loc["tianji", "mae"]),
-                "pangu_correlation": float(item.loc["pangu", "correlation"]),
-                "tianji_correlation": float(item.loc["tianji", "correlation"]),
-            }
-        )
-    result = pd.DataFrame(rows)
-    result["label"] = ["Specific humidity at 1000 hPa", "Specific humidity at 925 hPa"]
-    return result
+def qc_source(qc: pd.DataFrame) -> pd.DataFrame:
+    order = ["Q_1000", "Q_925"]
+    sources = ["pangu", "tianji", "era5_reference_analysis"]
+    part = qc[qc["feature"].isin(order) & qc["source"].isin(sources)].copy()
+    part["outside_percent"] = 100.0 * pd.to_numeric(part["outside_broad_range_fraction"], errors="raise")
+    part["feature"] = pd.Categorical(part["feature"], categories=order, ordered=True)
+    part["source"] = pd.Categorical(part["source"], categories=sources, ordered=True)
+    return part.sort_values(["feature", "source"]).reset_index(drop=True)
 
 
-def plot_q_caveat(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
-    fig, ax = plt.subplots(figsize=(12.0, 6.4))
-    y = np.arange(len(source))[::-1]
-    offset = 0.13
-    ax.barh(y + offset, source["pangu_mae_g_kg"], height=0.24, color=PANGU, label="Pangu")
-    ax.barh(y - offset, source["tianji_mae_g_kg"], height=0.24, color=TIANJI, label="Tianji")
-    for yi, row in zip(y, source.itertuples(index=False)):
-        ax.text(row.pangu_mae_g_kg + 0.035, yi + offset, f"{row.pangu_mae_g_kg:.3f}", va="center", ha="left", fontsize=16, color=PANGU_DARK)
-        ax.text(row.tianji_mae_g_kg + 0.035, yi - offset, f"{row.tianji_mae_g_kg:.3f}", va="center", ha="left", fontsize=16, color=TIANJI)
-    ax.set_yticks(y, source["label"])
-    ax.set_xlim(0, 2.55)
-    ax.set_xlabel(r"MAE against ERA5 reference analysis (g kg$^{-1}$)   —   lower is better")
-    ax.set_title("Marginal moisture error does not uniformly favour Tianji", loc="left", pad=18, fontweight="bold")
-    ax.legend(loc="lower right", ncol=2, columnspacing=1.4)
+def plot_qc(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
+    fig, ax = plt.subplots(figsize=MASTER_SIZE)
+    fig.subplots_adjust(left=0.12, right=0.95, top=0.83, bottom=0.23)
+    features = ["Q_1000", "Q_925"]
+    sources = ["pangu", "tianji", "era5_reference_analysis"]
+    x = np.arange(len(features))
+    width = 0.22
+    for offset, source_key in zip((-width, 0.0, width), sources):
+        item = source[source["source"].astype(str) == source_key].copy()
+        item["feature_key"] = item["feature"].astype(str)
+        item = item.set_index("feature_key")
+        values = np.array([float(item.loc[feature, "outside_percent"]) for feature in features])
+        bars = ax.bar(x + offset, values, width=width * 0.88, color=SOURCE_COLORS[source_key], label=SOURCE_LABELS[source_key])
+        for bar, value in zip(bars, values):
+            label = f"{value:.3f}%" if value > 0 else "0"
+            ax.text(bar.get_x() + bar.get_width() / 2, value + 0.008, label, ha="center", va="bottom", fontsize=15, color=SOURCE_COLORS[source_key])
+    ymax = max(float(source["outside_percent"].max()) * 1.35, 0.08)
+    ax.set_ylim(0.0, ymax)
+    ax.set_xticks(x, ["Q at 1000 hPa", "Q at 925 hPa"])
+    ax.set_ylabel(r"Values outside 0–80 g kg$^{-1}$ (%)")
+    ax.set_title("Non-physical negative specific humidity is rare but explicit in Pangu", loc="left", pad=18, fontweight="bold")
+    ax.legend(loc="upper right", ncol=3, columnspacing=1.4, handletextpad=0.5)
     ax.text(
         0.0,
-        -0.20,
-        "ERA5 is a reference analysis, not truth. Q1000 favours Pangu slightly; Q925 is nearly tied.\n"
-        "Therefore the positive moisture Shapley effect cannot be attributed to marginal Q MAE alone.",
+        -0.17,
+        "All broad-range failures are retained in the primary RMSE and reported here; derived dew-point failures are not double-counted.\n"
+        "This QC documents a source defect but does not by itself establish the cause of the model-performance gap.",
         transform=ax.transAxes,
-        fontsize=13.5,
+        fontsize=14.0,
         color=MID_GREY,
         va="top",
     )
     style_axis(ax)
-    return finish(fig, out_dir / "05_moisture_reference_caveat", formats, dpi)
+    return save_figure(fig, out_dir / "09_pressure_qc", formats, dpi)
 
 
-def write_guide(out_dir: Path, report: Mapping[str, object], audit: Mapping[str, object]) -> None:
-    text = """# Pangu q-core PPT figure guide
+def write_guide(
+    out_dir: Path,
+    formal_report: Mapping[str, object],
+    quality_report: Mapping[str, object],
+    quality_scope: str,
+    upper_scope: str,
+) -> None:
+    text = f"""# Q-core evidence-story figure guide
 
-All figures are standalone (no composite subplots). Use SVG in PowerPoint when
-editability matters; use PNG for quick preview and PDF for print/archive.
+Every output is a standalone one-claim figure. Use SVG in PowerPoint for
+editable text, PDF for manuscript assembly, TIFF for submission, and PNG for
+quick review.
 
 ## Recommended story order
 
-1. `01_qcore_fair_performance`: common q-core inputs still leave a significant Tianji advantage in AP, matched-FPR CSI and recall.
-2. `02_source_block_shapley`: controlled hybrid retraining localizes the gain mainly to T2M and moisture, with a smaller wind contribution and no robust MSLP contribution.
-3. `03_lowvis_observation_quality`: during observed low-visibility conditions Tianji is closer to station observations for T2M, 10-m wind speed and MSLP.
-4. `04_unique_event_hits`: the aggregate gain closes at event level; Tianji-only hits outnumber Pangu-only hits by about 2.16 to 1.
-5. `05_moisture_reference_caveat` (discussion/supplement): marginal Q errors against ERA5 reference analysis do not uniformly favour Tianji, so the joint-structure hypothesis remains plausible but unproven.
+1. `00_qcore_full_experiment_flow`: define the controlled evidence chain.
+2. `01_qcore_lowvis_ap`: establish the threshold-free endpoint gap.
+3. `02_qcore_matched_fpr_recall`: show that the gap remains at a validation-matched false-alarm protocol.
+4. `03_source_block_shapley`: attribute the gap to source packages through retraining.
+5. `04_surface_t2m_quality`: connect the largest package contribution to station-observed T2M quality.
+6. `05_surface_wspd10_quality`: connect the wind contribution to station-observed wind quality.
+7. `07_pressure_level_quality`: show the mixed pressure-level ranking and prevent a uniform-RMSE overclaim.
+8. `08_unique_event_hits`: optional event-level closure.
 
-## Claim boundary
+Move `06_surface_mslp_quality` and `09_pressure_qc` to the supplement unless a
+reviewer specifically asks for the negative control or QC rate in the main text.
 
-The formal experiment supports a source-dependent multivariate information-quality
-gap for this 2025, 12--23 h, low-visibility task. It does not by itself prove that
-Pangu violates governing equations, nor that all AI weather models have weaker
-physical consistency. A direct physical-consistency claim would require additional
-joint-balance or conservation diagnostics on gridded fields.
+## Formal claim boundary
 
-## Provenance
+The experiment supports a task-specific, source-dependent multivariate
+information-quality difference for Pangu-2025, 2025, 12--23 h lead and the
+current low-visibility task. It does not prove that Pangu violates governing
+equations, and it must not be generalized to all AI weather models.
 
+## Figure contract
+
+- master size: 13.333 x 7.50 in (16:9; scalable to 183-mm paper width)
+- typography: editable sans-serif text in SVG/PDF
+- station-observation scope: `{quality_scope}` ({scope_label(quality_scope)})
+- pressure-level scope: `{upper_scope}` ({scope_label(upper_scope)})
+- surface uncertainty: 95% UTC-valid-date block bootstrap
+- performance variability: three training seeds plus UTC-date bootstrap
+- ERA5 role: reference-analysis benchmark, not truth or a third forecast
+
+## Provenance summary
+
+- formal analysis status: `{formal_report.get('status')}`
+- formal group profile: `{formal_report.get('group_profile')}`
+- formal seeds: `{formal_report.get('seeds')}`
+- paired quality status: `{quality_report.get('status')}`
+- paired quality rows: `{quality_report.get('test_rows')}`
+- represented UTC dates: `{quality_report.get('represented_utc_dates')}`
+- Low-vis definition: `{quality_report.get('low_visibility_definition')}`
 """
-    text += f"- analysis status: `{report.get('status')}`\n"
-    text += f"- group profile: `{report.get('group_profile')}`\n"
-    text += f"- seeds: `{report.get('seeds')}`\n"
-    text += f"- bootstrap: `{report.get('bootstrap')}`\n"
-    text += f"- artifact audit: `{audit}`\n"
-    (out_dir / "PPT_FIGURE_GUIDE.md").write_text(text, encoding="utf-8")
+    (out_dir / "QCORE_EVIDENCE_STORY_GUIDE.md").write_text(text, encoding="utf-8")
 
 
 def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
-    out_dir = (args.out_dir or (eval_root / "ppt_figures")).expanduser().resolve()
+    quality_dir = resolve_quality_dir(args.paired_quality_dir)
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures")).expanduser().resolve()
     formats = ordered_formats(args.formats)
-    if args.dpi < 150:
-        raise ValueError("Use --dpi >= 150; 300 is recommended for PPT previews")
-    report, audit, tables = load_and_validate(eval_root, args.allow_missing_artifact_audit)
+    if args.dpi < 300:
+        raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
+
+    formal_report, audit, formal = load_formal(eval_root, args.allow_missing_artifact_audit)
+    quality_report, quality = load_quality(quality_dir, args.quality_scope)
     print(
-        "[validation] formal mt2pw inputs passed: "
-        f"status={report['status']} seeds={report['seeds']} masks={len(report['masks'])} "
-        f"artifact_audit={audit.get('status')}"
+        "[validation] formal and paired-quality inputs passed: "
+        f"mt2pw={formal_report.get('status')} artifact_audit={audit.get('status')} "
+        f"quality={quality_report.get('status')} rows={quality_report.get('test_rows')}"
     )
     if args.validate_only:
         return
@@ -760,57 +1161,106 @@ def main() -> None:
     source_dir.mkdir(parents=True, exist_ok=True)
     generated: Dict[str, List[str]] = {}
 
-    if args.include_principle:
-        principle, files = plot_principle(out_dir, formats, args.dpi)
-        principle.to_csv(source_dir / "00_weather_model_principle.csv", index=False)
-        generated["00_weather_model_principle"] = files
+    flow, files = plot_flow(out_dir, formats, args.dpi)
+    flow.to_csv(source_dir / "00_qcore_full_experiment_flow.csv", index=False)
+    generated["00_qcore_full_experiment_flow"] = files
 
-    performance = performance_source(tables["metrics"], tables["gap_draws"])
-    performance.to_csv(source_dir / "01_qcore_fair_performance.csv", index=False)
-    generated["01_qcore_fair_performance"] = plot_performance(performance, out_dir, formats, args.dpi)
+    ap = endpoint_source(formal["metrics"], formal["gap_draws"], "low_vis_ap")
+    ap.to_csv(source_dir / "01_qcore_lowvis_ap.csv", index=False)
+    generated["01_qcore_lowvis_ap"] = plot_endpoint(
+        ap,
+        "Low-vis average precision (AP)",
+        "Tianji-trained q-core models achieve higher threshold-free Low-vis AP",
+        "01_qcore_lowvis_ap",
+        out_dir,
+        formats,
+        args.dpi,
+        "AP uses no decision threshold.",
+    )
 
-    shapley = shapley_source(tables["shapley"])
-    shapley.to_csv(source_dir / "02_source_block_shapley.csv", index=False)
-    generated["02_source_block_shapley"] = plot_shapley(shapley, out_dir, formats, args.dpi)
+    recall = endpoint_source(formal["metrics"], formal["gap_draws"], "low_vis_recall_matched_fpr")
+    recall.to_csv(source_dir / "02_qcore_matched_fpr_recall.csv", index=False)
+    generated["02_qcore_matched_fpr_recall"] = plot_endpoint(
+        recall,
+        "Low-vis recall",
+        "Tianji recovers more Low-vis cases at a validation-matched false-alarm protocol",
+        "02_qcore_matched_fpr_recall",
+        out_dir,
+        formats,
+        args.dpi,
+        "Thresholds were selected on validation at one target FPR and then frozen for test.",
+    )
 
-    quality = quality_source(tables["quality"])
-    quality.to_csv(source_dir / "03_lowvis_observation_quality.csv", index=False)
-    generated["03_lowvis_observation_quality"] = plot_quality(quality, out_dir, formats, args.dpi)
+    shapley = shapley_source(formal["shapley"])
+    shapley.to_csv(source_dir / "03_source_block_shapley.csv", index=False)
+    generated["03_source_block_shapley"] = plot_shapley(shapley, out_dir, formats, args.dpi)
 
-    events = event_source(tables["events"])
-    events.drop(columns=["color"]).to_csv(source_dir / "04_unique_event_hits.csv", index=False)
-    generated["04_unique_event_hits"] = plot_events(events, out_dir, formats, args.dpi)
+    surface_specs = [
+        ("T2M", "2-m temperature", "°C", "04_surface_t2m_quality"),
+        ("WSPD10", "10-m wind speed", r"m s$^{-1}$", "05_surface_wspd10_quality"),
+    ]
+    if not args.main_only:
+        surface_specs.append(("MSLP", "Mean sea-level pressure", "hPa", "06_surface_mslp_quality"))
+    for feature, label, unit, output_name in surface_specs:
+        source = surface_feature_source(
+            quality["surface"], quality["surface_pairs"], feature, args.quality_scope
+        )
+        source.to_csv(source_dir / f"{output_name}.csv", index=False)
+        generated[output_name] = plot_surface_feature(
+            source,
+            label,
+            unit,
+            args.quality_scope,
+            output_name,
+            out_dir,
+            formats,
+            args.dpi,
+        )
 
-    q_reference = q_source(tables["q_reference"])
-    q_reference.to_csv(source_dir / "05_moisture_reference_caveat.csv", index=False)
-    generated["05_moisture_reference_caveat"] = plot_q_caveat(q_reference, out_dir, formats, args.dpi)
+    pressure = pressure_source(quality["pressure"], args.upper_scope)
+    pressure.to_csv(source_dir / "07_pressure_level_quality.csv", index=False)
+    generated["07_pressure_level_quality"] = plot_pressure(pressure, out_dir, formats, args.dpi)
 
-    write_guide(out_dir, report, audit)
+    events = event_source(formal["events"])
+    events.drop(columns=["color"]).to_csv(source_dir / "08_unique_event_hits.csv", index=False)
+    generated["08_unique_event_hits"] = plot_events(events, out_dir, formats, args.dpi)
+
+    if not args.main_only:
+        qc = qc_source(quality["qc"])
+        qc.to_csv(source_dir / "09_pressure_qc.csv", index=False)
+        generated["09_pressure_qc"] = plot_qc(qc, out_dir, formats, args.dpi)
+
+    write_guide(out_dir, formal_report, quality_report, args.quality_scope, args.upper_scope)
     manifest = {
         "status": "passed",
         "eval_root": str(eval_root),
-        "formal_analysis_status": report.get("status"),
+        "paired_quality_dir": str(quality_dir),
+        "formal_analysis_status": formal_report.get("status"),
         "artifact_audit_status": audit.get("status"),
-        "group_profile": report.get("group_profile"),
-        "seeds": report.get("seeds"),
-        "target_validation_fpr": report.get("target_validation_fpr"),
+        "paired_quality_status": quality_report.get("status"),
+        "quality_scope": args.quality_scope,
+        "upper_scope": args.upper_scope,
         "formats": formats,
         "dpi": args.dpi,
+        "master_size_inches": list(MASTER_SIZE),
         "figures": {
-            key: {**FIGURE_SPECS[key], "files": files, "source_data": f"source_data/{key}.csv"}
+            key: {
+                **FIGURE_SPECS[key],
+                "files": files,
+                "source_data": f"source_data/{key}.csv",
+                "file_sha256": {
+                    name: sha256_file(out_dir / name) for name in files
+                },
+                "source_data_sha256": sha256_file(source_dir / f"{key}.csv"),
+            }
             for key, files in generated.items()
         },
-        "literature_context": {
-            "pangu_architecture": "https://doi.org/10.1038/s41586-023-06185-3",
-            "mlwp_physical_consistency_limitations": "https://doi.org/10.1029/2023GL107377",
-            "hybrid_dynamical_core_contrast": "https://doi.org/10.1038/s41586-024-07744-y",
-        },
         "claim_boundary": (
-            "The current experiment supports source-dependent multivariate information quality, "
-            "not a direct proof of governing-equation or conservation-law violations in Pangu."
+            "Task-specific source-dependent multivariate information quality; not a direct proof "
+            "of governing-equation or conservation-law violations in Pangu."
         ),
     }
-    (out_dir / "ppt_figure_manifest.json").write_text(
+    (out_dir / "qcore_evidence_story_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
