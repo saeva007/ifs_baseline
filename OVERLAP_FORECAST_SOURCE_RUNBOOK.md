@@ -1119,7 +1119,7 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v8`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v9`.
 
 The manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
@@ -1127,10 +1127,11 @@ grey (`#9A9A9A`).  The shared contract lives in `paper_source_palette.py`;
 marker shape is retained as a second cue. The two endpoint-performance plots
 use the 89-mm Nature single-column width; denser comparison figures use the
 183-mm two-column width. Height is selected per figure to avoid empty canvas
-space in sparse comparisons. The entire q-core series follows the mainline
-visual grammar from `vis_eval/plot_style.py`: DejaVu Serif typography,
-centered bold titles, parenthesized panel letters for true multi-panel figures,
-complete boxed axes, and light direction-appropriate grids.
+space in sparse comparisons. The entire q-core series retains the mainline
+layout grammar: centered bold titles, parenthesized panel letters for true
+multi-panel figures, complete boxed axes, and light direction-appropriate
+grids. Typography follows Nature-family figure conventions with an
+Arial/Helvetica-first sans-serif stack and Linux-compatible fallbacks.
 Every claim is a separate figure, in presentation order:
 
 1. complete experimental logic and claim boundary;

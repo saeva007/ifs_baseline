@@ -81,7 +81,8 @@ class EventObservationAdvantageTest(unittest.TestCase):
     def test_complete_figure_inventory_uses_mainline_style_contract(self) -> None:
         self.assertEqual(set(FIGURE_SPECS), set(FIGURE_SIZE_KEYS))
         self.assertEqual(len(FIGURE_SPECS), 13)
-        self.assertEqual(plt.rcParams["font.family"], ["serif"])
+        self.assertEqual(plt.rcParams["font.family"], ["sans-serif"])
+        self.assertEqual(plt.rcParams["font.sans-serif"][:2], ["Arial", "Helvetica"])
         fig, ax = plt.subplots()
         try:
             ax.spines["top"].set_visible(False)
