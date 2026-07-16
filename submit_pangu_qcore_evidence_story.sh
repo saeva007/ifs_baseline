@@ -15,6 +15,7 @@ FORMATS="${FORMATS:-svg,pdf,png,tiff}"
 DPI="${DPI:-600}"
 DRY_RUN="${DRY_RUN:-0}"
 REUSE_QUALITY="${REUSE_QUALITY:-auto}"
+SBATCH_BIN="${SBATCH_BIN:-sbatch}"
 
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/${RUN_TAG}}"
 PAIRED_QUALITY_DIR="${PAIRED_QUALITY_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/${QUALITY_RUN_TAG}/analysis}"
@@ -39,7 +40,6 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 quality_job="reused"
-dependency_args=()
 if [[ "${REUSE_QUALITY}" == "auto" && -s "${PAIRED_QUALITY_DIR}/paired_source_quality_report.json" ]]; then
   echo "Reusing completed paired-quality directory: ${PAIRED_QUALITY_DIR}"
 else
@@ -51,11 +51,15 @@ else
     echo "ERROR: failed to parse paired-quality Slurm job id" >&2
     exit 2
   }
-  dependency_args=(--dependency="afterok:${quality_job}")
 fi
 
-plot_job="$(sbatch --parsable "${dependency_args[@]}" \
-  --export="${PLOT_EXPORTS}" "${BASELINE_DIR}/sub_pangu_qcore_mechanism_ppt.slurm")"
+if [[ "${quality_job}" == "reused" ]]; then
+  plot_job="$("${SBATCH_BIN}" --parsable \
+    --export="${PLOT_EXPORTS}" "${BASELINE_DIR}/sub_pangu_qcore_mechanism_ppt.slurm")"
+else
+  plot_job="$("${SBATCH_BIN}" --parsable --dependency="afterok:${quality_job}" \
+    --export="${PLOT_EXPORTS}" "${BASELINE_DIR}/sub_pangu_qcore_mechanism_ppt.slurm")"
+fi
 plot_job="${plot_job%%;*}"
 [[ "${plot_job}" =~ ^[0-9]+$ ]] || {
   echo "ERROR: invalid plotting Slurm job id: ${plot_job}" >&2
