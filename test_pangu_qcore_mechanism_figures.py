@@ -12,12 +12,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from plot_pangu_qcore_mechanism_ppt import (
+    FIGURE_SIZE_KEYS,
+    FIGURE_SPECS,
     event_forecast_state_contrast_source,
     event_observation_advantage_source,
     ordered_formats,
     qcore_argmax_source,
+    style_axis,
 )
 
 
@@ -74,6 +78,19 @@ def synthetic_event_samples() -> pd.DataFrame:
 
 
 class EventObservationAdvantageTest(unittest.TestCase):
+    def test_complete_figure_inventory_uses_mainline_style_contract(self) -> None:
+        self.assertEqual(set(FIGURE_SPECS), set(FIGURE_SIZE_KEYS))
+        self.assertEqual(len(FIGURE_SPECS), 13)
+        self.assertEqual(plt.rcParams["font.family"], ["serif"])
+        fig, ax = plt.subplots()
+        try:
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            style_axis(ax)
+            self.assertTrue(all(ax.spines[side].get_visible() for side in ax.spines))
+        finally:
+            plt.close(fig)
+
     def test_colon_delimited_slurm_formats_are_supported(self) -> None:
         self.assertEqual(
             ordered_formats("svg:pdf:png:tiff"),

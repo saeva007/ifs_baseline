@@ -1119,7 +1119,7 @@ bash submit_pangu_qcore_evidence_story.sh
 ```
 
 The default output is
-`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v7`.
+`paper_eval_results_pm10_pm25_journal/q_core_hybrid_factorial/<RUN_TAG>/evidence_story_figures_nc_v8`.
 
 The manuscript palette is source-stable across every panel: Tianji is dark
 blue (`#2E5A87`), Pangu is mid-light violet (`#8E6BBE`), and baseline/ERA5 is
@@ -1127,7 +1127,10 @@ grey (`#9A9A9A`).  The shared contract lives in `paper_source_palette.py`;
 marker shape is retained as a second cue. The two endpoint-performance plots
 use the 89-mm Nature single-column width; denser comparison figures use the
 183-mm two-column width. Height is selected per figure to avoid empty canvas
-space in sparse comparisons.
+space in sparse comparisons. The entire q-core series follows the mainline
+visual grammar from `vis_eval/plot_style.py`: DejaVu Serif typography,
+centered bold titles, parenthesized panel letters for true multi-panel figures,
+complete boxed axes, and light direction-appropriate grids.
 Every claim is a separate figure, in presentation order:
 
 1. complete experimental logic and claim boundary;
@@ -1158,7 +1161,7 @@ source intervention.
 
 The forecast-state figure uses the same paired station-time samples to report
 T2M, WSPD10, RH925 and MSLP differences (`Tianji minus Pangu`). Its primary
-diagnostic is the between-case delta-delta: the mean source difference within
+diagnostic is the between-group difference: the mean source difference within
 Tianji-only hits minus the corresponding difference within Pangu-only hits.
 All variables and both categories share the same 1000 UTC-valid-date bootstrap
 draws. This reverse-disagreement comparison tests whether the cool, moist and

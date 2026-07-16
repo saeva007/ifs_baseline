@@ -56,25 +56,27 @@ FIGURE_SIZES = {
 }
 plt.rcParams.update(
     {
-        "font.family": "sans-serif",
-        "font.sans-serif": [
-            "Arial",
-            "Liberation Sans",
-            "Noto Sans CJK SC",
+        # Match the visual grammar used by the paper mainline figures in
+        # vis_eval/plot_style.py, while retaining journal-scale point sizes.
+        "font.family": "serif",
+        "font.serif": [
+            "DejaVu Serif",
+            "Liberation Serif",
+            "Noto Serif CJK SC",
             "DejaVu Sans",
         ],
         "svg.fonttype": "none",
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
-        "font.size": 8.5,
-        "axes.titlesize": 11.5,
+        "font.size": 8.8,
+        "axes.titlesize": 10.6,
         "axes.labelsize": 9.5,
         "xtick.labelsize": 8.5,
         "ytick.labelsize": 8.5,
         "legend.fontsize": 8.3,
         "axes.linewidth": 0.85,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
+        "axes.spines.top": True,
+        "axes.spines.right": True,
         "legend.frameon": False,
         "figure.facecolor": "white",
         "savefig.facecolor": "white",
@@ -238,7 +240,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=None,
-        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v7).",
+        help="Output directory (default: <eval-root>/evidence_story_figures_nc_v8).",
     )
     parser.add_argument(
         "--surface-view",
@@ -533,8 +535,10 @@ def style_axis(
     vertical_grid: bool = False,
 ) -> None:
     ax.tick_params(length=3.2, width=0.8, color=INK, pad=3)
-    ax.spines["left"].set_color(INK)
-    ax.spines["bottom"].set_color(INK)
+    for side in ("left", "right", "top", "bottom"):
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_color(INK)
+        ax.spines[side].set_linewidth(0.8)
     if horizontal_grid:
         ax.yaxis.grid(True, color=GRID_GREY, linewidth=0.65, alpha=0.9)
     if vertical_grid:
@@ -546,6 +550,50 @@ def style_axis(
             alpha=0.95,
         )
     ax.set_axisbelow(True)
+
+
+def add_mainline_panel_label(
+    ax: plt.Axes,
+    label: str,
+    *,
+    x: float = -0.12,
+    y: float = 1.03,
+) -> None:
+    """Use the same bold parenthesized panel labels as the mainline figures."""
+
+    ax.text(
+        x,
+        y,
+        f"({label})",
+        transform=ax.transAxes,
+        fontsize=10.5,
+        fontweight="bold",
+        ha="left",
+        va="bottom",
+        color=INK,
+        clip_on=False,
+    )
+
+
+def add_mainline_figure_title(
+    fig: plt.Figure,
+    title: str,
+    *,
+    y: float = 0.95,
+    fontsize: float = 11.0,
+) -> None:
+    """Center a bold title on the complete canvas, not the asymmetric axes."""
+
+    fig.suptitle(
+        title,
+        x=0.5,
+        y=y,
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        fontweight="bold",
+        color=INK,
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -594,13 +642,13 @@ def plot_flow(out_dir: Path, formats: Sequence[str], dpi: int) -> Tuple[pd.DataF
     ax.set_ylim(0, 1)
     ax.axis("off")
     ax.text(
-        0.0,
+        0.5,
         0.94,
-        "Controlled evidence chain",
+        "Controlled Evidence Chain",
         fontsize=12.3,
         fontweight="bold",
         color=INK,
-        ha="left",
+        ha="center",
         va="top",
     )
     xs = [0.07, 0.28, 0.49, 0.70, 0.91]
@@ -716,28 +764,17 @@ def plot_endpoint(
     ymax = float(values.max() + 0.38 * span)
     ax.set_ylim(ymin, ymax)
     ax.set_xlim(-0.18, 1.18)
-    ax.text(
-        0.0,
-        1.075,
+    fig.text(
+        0.5,
+        0.805,
         f"Δ Tianji−Pangu {delta:+.3f}  [{ci_low:+.3f}, {ci_high:+.3f}]",
-        transform=ax.transAxes,
-        ha="left",
+        ha="center",
         va="bottom",
         fontsize=8.0,
         fontweight="bold",
         color=TIANJI if delta > 0 else PANGU_DARK,
     )
-    ax.text(
-        0.0,
-        1.205,
-        title,
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=10.5,
-        fontweight="bold",
-        color=INK,
-    )
+    add_mainline_figure_title(fig, title, y=0.95, fontsize=10.5)
     ax.set_xticks([0, 1], ["Pangu\ntrained", "Tianji\ntrained"])
     ax.get_xticklabels()[0].set_color(PANGU_DARK)
     ax.get_xticklabels()[1].set_color(TIANJI)
@@ -867,19 +904,12 @@ def plot_qcore_argmax_overview(
     ax.set_ylim(0.0, ymax)
     ax.set_xticks(x, ["Precision ↑", "Recall ↑", "CSI ↑", "FPR ↓"])
     ax.set_ylabel("Score on paired test samples")
-    fig.text(
-        0.18,
-        0.95,
-        "Fair q-core argmax performance",
-        ha="left",
-        va="top",
-        fontsize=10.7,
-        fontweight="bold",
-        color=INK,
+    add_mainline_figure_title(
+        fig, "Fair Q-Core Argmax Performance", y=0.95, fontsize=10.7
     )
     ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(0.18, 0.86),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.86),
         bbox_transform=fig.transFigure,
         ncol=2,
         columnspacing=1.3,
@@ -908,6 +938,9 @@ def shapley_source(shapley: pd.DataFrame) -> pd.DataFrame:
 def plot_shapley(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["shapley"])
     fig.subplots_adjust(left=0.27, right=0.95, top=0.82, bottom=0.19)
+    add_mainline_figure_title(
+        fig, "Source-Block Contributions to Low-vis AP", y=0.95
+    )
     y = np.arange(len(source))[::-1]
     labels = {
         "T2": "2-m temperature",
@@ -936,7 +969,6 @@ def plot_shapley(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dp
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(-0.55, len(source) - 0.35)
     ax.set_xlabel("Exact source-block Shapley contribution to Low-vis AP")
-    ax.set_title("Source-block contributions to Low-vis AP", loc="left", pad=10, fontweight="bold")
     style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / "03_source_block_shapley", formats, dpi)
 
@@ -981,7 +1013,7 @@ def plot_surface_feature(
     dpi: int,
 ) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["surface"])
-    fig.subplots_adjust(left=0.20, right=0.76, top=0.79, bottom=0.20)
+    fig.subplots_adjust(left=0.23, right=0.73, top=0.79, bottom=0.20)
     base_y = {scope: float(len(scopes) - 1 - index) for index, scope in enumerate(scopes)}
     offsets = {"pangu": 0.17, "tianji": 0.0, "era5_reference_analysis": -0.17}
     markers = {key: SOURCE_MARKERS[key] for key in offsets}
@@ -1020,14 +1052,16 @@ def plot_surface_feature(
     ax.set_yticks([base_y[scope] for scope in scopes], [scope_names[scope] for scope in scopes])
     ax.set_xlabel(f"RMSE vs station observations ({unit})")
     title_map = {
-        "2-m temperature": "2-m temperature RMSE",
-        "10-m wind speed": "10-m wind-speed RMSE",
-        "Mean sea-level pressure": "Mean sea-level pressure RMSE",
+        "2-m temperature": "2-m Temperature RMSE",
+        "10-m wind speed": "10-m Wind-Speed RMSE",
+        "Mean sea-level pressure": "Mean Sea-Level Pressure RMSE",
     }
-    ax.set_title(title_map.get(feature_label, feature_label), loc="left", pad=10, fontweight="bold")
-    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 1.02), ncol=3, handletextpad=0.4, columnspacing=1.1)
+    add_mainline_figure_title(
+        fig, title_map.get(feature_label, feature_label), y=0.95
+    )
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.02), ncol=3, handletextpad=0.4, columnspacing=1.1)
 
-    ax.text(1.03, 1.02, "Pangu−Tianji ΔRMSE [95% CI]", transform=ax.transAxes, fontsize=7.2, fontweight="bold", color=INK, ha="left", va="bottom", clip_on=False)
+    ax.text(1.28, 1.02, "Pangu−Tianji ΔRMSE [95% CI]", transform=ax.transAxes, fontsize=6.9, fontweight="bold", color=INK, ha="center", va="bottom", clip_on=False)
     for scope in scopes:
         row = source[source["scope"] == scope].iloc[0]
         delta = float(row["pangu_minus_tianji"])
@@ -1086,6 +1120,9 @@ def pressure_source(pressure: pd.DataFrame, scope: str) -> pd.DataFrame:
 def plot_pressure(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["pressure"])
     fig.subplots_adjust(left=0.31, right=0.95, top=0.79, bottom=0.20)
+    add_mainline_figure_title(
+        fig, "Pressure-Level Error Relative to ERA5", y=0.95
+    )
     y = np.arange(len(source))[::-1]
     for yi, row in zip(y, source.itertuples(index=False)):
         value = float(row.normalized_delta_percent)
@@ -1104,7 +1141,6 @@ def plot_pressure(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], d
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(-0.55, len(source) - 0.35)
     ax.set_xlabel("Paired RMSE difference relative to Pangu (%)")
-    ax.set_title("Pressure-level error relative to ERA5", loc="left", pad=10, fontweight="bold")
     ax.text(0.01, 0.985, "← Pangu closer", transform=ax.transAxes, fontsize=7.4, fontweight="bold", color=PANGU_DARK, ha="left", va="top")
     ax.text(0.99, 0.985, "Tianji closer →", transform=ax.transAxes, fontsize=7.4, fontweight="bold", color=TIANJI, ha="right", va="top")
     style_axis(ax, horizontal_grid=False, vertical_grid=True)
@@ -1130,17 +1166,17 @@ def event_source(events: pd.DataFrame) -> pd.DataFrame:
 def plot_events(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["events"])
     fig.subplots_adjust(left=0.25, right=0.95, top=0.74, bottom=0.25)
+    add_mainline_figure_title(fig, "Unique Low-vis Hits at Matched FPR", y=0.95)
     y = np.arange(len(source))[::-1]
     for yi, row in zip(y, source.itertuples(index=False)):
         ax.plot([0, row.n], [yi, yi], color=row.color, linewidth=3.0, solid_capstyle="round")
         ax.scatter(row.n, yi, s=58, color=row.color, edgecolor="white", linewidth=0.7, zorder=3)
         ax.text(row.n + 100, yi, f"{int(row.n):,}", ha="left", va="center", fontsize=8.8, fontweight="bold", color=INK)
     ratio = float(source["tianji_to_pangu_unique_hit_ratio"].iloc[0])
-    ax.text(0.995, 1.035, f"Tianji / Pangu = {ratio:.2f}×", transform=ax.transAxes, fontsize=8.3, fontweight="bold", color=TIANJI, ha="right", va="bottom")
+    ax.text(0.985, 0.79, f"Tianji / Pangu = {ratio:.2f}×", transform=ax.transAxes, fontsize=8.3, fontweight="bold", color=TIANJI, ha="right", va="center")
     ax.set_yticks(y, source["label"])
     ax.set_xlim(0, max(source["n"]) * 1.30)
     ax.set_xlabel("True Low-vis samples detected by only one endpoint model")
-    ax.set_title("Unique Low-vis hits at matched FPR", loc="left", pad=10, fontweight="bold")
     style_axis(ax, horizontal_grid=False, vertical_grid=True)
     return save_figure(fig, out_dir / "08_unique_event_hits", formats, dpi)
 
@@ -1288,6 +1324,12 @@ def plot_event_observation_advantage(
 ) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["event_quality"])
     fig.subplots_adjust(left=0.29, right=0.96, top=0.77, bottom=0.22)
+    add_mainline_figure_title(
+        fig,
+        "Observation-Anchored Advantage Within Tianji-Only Hits",
+        y=0.95,
+        fontsize=10.6,
+    )
     y = np.arange(len(source))[::-1]
     for yi, row in zip(y, source.itertuples(index=False)):
         supported = bool(row.ci_low > 0.0)
@@ -1327,13 +1369,6 @@ def plot_event_observation_advantage(
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(-0.52, len(source) - 0.28)
     ax.set_xlabel("Tianji RMSE reduction relative to Pangu (%)")
-    ax.set_title(
-        "Observation-anchored source advantage within Tianji-only hits",
-        loc="left",
-        pad=10,
-        fontweight="bold",
-        fontsize=11.0,
-    )
     ax.text(
         0.01,
         0.985,
@@ -1532,7 +1567,7 @@ def event_forecast_state_contrast_source(
                 "label": spec["label"],
                 "unit": spec["unit"],
                 "contrast": "tianji_only_minus_pangu_only",
-                "contrast_label": "Between-case delta-delta",
+                "contrast_label": "Between-group difference",
                 "contrast_role": "reverse_disagreement_specificity",
                 "estimate": specificity,
                 "ci_low": float(ci_low),
@@ -1563,33 +1598,33 @@ def plot_event_forecast_state_contrast(
     formats: Sequence[str],
     dpi: int,
 ) -> List[str]:
-    """Draw one compact quantitative grid for the shared state-contrast claim."""
+    """Draw the state contrast using the paper mainline 2-by-2 visual grammar."""
 
     feature_specs = [
-        ("T2M", "2-m temperature", "Cooler", "warmer", "K", 2),
-        ("WSPD10", "10-m wind speed", "Weaker", "stronger", r"m s$^{-1}$", 2),
-        ("RH_925", "925-hPa relative humidity", "Drier", "moister", "percentage points", 1),
-        ("MSLP", "Mean sea-level pressure", "Lower", "higher", "hPa", 2),
+        ("T2M", "2-m Temperature", "K", 2),
+        ("WSPD10", "10-m Wind Speed", r"m s$^{-1}$", 2),
+        ("RH_925", "925-hPa Relative Humidity", "percentage points", 1),
+        ("MSLP", "Mean Sea-Level Pressure", "hPa", 2),
     ]
     categories = [
-        ("tianji_hit_pangu_miss", "Tianji-only hit", TIANJI, SOURCE_MARKERS["tianji"]),
-        ("pangu_hit_tianji_miss", "Pangu-only hit", PANGU, SOURCE_MARKERS["pangu"]),
+        ("tianji_hit_pangu_miss", "Tianji-only\nhit", TIANJI, TIANJI_DARK),
+        ("pangu_hit_tianji_miss", "Pangu-only\nhit", PANGU, PANGU_DARK),
     ]
     fig, axes = plt.subplots(2, 2, figsize=FIGURE_SIZES["event_state"])
-    fig.subplots_adjust(left=0.145, right=0.98, top=0.855, bottom=0.115, hspace=0.72, wspace=0.43)
+    fig.subplots_adjust(left=0.095, right=0.985, top=0.84, bottom=0.105, hspace=0.68, wspace=0.30)
     fig.suptitle(
-        "Forecast-state contrast in model-disagreement Low-vis cases",
-        x=0.145,
+        "Forecast-State Contrasts in Model-Disagreement Low-vis Cases",
+        x=0.5,
         y=0.975,
-        ha="left",
+        ha="center",
         va="top",
-        fontsize=11.4,
+        fontsize=11.6,
         fontweight="bold",
         color=INK,
     )
 
-    for ax, (feature, label, left_word, right_word, unit, decimals) in zip(
-        axes.flat, feature_specs
+    for panel_index, (ax, (feature, label, unit, decimals)) in enumerate(
+        zip(axes.flat, feature_specs)
     ):
         part = source[
             (source["feature"] == feature)
@@ -1601,74 +1636,83 @@ def plot_event_forecast_state_contrast(
         ]
         if set(part.index) != {item[0] for item in categories} or len(specificity_rows) != 1:
             raise ValueError(f"Incomplete disagreement-state source rows for {feature}")
-        y_positions = [1.0, 0.0]
-        for y, (category, _category_label, color, marker) in zip(y_positions, categories):
-            row = part.loc[category]
-            estimate = float(row["estimate"])
-            ci_low = float(row["ci_low"])
-            ci_high = float(row["ci_high"])
+        x = np.arange(len(categories), dtype=float)
+        estimates = np.array(
+            [float(part.loc[item[0], "estimate"]) for item in categories], dtype=float
+        )
+        ci_low = np.array(
+            [float(part.loc[item[0], "ci_low"]) for item in categories], dtype=float
+        )
+        ci_high = np.array(
+            [float(part.loc[item[0], "ci_high"]) for item in categories], dtype=float
+        )
+        colors = [item[2] for item in categories]
+        dark_colors = [item[3] for item in categories]
+        ax.bar(x, estimates, width=0.54, color=colors, zorder=2)
+        for xi, estimate, low, high, dark_color in zip(
+            x, estimates, ci_low, ci_high, dark_colors
+        ):
             ax.errorbar(
+                xi,
                 estimate,
-                y,
-                xerr=np.array([[max(0.0, estimate - ci_low)], [max(0.0, ci_high - estimate)]]),
-                fmt=marker,
-                markersize=7.2,
-                markerfacecolor=color,
-                markeredgecolor="white",
-                markeredgewidth=0.7,
-                ecolor=color,
-                elinewidth=2.0,
-                capsize=0,
+                yerr=np.array(
+                    [[max(0.0, estimate - low)], [max(0.0, high - estimate)]]
+                ),
+                fmt="none",
+                ecolor=dark_color,
+                elinewidth=1.25,
+                capsize=3.0,
+                capthick=1.0,
                 zorder=3,
             )
-            ax.annotate(
+        specificity = specificity_rows.iloc[0]
+        data_min = min(float(ci_low.min()), 0.0)
+        data_max = max(float(ci_high.max()), 0.0)
+        span = max(data_max - data_min, 0.25)
+        ymin = data_min - 0.18 * span
+        ymax = data_max + 0.38 * span
+        ax.set_ylim(ymin, ymax)
+        ax.axhline(0.0, color=INK, linewidth=0.85, zorder=1)
+        ax.set_xticks(x, [item[1] for item in categories])
+        for tick, color in zip(ax.get_xticklabels(), (TIANJI, PANGU_DARK)):
+            tick.set_color(color)
+            tick.set_fontweight("bold")
+        for xi, estimate, low, high, color in zip(x, estimates, ci_low, ci_high, dark_colors):
+            if estimate >= 0:
+                text_y = high + 0.035 * span
+                va = "bottom"
+            else:
+                text_y = low - 0.035 * span
+                va = "top"
+            ax.text(
+                xi,
+                text_y,
                 f"{estimate:+.{decimals}f}",
-                (estimate, y),
-                xytext=(0, 8),
-                textcoords="offset points",
                 ha="center",
-                va="bottom",
-                fontsize=7.7,
+                va=va,
+                fontsize=7.6,
                 fontweight="bold",
                 color=color,
             )
-
-        specificity = specificity_rows.iloc[0]
-        ax.set_title(label, loc="left", pad=20, fontsize=9.4, fontweight="bold", color=INK)
         ax.text(
-            0.0,
-            1.015,
+            0.5,
+            data_max + 0.15 * span,
             (
-                f"Between-case ΔΔ {float(specificity['estimate']):+.{decimals}f} "
+                f"Between-group difference: {float(specificity['estimate']):+.{decimals}f} "
                 f"[{float(specificity['ci_low']):+.{decimals}f}, "
                 f"{float(specificity['ci_high']):+.{decimals}f}]"
             ),
-            transform=ax.transAxes,
-            ha="left",
+            ha="center",
             va="bottom",
-            fontsize=7.2,
+            fontsize=7.1,
             fontweight="bold" if bool(specificity["ci_excludes_zero"]) else "normal",
             color=INK,
         )
-        all_limits = np.r_[
-            part["ci_low"].to_numpy(dtype=float),
-            part["ci_high"].to_numpy(dtype=float),
-            [0.0],
-        ]
-        span = max(float(all_limits.max() - all_limits.min()), 0.25)
-        ax.set_xlim(
-            float(all_limits.min() - 0.14 * span),
-            float(all_limits.max() + 0.14 * span),
-        )
-        ax.set_ylim(-0.38, 1.38)
-        ax.axvline(0.0, color=INK, linewidth=0.85, zorder=1)
-        ax.set_yticks(y_positions, [item[1] for item in categories])
-        for tick, color in zip(ax.get_yticklabels(), (TIANJI, PANGU_DARK)):
-            tick.set_color(color)
-            tick.set_fontweight("bold")
-        ax.set_xlabel(f"{left_word}  ←  Tianji−Pangu ({unit})  →  {right_word}")
-        ax.xaxis.set_major_locator(plt.MaxNLocator(5))
-        style_axis(ax, horizontal_grid=False, vertical_grid=True)
+        ax.set_ylabel(f"Tianji−Pangu ({unit})")
+        ax.set_title(label, loc="center", pad=8, fontsize=9.5, fontweight="bold", color=INK)
+        add_mainline_panel_label(ax, chr(ord("a") + panel_index), x=-0.13, y=1.025)
+        ax.yaxis.set_major_locator(plt.MaxNLocator(5))
+        style_axis(ax, horizontal_grid=True, vertical_grid=False)
 
     return save_figure(
         fig,
@@ -1691,6 +1735,9 @@ def qc_source(qc: pd.DataFrame) -> pd.DataFrame:
 def plot_qc(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int) -> List[str]:
     fig, ax = plt.subplots(figsize=FIGURE_SIZES["qc"])
     fig.subplots_adjust(left=0.14, right=0.95, top=0.77, bottom=0.21)
+    add_mainline_figure_title(
+        fig, "Pangu Contains Rare Out-of-Range Specific Humidity", y=0.95
+    )
     features = ["Q_1000", "Q_925"]
     sources = ["pangu", "tianji", "era5_reference_analysis"]
     x = np.arange(len(features))
@@ -1708,7 +1755,6 @@ def plot_qc(source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: in
     ax.set_ylim(0.0, ymax)
     ax.set_xticks(x, ["Q at 1000 hPa", "Q at 925 hPa"])
     ax.set_ylabel(r"Values outside 0–80 g kg$^{-1}$ (%)")
-    ax.set_title("Pangu contains rare out-of-range specific humidity", loc="left", pad=10, fontweight="bold")
     ax.legend(loc="upper right", ncol=3, columnspacing=1.0, handletextpad=0.4)
     style_axis(ax)
     return save_figure(fig, out_dir / "10_pressure_qc", formats, dpi)
@@ -1784,13 +1830,13 @@ state contrast, or QC rate in the main text.
   MSLP from Pa to hPa before comparison with automatic-station observations.
   This is a descriptive endpoint-conditioned association, not an independent
   source intervention or a causal estimate.
-- `09b`: points are mean paired `Tianji minus Pangu` forecast-state differences
-  within Tianji-hit/Pangu-miss and Pangu-hit/Tianji-miss Low-vis samples; bars
-  are 95% CIs from 1000 joint UTC-valid-date bootstrap draws. `Between-case
-  delta-delta` is the Tianji-only contrast minus the reverse-disagreement
-  contrast, using identical date draws. This reverse group strengthens the
-  specificity check but does not remove endpoint-selection conditioning or
-  establish a causal fog mechanism.
+- `09b`: bars are mean paired `Tianji minus Pangu` forecast-state differences
+  within Tianji-hit/Pangu-miss and Pangu-hit/Tianji-miss Low-vis samples;
+  whiskers are 95% CIs from 1000 joint UTC-valid-date bootstrap draws. The
+  displayed `between-group difference` is the Tianji-only contrast minus the
+  reverse-disagreement contrast, using identical date draws. This reverse
+  group strengthens the specificity check but does not remove endpoint-
+  selection conditioning or establish a causal fog mechanism.
 
 ## Formal claim boundary
 
@@ -1805,10 +1851,12 @@ equations, and it must not be generalized to all AI weather models.
 - all denser comparison figures: at most 7.205 in (183-mm two-column width)
 - height is tightened by information density rather than padded to one master
   aspect ratio
-- subtle vertical dashed major grids are used only for horizontal numerical
-  comparisons (`03`--`09b`); endpoint plots retain horizontal value grids, and
-  workflow/QC figures keep their semantically appropriate treatment
-- typography: editable sans-serif text in SVG/PDF
+- subtle vertical dashed major grids are used for horizontal numerical
+  comparisons; vertical bar/point comparisons use horizontal grids, and the
+  workflow keeps its semantically appropriate grid-free treatment
+- typography: editable DejaVu Serif text in SVG/PDF, matching the paper mainline
+- title grammar: centered bold figure/panel titles; parenthesized panel letters
+  for true multi-panel figures; complete boxed axes with light semantic grids
 - source palette: Tianji `#2E5A87` (dark blue), Pangu `#8E6BBE`
   (mid-light violet), baseline/ERA5 `#9A9A9A` (grey); marker shapes remain a
   secondary cue
@@ -1844,7 +1892,7 @@ def main() -> None:
     args = parse_args()
     eval_root = args.eval_root.expanduser().resolve()
     quality_dir = resolve_quality_dir(args.paired_quality_dir)
-    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v7")).expanduser().resolve()
+    out_dir = (args.out_dir or (eval_root / "evidence_story_figures_nc_v8")).expanduser().resolve()
     formats = ordered_formats(args.formats)
     if args.dpi < 300:
         raise ValueError("Use --dpi >= 300; 600 is recommended for paper TIFF export")
@@ -1899,7 +1947,7 @@ def main() -> None:
     generated["01_qcore_lowvis_ap"] = plot_endpoint(
         ap,
         "Low-vis average precision (AP)",
-        "Low-visibility average precision",
+        "Low-vis Average Precision",
         "01_qcore_lowvis_ap",
         out_dir,
         formats,
@@ -1912,7 +1960,7 @@ def main() -> None:
     generated["02_qcore_matched_fpr_recall"] = plot_endpoint(
         recall,
         "Low-vis recall",
-        "Low-visibility recall at matched FPR",
+        "Low-vis Recall at Matched FPR",
         "02_qcore_matched_fpr_recall",
         out_dir,
         formats,
@@ -2004,6 +2052,15 @@ def main() -> None:
         "maximum_figure_width_inches": FIGURE_WIDTH,
         "single_column_width_inches": SINGLE_COLUMN_WIDTH,
         "source_palette": PAPER_SOURCE_COLORS,
+        "visual_style": {
+            "contract": "paper_mainline",
+            "font_family": "DejaVu Serif",
+            "figure_title_alignment": "center",
+            "panel_title_alignment": "center",
+            "panel_labels": "parenthesized_for_true_multipanel_figures",
+            "axes_frame": "complete_box",
+            "grid": "light_and_direction_appropriate",
+        },
         "figures": {
             key: {
                 **FIGURE_SPECS[key],
