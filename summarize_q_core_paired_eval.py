@@ -201,13 +201,14 @@ def arrays(frame: pd.DataFrame, idx: np.ndarray | None = None) -> Tuple[np.ndarr
 
 def metric_rows(aligned: Mapping[str, pd.DataFrame], labels: Mapping[str, str]) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
+    sample_scope = f"{len(aligned)}_source_paired_test_intersection"
     for tag, frame in aligned.items():
         y, pred, probs = arrays(frame)
         metrics = compute_metrics(y, pred, probs=probs)
         row: Dict[str, object] = {
             "source": tag,
             "source_label": labels[tag],
-            "sample_scope": "four_source_paired_test_intersection",
+            "sample_scope": sample_scope,
             "n": int(len(y)),
         }
         row.update(metrics)

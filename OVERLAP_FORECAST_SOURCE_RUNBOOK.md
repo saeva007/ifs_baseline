@@ -515,6 +515,41 @@ workflow. `submit_q_core_t925_joint_structure.sh` refuses to run unless
 the separate 3-S1 + 24-S2 experiment. Even then, it does not prove a governing-
 equation violation and must not be generalized to all AI weather models.
 
+### Two-source q-core + T925 fair rerun
+
+Use `submit_q_core_t925_fair_experiment.sh` when the question is narrowly
+whether the Pangu--Tianji fair-performance gap persists after adding their
+shared `T_925` field. The input layout is `q_core_t925_no_rh2m`: the original
+14 shared meteorological q-core fields plus `T_925`, followed by `ZENITH`,
+`PM10_ugm3`, and `PM25_ugm3` (`dyn18`). RH2M remains excluded. This launcher
+does not submit IFS, ERA5, hybrid masks, or the optional 24-S2 factorial.
+
+The formal default submits three data builds, one hard data audit, three
+seed-matched S1 models, six S2 models (Tianji and Pangu for each seed), three
+paired validation/test inference jobs, and one joint analysis. Primary results
+are threshold-free Low-vis AP and validation-matched-FPR test recall/CSI;
+argmax performance, Brier/ECE, reliability, and seed dispersion are secondary.
+The target FPR is the median of the three Pangu validation argmax FPR values,
+and all confidence intervals jointly resample UTC valid dates before averaging
+the three seed effects.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=qcore_t925_fair_formal_v1_20260721 \
+DRY_RUN=1 \
+bash submit_q_core_t925_fair_experiment.sh
+
+RUN_TAG=qcore_t925_fair_formal_v1_20260721 \
+BOOTSTRAP_ITERS=1000 \
+bash submit_q_core_t925_fair_experiment.sh
+```
+
+Results are written to
+`paper_eval_results_pm10_pm25_journal/q_core_t925_fair/<RUN_TAG>/analysis/`.
+Use a fresh run tag for every formal submission; the launcher refuses to
+overwrite existing data, results, or checkpoints.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do

@@ -802,8 +802,8 @@ def qcore_argmax_source(metrics: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for source, mask in source_specs:
         endpoint = metrics[metrics["mask"] == mask].copy()
-        if set(endpoint["seed"].astype(int)) != {42, 2025, 20260702}:
-            raise ValueError(f"Argmax endpoint {mask} does not contain the three formal seeds")
+        if endpoint.empty or endpoint["seed"].astype(int).duplicated().any():
+            raise ValueError(f"Argmax endpoint {mask} must contain one row per seed")
         for label, column, direction in metric_specs:
             values = pd.to_numeric(endpoint[column], errors="raise")
             for seed, value in zip(endpoint["seed"].astype(int), values):
@@ -837,6 +837,8 @@ def plot_qcore_argmax_overview(
     out_dir: Path,
     formats: Sequence[str],
     dpi: int,
+    title: str = "Fair Q-Core Argmax Performance",
+    output_name: str = "02a_qcore_argmax_lowvis_overview",
 ) -> List[str]:
     """Draw a compact fair-input argmax overview with seed-level transparency."""
 
@@ -855,8 +857,8 @@ def plot_qcore_argmax_overview(
     label_dx = {"tianji": -0.026, "pangu": 0.026}
     label_dy = {"tianji": 0.024, "pangu": 0.048}
     label_ha = {"tianji": "right", "pangu": "left"}
-    jitter = {-1: -0.035, 0: 0.0, 1: 0.035}
-    seed_order = [42, 2025, 20260702]
+    seed_order = sorted(seed_rows["seed"].astype(int).unique())
+    jitter_values = np.linspace(-0.035, 0.035, len(seed_order)) if len(seed_order) > 1 else np.asarray([0.0])
 
     for source_key in source_order:
         means = (
@@ -884,7 +886,7 @@ def plot_qcore_argmax_overview(
                 .to_numpy(dtype=float)
             )
             ax.scatter(
-                xpos + jitter[seed_index - 1],
+                xpos + jitter_values[seed_index],
                 values,
                 s=13,
                 marker="o",
@@ -917,7 +919,7 @@ def plot_qcore_argmax_overview(
     ax.set_xticks(x, ["Precision ↑", "Recall ↑", "CSI ↑", "FPR ↓"])
     ax.set_ylabel("Score on paired test samples")
     add_mainline_figure_title(
-        fig, "Fair Q-Core Argmax Performance", y=0.95, fontsize=10.2
+        fig, title, y=0.95, fontsize=10.2
     )
     ax.legend(
         loc="upper center",
@@ -930,7 +932,7 @@ def plot_qcore_argmax_overview(
     style_axis(ax)
     return save_figure(
         fig,
-        out_dir / "02a_qcore_argmax_lowvis_overview",
+        out_dir / output_name,
         formats,
         dpi,
     )
