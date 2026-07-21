@@ -19,6 +19,7 @@ from plot_pangu_qcore_mechanism_ppt import (
     FIGURE_SPECS,
     event_forecast_state_contrast_source,
     event_observation_advantage_source,
+    event_observation_bias_source,
     ordered_formats,
     qcore_argmax_source,
     style_axis,
@@ -80,7 +81,8 @@ def synthetic_event_samples() -> pd.DataFrame:
 class EventObservationAdvantageTest(unittest.TestCase):
     def test_complete_figure_inventory_uses_mainline_style_contract(self) -> None:
         self.assertEqual(set(FIGURE_SPECS), set(FIGURE_SIZE_KEYS))
-        self.assertEqual(len(FIGURE_SPECS), 13)
+        self.assertEqual(len(FIGURE_SPECS), 14)
+        self.assertIn("09c_disagreement_case_observation_bias", FIGURE_SPECS)
         self.assertEqual(plt.rcParams["font.family"], ["sans-serif"])
         self.assertEqual(plt.rcParams["font.sans-serif"][:2], ["Arial", "Helvetica"])
         fig, ax = plt.subplots()
@@ -184,6 +186,35 @@ class EventObservationAdvantageTest(unittest.TestCase):
         samples = pd.concat([samples, samples.iloc[[0]]], ignore_index=True)
         with self.assertRaisesRegex(ValueError, "duplicate station-time"):
             event_forecast_state_contrast_source(samples, iterations=200, seed=17)
+
+    def test_symmetric_observation_bias_uses_both_hit_groups(self) -> None:
+        source = event_observation_bias_source(
+            synthetic_event_samples(), iterations=200, seed=17
+        ).set_index(["feature", "case_category", "source_role"])
+        self.assertEqual(len(source), 12)
+        self.assertAlmostEqual(
+            float(source.loc[("T2M", "tianji_hit_pangu_miss", "physics"), "bias_forecast_minus_observation"]),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            float(source.loc[("T2M", "tianji_hit_pangu_miss", "ai"), "bias_forecast_minus_observation"]),
+            2.0,
+        )
+        self.assertAlmostEqual(
+            float(source.loc[("T2M", "tianji_hit_pangu_miss", "physics"), "paired_mae_difference_physics_minus_ai"]),
+            -1.0,
+        )
+        self.assertAlmostEqual(
+            float(source.loc[("WSPD10", "pangu_hit_tianji_miss", "physics"), "paired_mae_difference_physics_minus_ai"]),
+            -0.1,
+        )
+        self.assertAlmostEqual(
+            float(source.loc[("MSLP", "pangu_hit_tianji_miss", "physics"), "paired_mae_difference_physics_minus_ai"]),
+            0.2,
+        )
+        self.assertTrue(
+            np.all(source["bootstrap_unit"].to_numpy() == "UTC_valid_date")
+        )
 
     @unittest.skipUnless(BASH_EXE, "bash is required for submitter regression")
     def test_reuse_quality_submits_without_empty_dependency_array(self) -> None:

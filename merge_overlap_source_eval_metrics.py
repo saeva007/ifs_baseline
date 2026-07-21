@@ -161,14 +161,14 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "pangu2021_common_core": "Pangu-2021",
         "era5_2025_source_full": "ERA5-2025 source-full",
         "era5_2025_common_core": "ERA5-2025",
-        "tianji_t2nd_ifs_mean_softmax": "Tianji+T2ND+IFS mean",
+        "tianji_t2nd_ifs_mean_softmax": "Tianji+T2ND+IFS mean softmax",
         "ensemble_mean_softmax": "Tianji+IFS mean softmax",
         "ifs_diagnostic": "IFS diagnostic VIS",
     }
     for _, row in overall_df.iterrows():
         src = str(row.get("source", ""))
         label = str(row.get("source_label", "") or "").strip()
-        if src and label and label != src:
+        if src and src not in source_labels and label and label != src:
             source_labels[src] = label
     source_colors = {
         "tianji": "#2E5A87",
@@ -182,7 +182,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "era5_2025_common_core": "#D95F02",
         "tianji_t2nd_ifs_mean_softmax": "#B279A2",
         "ensemble_mean_softmax": "#4C78A8",
-        "ifs_diagnostic": "#E69F00",
+        "ifs_diagnostic": "#2F2F2F",
     }
     fallback_colors = ["#4C78A8", "#59A14F", "#B07AA1", "#F28E2B", "#76B7B2", "#E15759"]
 
@@ -219,7 +219,8 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
 
     plt.rcParams.update(
         {
-            "font.family": "DejaVu Serif",
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
             "font.size": 9,
             "axes.labelsize": 10,
             "axes.titlesize": 11,
@@ -234,6 +235,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "axes.axisbelow": True,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "svg.fonttype": "none",
         }
     )
 
@@ -315,6 +317,153 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         if source in offsets:
             return offsets[source]
         return (7, 5 + 5 * (idx % 3))
+
+    metric_centered_panels = [
+        (
+            "Precision",
+            [
+                ("fog_precision", "Ultra-low\n(<500 m)"),
+                ("mist_precision", "Moderate-low\n(500-1000 m)"),
+                ("low_vis_precision", "Low-vis event\n(<1000 m)"),
+            ],
+        ),
+        (
+            "Recall",
+            [
+                ("fog_pod", "Ultra-low\n(<500 m)"),
+                ("mist_pod", "Moderate-low\n(500-1000 m)"),
+                ("low_vis_recall", "Low-vis event\n(<1000 m)"),
+            ],
+        ),
+        (
+            "F1 score",
+            [
+                ("fog_f1", "Ultra-low\n(<500 m)"),
+                ("mist_f1", "Moderate-low\n(500-1000 m)"),
+                ("low_vis_f1", "Low-vis event\n(<1000 m)"),
+            ],
+        ),
+        (
+            "CSI",
+            [
+                ("fog_csi", "Ultra-low\n(<500 m)"),
+                ("mist_csi", "Moderate-low\n(500-1000 m)"),
+                ("low_vis_csi", "Low-vis event\n(<1000 m)"),
+            ],
+        ),
+    ]
+
+    def _draw_metric_centered_panels(source_order: List[str], stem: str) -> List[str]:
+        """Draw four metric panels, each containing all three target definitions."""
+
+        source_order = [src for src in source_order if src in available_set and src in row_by_source]
+        if not source_order:
+            return []
+        n_sources = len(source_order)
+        fig, axes = plt.subplots(2, 2, figsize=(11.8, 7.25), sharey=False)
+        fig.subplots_adjust(left=0.075, right=0.985, bottom=0.105, top=0.80, hspace=0.40, wspace=0.16)
+        panel_letters = ["a", "b", "c", "d"]
+        for panel_index, (ax, (title, category_metrics)) in enumerate(zip(axes.flat, metric_centered_panels)):
+            x = np.arange(len(category_metrics), dtype=float)
+            width = min(0.13, 0.80 / max(n_sources, 1))
+            panel_values = [
+                _metric_value(row_by_source[source], metric)
+                for source in source_order
+                for metric, _ in category_metrics
+            ]
+            y_max = _adaptive_score_ylim(panel_values)
+            for source_index, source in enumerate(source_order):
+                values = [_metric_value(row_by_source[source], metric) for metric, _ in category_metrics]
+                bars = ax.bar(
+                    x + (source_index - (n_sources - 1) / 2.0) * width,
+                    [value if np.isfinite(value) else 0.0 for value in values],
+                    width * 0.90,
+                    label=source_labels.get(source, source) if panel_index == 0 else None,
+                    color=source_colors.get(source, fallback_colors[source_index % len(fallback_colors)]),
+                    edgecolor="white",
+                    linewidth=0.35,
+                    alpha=0.96,
+                    zorder=3,
+                )
+                for bar, value in zip(bars, values):
+                    if not np.isfinite(value):
+                        bar.set_alpha(0.0)
+            ax.set_title(title, loc="left", fontweight="bold", pad=5)
+            ax.text(-0.11, 1.04, panel_letters[panel_index], transform=ax.transAxes, fontsize=10.5, fontweight="bold", va="bottom")
+            ax.set_xticks(x)
+            ax.set_xticklabels([label for _, label in category_metrics])
+            ax.set_ylim(0.0, y_max)
+            ax.grid(axis="y", alpha=0.22, linewidth=0.6)
+            ax.grid(axis="x", visible=False)
+            if panel_index % 2 == 0:
+                ax.set_ylabel("Score")
+        handles, labels = axes.flat[0].get_legend_handles_labels()
+        if handles:
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.53, 0.965),
+                ncol=min(4, len(handles)),
+                frameon=False,
+                columnspacing=1.15,
+                handlelength=1.6,
+            )
+        fig.suptitle(
+            "Best-effort Forecast-source Performance Across Visibility Targets",
+            x=0.53,
+            y=0.995,
+            fontsize=11.2,
+            fontweight="bold",
+        )
+        fig.text(
+            0.985,
+            0.015,
+            "Zero-based panel-specific ranges; source-specific variables; operational upper-bound comparison, not controlled attribution",
+            ha="right",
+            va="bottom",
+            fontsize=7.0,
+            color="#555555",
+        )
+        out_paths = [out_dir / f"{stem}.png", out_dir / f"{stem}.pdf", out_dir / f"{stem}.svg"]
+        for path in out_paths:
+            fig.savefig(path, dpi=600, bbox_inches="tight")
+            print(f"  [Fig] Saved -> {path}", flush=True)
+        plt.close(fig)
+        return [str(path) for path in out_paths]
+
+    def _draw_source_full_fpr(source_order: List[str], stem: str) -> List[str]:
+        """Keep the Low-vis FPR visible as a separate supplementary comparison."""
+
+        rows: List[Tuple[str, float, str]] = []
+        for source_index, source in enumerate(source_order):
+            if source not in available_set or source not in row_by_source:
+                continue
+            value = _metric_value(row_by_source[source], "low_vis_fpr")
+            if np.isfinite(value):
+                rows.append((source, value, source_colors.get(source, fallback_colors[source_index % len(fallback_colors)])))
+        if not rows:
+            return []
+        rows.sort(key=lambda item: item[1])
+        fig, ax = plt.subplots(figsize=(7.2, max(2.8, 1.7 + 0.34 * len(rows))))
+        y = np.arange(len(rows))
+        values = np.asarray([item[1] for item in rows], dtype=float)
+        ax.barh(y, values, color=[item[2] for item in rows], edgecolor="white", linewidth=0.45, height=0.68)
+        ax.set_yticks(y, [_short_source_label(item[0]) for item in rows])
+        ax.invert_yaxis()
+        ax.set_xlabel("Low-vis false-positive rate (lower is better)")
+        ax.set_title("Best-effort Low-vis False-positive Rate", loc="left", fontweight="bold")
+        ax.set_xlim(0.0, _adaptive_score_ylim(values))
+        ax.grid(axis="x", alpha=0.22)
+        ax.grid(axis="y", visible=False)
+        for yi, value in zip(y, values):
+            ax.text(value + max(0.002, 0.02 * ax.get_xlim()[1]), yi, f"{value:.3f}", va="center", fontsize=7.2)
+        out_paths = [out_dir / f"{stem}.png", out_dir / f"{stem}.pdf", out_dir / f"{stem}.svg"]
+        for path in out_paths:
+            fig.savefig(path, dpi=600, bbox_inches="tight")
+            print(f"  [Fig] Saved -> {path}", flush=True)
+        plt.close(fig)
+        return [str(path) for path in out_paths]
 
     def _draw_source_full_summary(source_order: List[str], stem: str) -> List[str]:
         source_order = [src for src in source_order if src in available_set and src in row_by_source]
@@ -559,11 +708,10 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
             "era5_2025_source_full",
             "pangu2025_source_full",
             "pangu2021_source_full",
+            "ifs_diagnostic",
         ]
-        source_full_written = _draw_source_full_summary(source_full_order, "fig_forecast_source_key_metrics_source_full")
-        if not source_full_written:
-            source_full_written = _draw_group(source_full_order, "fig_forecast_source_key_metrics_source_full")
-        written.extend(source_full_written)
+        written.extend(_draw_metric_centered_panels(source_full_order, "fig_forecast_source_key_metrics_source_full"))
+        written.extend(_draw_source_full_fpr(source_full_order, "fig_forecast_source_lowvis_fpr_source_full"))
     if available_set & {"pangu2021_source_full", "ensemble_mean_softmax"}:
         written.extend(
             _draw_group(

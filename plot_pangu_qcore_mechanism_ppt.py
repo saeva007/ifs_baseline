@@ -52,6 +52,7 @@ FIGURE_SIZES = {
     "events": (FIGURE_WIDTH, 2.25),
     "event_quality": (FIGURE_WIDTH, 2.95),
     "event_state": (FIGURE_WIDTH, 4.60),
+    "event_bias": (FIGURE_WIDTH, 3.45),
     "qc": (FIGURE_WIDTH, 2.65),
 }
 plt.rcParams.update(
@@ -178,8 +179,12 @@ FIGURE_SPECS: Mapping[str, Mapping[str, str]] = {
         "claim": "Within Tianji-only Low-vis hits, Tianji has lower observation-referenced T2M and WSPD10 RMSE, whereas MSLP is non-robust.",
     },
     "09b_disagreement_case_forecast_state": {
-        "placement": "main_or_supplement",
+        "placement": "supplement",
         "claim": "Tianji-only Low-vis hits show a stronger Tianji-minus-Pangu cool, moist and weak-wind state contrast than reverse disagreement cases.",
+    },
+    "09c_disagreement_case_observation_bias": {
+        "placement": "main",
+        "claim": "Within both endpoint-disagreement groups, paired station-referenced biases distinguish task-relevant forecast-state accuracy from state magnitude.",
     },
     "10_pressure_qc": {
         "placement": "supplement",
@@ -200,6 +205,7 @@ FIGURE_SIZE_KEYS = {
     "08_unique_event_hits": "events",
     "09_observation_anchored_tianji_only_advantage": "event_quality",
     "09b_disagreement_case_forecast_state": "event_state",
+    "09c_disagreement_case_observation_bias": "event_bias",
     "10_pressure_qc": "qc",
 }
 
@@ -1406,6 +1412,346 @@ def plot_event_observation_advantage(
     )
 
 
+def event_observation_bias_source(
+    samples: pd.DataFrame,
+    iterations: int = 1000,
+    seed: int = 20260702,
+) -> pd.DataFrame:
+    """Compute symmetric station-referenced bias and MAE in both hit groups.
+
+    The public-facing roles are ``Physics`` and ``AI``.  The input columns keep
+    the concrete source identities for traceability, while the figure avoids
+    turning one evaluated source pair into an unsupported model-family claim.
+    UTC valid dates are resampled as blocks, and each source pair uses the same
+    complete station-time rows and the same bootstrap draws.
+    """
+
+    categories = [
+        ("tianji_hit_pangu_miss", "Physics-only hit"),
+        ("pangu_hit_tianji_miss", "AI-only hit"),
+    ]
+    required = [
+        "time_utc",
+        "station_key",
+        "case_category",
+        "vis_raw_m",
+        "T2M_pangu",
+        "T2M_tianji",
+        "tem",
+        "WSPD10_pangu",
+        "WSPD10_tianji",
+        "win_s_avg_10mi",
+        "MSLP_pangu",
+        "MSLP_tianji",
+        "prs_sea",
+    ]
+    require_columns(samples, required, "event_case_control_samples")
+    target = samples[samples["case_category"].isin([item[0] for item in categories])].copy()
+    target["time_utc"] = pd.to_datetime(target["time_utc"], errors="raise", utc=True)
+    target["utc_valid_date"] = target["time_utc"].dt.floor("D")
+    if target[["time_utc", "station_key"]].duplicated().any():
+        raise ValueError("Disagreement event samples contain duplicate station-time rows")
+    visibility = pd.to_numeric(target["vis_raw_m"], errors="coerce")
+    if visibility.isna().any() or bool((visibility >= 1000.0).any()):
+        raise ValueError("Disagreement event samples must all satisfy observed visibility <1000 m")
+    if iterations < 200:
+        raise ValueError("Use at least 200 UTC-date bootstrap iterations")
+
+    feature_specs = [
+        {
+            "feature": "T2M",
+            "label": "2-m temperature",
+            "unit": "°C",
+            "physics": "T2M_tianji",
+            "ai": "T2M_pangu",
+            "observation": "tem",
+            "physics_scale": 1.0,
+            "physics_offset": -273.15,
+            "ai_scale": 1.0,
+            "ai_offset": -273.15,
+            "observation_scale": 1.0,
+            "observation_offset": 0.0,
+        },
+        {
+            "feature": "WSPD10",
+            "label": "10-m wind speed",
+            "unit": "m s-1",
+            "physics": "WSPD10_tianji",
+            "ai": "WSPD10_pangu",
+            "observation": "win_s_avg_10mi",
+            "physics_scale": 1.0,
+            "physics_offset": 0.0,
+            "ai_scale": 1.0,
+            "ai_offset": 0.0,
+            "observation_scale": 1.0,
+            "observation_offset": 0.0,
+        },
+        {
+            "feature": "MSLP",
+            "label": "Mean sea-level pressure",
+            "unit": "hPa",
+            "physics": "MSLP_tianji",
+            "ai": "MSLP_pangu",
+            "observation": "prs_sea",
+            "physics_scale": 0.01,
+            "physics_offset": 0.0,
+            "ai_scale": 0.01,
+            "ai_offset": 0.0,
+            "observation_scale": 1.0,
+            "observation_offset": 0.0,
+        },
+    ]
+
+    rng = np.random.default_rng(seed)
+    rows: List[Dict[str, object]] = []
+    for category_key, category_label in categories:
+        category_frame = target[target["case_category"] == category_key].copy()
+        if category_frame.empty:
+            raise ValueError(f"No event samples for category={category_key}")
+        for spec in feature_specs:
+            frame = category_frame[
+                ["utc_valid_date", spec["physics"], spec["ai"], spec["observation"]]
+            ].copy()
+            physics = (
+                pd.to_numeric(frame[spec["physics"]], errors="coerce").to_numpy(dtype=float)
+                * float(spec["physics_scale"])
+                + float(spec["physics_offset"])
+            )
+            ai = (
+                pd.to_numeric(frame[spec["ai"]], errors="coerce").to_numpy(dtype=float)
+                * float(spec["ai_scale"])
+                + float(spec["ai_offset"])
+            )
+            observation = (
+                pd.to_numeric(frame[spec["observation"]], errors="coerce").to_numpy(dtype=float)
+                * float(spec["observation_scale"])
+                + float(spec["observation_offset"])
+            )
+            finite = np.isfinite(physics) & np.isfinite(ai) & np.isfinite(observation)
+            if int(finite.sum()) < 100:
+                raise ValueError(f"{spec['feature']}/{category_key}: fewer than 100 complete paired rows")
+            errors = pd.DataFrame(
+                {
+                    "utc_valid_date": frame.loc[finite, "utc_valid_date"].to_numpy(),
+                    "physics_error": physics[finite] - observation[finite],
+                    "ai_error": ai[finite] - observation[finite],
+                }
+            )
+            errors["physics_absolute_error"] = errors["physics_error"].abs()
+            errors["ai_absolute_error"] = errors["ai_error"].abs()
+            daily = errors.groupby("utc_valid_date", sort=True).agg(
+                physics_error=("physics_error", "sum"),
+                ai_error=("ai_error", "sum"),
+                physics_absolute_error=("physics_absolute_error", "sum"),
+                ai_absolute_error=("ai_absolute_error", "sum"),
+                n=("physics_error", "size"),
+            )
+            dates = pd.Index(daily.index)
+            if len(dates) < 10:
+                raise ValueError(f"{spec['feature']}/{category_key}: fewer than 10 represented UTC dates")
+            date_draws = rng.integers(0, len(dates), size=(iterations, len(dates)))
+            counts = daily["n"].to_numpy(dtype=float)
+            draw_n = counts[date_draws].sum(axis=1)
+            if bool((draw_n <= 0).any()):
+                raise ValueError(f"{spec['feature']}/{category_key}: empty UTC-date bootstrap draw")
+
+            source_stats: Dict[str, Dict[str, object]] = {}
+            for role, label, error_col, abs_error_col, source_field in [
+                ("physics", "Physics forecast", "physics_error", "physics_absolute_error", spec["physics"]),
+                ("ai", "AI forecast", "ai_error", "ai_absolute_error", spec["ai"]),
+            ]:
+                error_sums = daily[error_col].to_numpy(dtype=float)
+                absolute_sums = daily[abs_error_col].to_numpy(dtype=float)
+                bias = float(error_sums.sum() / counts.sum())
+                mae = float(absolute_sums.sum() / counts.sum())
+                bias_draws = error_sums[date_draws].sum(axis=1) / draw_n
+                mae_draws = absolute_sums[date_draws].sum(axis=1) / draw_n
+                bias_ci_low, bias_ci_high = np.quantile(bias_draws, [0.025, 0.975])
+                mae_ci_low, mae_ci_high = np.quantile(mae_draws, [0.025, 0.975])
+                source_stats[role] = {
+                    "bias": bias,
+                    "mae": mae,
+                    "bias_draws": bias_draws,
+                    "mae_draws": mae_draws,
+                    "bias_ci_low": float(bias_ci_low),
+                    "bias_ci_high": float(bias_ci_high),
+                    "mae_ci_low": float(mae_ci_low),
+                    "mae_ci_high": float(mae_ci_high),
+                    "source_field": source_field,
+                    "source_label": label,
+                }
+
+            mae_difference_draws = (
+                np.asarray(source_stats["physics"]["mae_draws"])
+                - np.asarray(source_stats["ai"]["mae_draws"])
+            )
+            mae_difference = float(source_stats["physics"]["mae"] - source_stats["ai"]["mae"])
+            mae_difference_ci_low, mae_difference_ci_high = np.quantile(
+                mae_difference_draws, [0.025, 0.975]
+            )
+            for role in ("physics", "ai"):
+                stats = source_stats[role]
+                rows.append(
+                    {
+                        "feature": spec["feature"],
+                        "label": spec["label"],
+                        "unit": spec["unit"],
+                        "case_category": category_key,
+                        "case_label": category_label,
+                        "source_role": role,
+                        "source_label": stats["source_label"],
+                        "source_field": stats["source_field"],
+                        "bias_forecast_minus_observation": stats["bias"],
+                        "bias_ci_low": stats["bias_ci_low"],
+                        "bias_ci_high": stats["bias_ci_high"],
+                        "mae": stats["mae"],
+                        "mae_ci_low": stats["mae_ci_low"],
+                        "mae_ci_high": stats["mae_ci_high"],
+                        "paired_mae_difference_physics_minus_ai": mae_difference,
+                        "paired_mae_difference_ci_low": float(mae_difference_ci_low),
+                        "paired_mae_difference_ci_high": float(mae_difference_ci_high),
+                        "n_complete_paired": int(finite.sum()),
+                        "represented_utc_dates": int(len(dates)),
+                        "reference": "automatic-station observation",
+                        "bootstrap_unit": "UTC_valid_date",
+                        "bootstrap_iterations": int(iterations),
+                        "bootstrap_seed": int(seed),
+                        "selection_note": "descriptive endpoint-conditioned association; not a causal source intervention",
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def plot_event_observation_bias(
+    source: pd.DataFrame,
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    """Plot symmetric source biases with MAE differences in both hit groups."""
+
+    feature_specs = [
+        ("T2M", "2-m temperature", "°C"),
+        ("WSPD10", "10-m wind speed", r"m s$^{-1}$"),
+        ("MSLP", "Mean sea-level pressure", "hPa"),
+    ]
+    categories = [
+        ("tianji_hit_pangu_miss", "Physics-only\nhit"),
+        ("pangu_hit_tianji_miss", "AI-only\nhit"),
+    ]
+    roles = [
+        ("physics", "Physics forecast", TIANJI, "o"),
+        ("ai", "AI forecast", PANGU, "D"),
+    ]
+    fig, axes = plt.subplots(1, 3, figsize=FIGURE_SIZES["event_bias"])
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.73, bottom=0.26, wspace=0.38)
+
+    for panel_index, (ax, (feature, title, unit)) in enumerate(zip(axes, feature_specs)):
+        part = source[source["feature"] == feature]
+        x = np.arange(len(categories), dtype=float)
+        for role_index, (role, role_label, color, marker) in enumerate(roles):
+            estimates: List[float] = []
+            lows: List[float] = []
+            highs: List[float] = []
+            for category_key, _ in categories:
+                row = part[(part["case_category"] == category_key) & (part["source_role"] == role)]
+                if len(row) != 1:
+                    raise ValueError(f"Incomplete observation-bias source rows for {feature}/{category_key}/{role}")
+                values = row.iloc[0]
+                estimates.append(float(values["bias_forecast_minus_observation"]))
+                lows.append(float(values["bias_ci_low"]))
+                highs.append(float(values["bias_ci_high"]))
+            estimates_arr = np.asarray(estimates, dtype=float)
+            lows_arr = np.asarray(lows, dtype=float)
+            highs_arr = np.asarray(highs, dtype=float)
+            xpos = x + (-0.11 if role_index == 0 else 0.11)
+            ax.errorbar(
+                xpos,
+                estimates_arr,
+                yerr=np.vstack([estimates_arr - lows_arr, highs_arr - estimates_arr]),
+                fmt=marker,
+                markersize=5.2,
+                color=color,
+                markerfacecolor=color,
+                markeredgecolor="white",
+                markeredgewidth=0.65,
+                ecolor=color,
+                elinewidth=1.35,
+                capsize=3.0,
+                label=role_label if panel_index == 0 else None,
+                zorder=3,
+            )
+
+        ax.axhline(0.0, color=INK, linewidth=0.85, zorder=1)
+        tick_labels: List[str] = []
+        for category_key, category_label in categories:
+            count_row = part[
+                (part["case_category"] == category_key)
+                & (part["source_role"] == "physics")
+            ]
+            count = int(count_row.iloc[0]["n_complete_paired"])
+            tick_labels.append(f"{category_label}\nn={count:,}")
+        ax.set_xticks(x, tick_labels)
+        ax.set_title(title, loc="left", fontsize=9.0, fontweight="bold", pad=5)
+        ax.set_ylabel(f"Forecast − observation ({unit})")
+        ax.text(-0.16, 1.05, chr(ord("a") + panel_index), transform=ax.transAxes, fontsize=9.5, fontweight="bold", va="bottom")
+        ax.grid(axis="y", color=GRID_GREY, linewidth=0.65)
+        ax.grid(axis="x", visible=False)
+        style_axis(ax, horizontal_grid=True, vertical_grid=False)
+
+        # Reserve a dedicated band for the two paired-MAE summaries so the
+        # callouts cannot cover forecast-bias estimates or their uncertainty.
+        data_ymin, data_ymax = ax.get_ylim()
+        data_span = max(data_ymax - data_ymin, 1e-6)
+        ax.set_ylim(data_ymin, data_ymax + 0.30 * data_span)
+
+        for category_index, (category_key, _) in enumerate(categories):
+            row = part[(part["case_category"] == category_key) & (part["source_role"] == "physics")]
+            values = row.iloc[0]
+            delta = float(values["paired_mae_difference_physics_minus_ai"])
+            low = float(values["paired_mae_difference_ci_low"])
+            high = float(values["paired_mae_difference_ci_high"])
+            ax.text(
+                0.25 + 0.50 * category_index,
+                0.98,
+                f"ΔMAE {delta:+.2f}\n[{low:+.2f}, {high:+.2f}]",
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=6.2,
+                color="#40464D",
+                bbox={"boxstyle": "round,pad=0.20", "facecolor": "white", "edgecolor": LIGHT_GREY, "linewidth": 0.55},
+            )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.865), ncol=2, frameon=False)
+    fig.suptitle(
+        "Forecast Biases Relative to Observations in Model-disagreement Low-vis Cases",
+        x=0.5,
+        y=0.985,
+        fontsize=10.8,
+        fontweight="bold",
+        color=INK,
+    )
+    fig.text(
+        0.5,
+        0.055,
+        "Signed bias (forecast − observation); 95% CIs use UTC-date block bootstrap. "
+        "ΔMAE = Physics − AI (negative favours Physics).\n"
+        "Endpoint-conditioned diagnostic; not a causal source intervention.",
+        ha="center",
+        va="center",
+        fontsize=7.0,
+        color="#4A5056",
+    )
+    return save_figure(
+        fig,
+        out_dir / "09c_disagreement_case_observation_bias",
+        formats,
+        dpi,
+    )
+
+
 def event_forecast_state_contrast_source(
     samples: pd.DataFrame,
     iterations: int = 1000,
@@ -1915,6 +2261,7 @@ def main() -> None:
     )
     event_quality = event_observation_advantage_source(formal["event_samples"])
     event_state = event_forecast_state_contrast_source(formal["event_samples"])
+    event_bias = event_observation_bias_source(formal["event_samples"])
     expected_target_rows = int(
         formal["events"].set_index("case_category").loc["tianji_hit_pangu_miss", "n"]
     )
@@ -2029,6 +2376,13 @@ def main() -> None:
     )
     generated["09b_disagreement_case_forecast_state"] = (
         plot_event_forecast_state_contrast(event_state, out_dir, formats, args.dpi)
+    )
+
+    event_bias.to_csv(
+        source_dir / "09c_disagreement_case_observation_bias.csv", index=False
+    )
+    generated["09c_disagreement_case_observation_bias"] = (
+        plot_event_observation_bias(event_bias, out_dir, formats, args.dpi)
     )
 
     if not args.main_only:
