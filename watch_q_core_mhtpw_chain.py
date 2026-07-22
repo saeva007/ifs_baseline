@@ -119,7 +119,13 @@ def query_job(job_id: str) -> JobStatus:
         if len(lines) == 1:
             parts = lines[0].split("|", 2)
             if len(parts) == 3:
-                return JobStatus(str(job_id), parts[0], normalize_state(parts[1]), parts[2], "squeue")
+                return JobStatus(
+                    str(job_id),
+                    parts[0].strip(),
+                    normalize_state(parts[1]),
+                    parts[2].strip(),
+                    "squeue",
+                )
         if len(lines) > 1:
             raise RuntimeError(f"squeue returned multiple rows for job {job_id}: {lines}")
     accounting = run_command(
@@ -130,7 +136,13 @@ def query_job(job_id: str) -> JobStatus:
     for line in accounting.stdout.splitlines():
         parts = line.strip().split("|")
         if len(parts) >= 4 and parts[0] == str(job_id):
-            return JobStatus(str(job_id), parts[1], normalize_state(parts[2]), parts[3], "sacct")
+            return JobStatus(
+                str(job_id),
+                parts[1].strip(),
+                normalize_state(parts[2]),
+                parts[3].strip(),
+                "sacct",
+            )
     return JobStatus(str(job_id), "", "UNKNOWN", "", "not_found")
 
 
@@ -148,11 +160,14 @@ def active_jobs_named(names: Iterable[str]) -> Dict[str, str]:
     duplicates: Dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
         parts = line.strip().split("|", 1)
-        if len(parts) != 2 or parts[1] not in wanted:
+        if len(parts) != 2:
             continue
-        if parts[1] in found:
-            duplicates.setdefault(parts[1], [found[parts[1]]]).append(parts[0])
-        found[parts[1]] = parts[0]
+        job_id, name = parts[0].strip(), parts[1].strip()
+        if name not in wanted:
+            continue
+        if name in found:
+            duplicates.setdefault(name, [found[name]]).append(job_id)
+        found[name] = job_id
     if duplicates:
         raise RuntimeError(f"ambiguous active job names: {duplicates}")
     return found
@@ -166,10 +181,11 @@ def dependency_job_ids(detail: str) -> list[str]:
 
 
 def logical_from_job_name(name: str) -> str | None:
-    s1 = re.fullmatch(r"mhtpw_s1_s(\d+)", str(name))
+    normalized = str(name).strip()
+    s1 = re.fullmatch(r"mhtpw_s1_s(\d+)", normalized)
     if s1:
         return f"s1:{s1.group(1)}"
-    s2 = re.fullmatch(r"mhtpw_([01]{5})_s(\d+)", str(name))
+    s2 = re.fullmatch(r"mhtpw_([01]{5})_s(\d+)", normalized)
     if s2:
         return f"s2:{s2.group(2)}:{s2.group(1)}"
     return None
@@ -430,9 +446,10 @@ class ChainWatch:
                 parts = line.strip().split("|", 1)
                 if len(parts) != 2:
                     continue
-                logical = logical_from_job_name(parts[1])
+                job_id, name = parts[0].strip(), parts[1].strip()
+                logical = logical_from_job_name(name)
                 if logical in self.expected:
-                    by_logical.setdefault(logical, []).append(parts[0])
+                    by_logical.setdefault(logical, []).append(job_id)
             duplicates = {key: value for key, value in by_logical.items() if len(value) != 1}
             if duplicates:
                 raise ValueError(f"ambiguous MHTPW active job names: {duplicates}")

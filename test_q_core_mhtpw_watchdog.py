@@ -28,9 +28,22 @@ class MHTPWWatchdogTest(unittest.TestCase):
     def test_job_names_and_dependency_ids_are_exact(self) -> None:
         self.assertEqual(mod.logical_from_job_name("mhtpw_s1_s2025"), "s1:2025")
         self.assertEqual(mod.logical_from_job_name("mhtpw_10110_s42"), "s2:42:10110")
+        self.assertEqual(mod.logical_from_job_name("       mhtpw_s1_s42"), "s1:42")
         self.assertIsNone(mod.logical_from_job_name("mhtpw_imp_s42"))
         detail = "JobId=10 JobName=x Dependency=afterok:101:102:103(unfulfilled) WorkDir=/tmp"
         self.assertEqual(mod.dependency_job_ids(detail), ["101", "102", "103"])
+
+    def test_squeue_fixed_width_job_name_is_stripped(self) -> None:
+        result = SimpleNamespace(
+            returncode=0,
+            stdout="                                                                                                                                                                                            mhtpw_s1_s42|RUNNING|e16r3n[05-09]\n",
+            stderr="",
+        )
+        with patch.object(mod, "run_command", return_value=result):
+            status = mod.query_job("117602712")
+        self.assertEqual(status.name, "mhtpw_s1_s42")
+        self.assertEqual(mod.logical_from_job_name(status.name), "s1:42")
+        self.assertEqual(status.nodes, "e16r3n[05-09]")
 
     def test_modern_training_progress_is_semantic(self) -> None:
         with workspace_temp_dir() as tmp:
