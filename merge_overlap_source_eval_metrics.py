@@ -180,7 +180,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         "pangu2021_common_core": "#8E6BBE",
         "era5_2025_source_full": "#D95F02",
         "era5_2025_common_core": "#D95F02",
-        "tianji_t2nd_ifs_mean_softmax": "#B279A2",
+        "tianji_t2nd_ifs_mean_softmax": "#C44E52",
         "ensemble_mean_softmax": "#4C78A8",
         "ifs_diagnostic": "#2F2F2F",
     }

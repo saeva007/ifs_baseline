@@ -22,26 +22,26 @@ import pandas as pd
 
 
 METHODS: Sequence[Tuple[str, str, str]] = (
-    ("ifs", "VisGen (IFS inputs)", "#2E5A87"),
-    ("ifs_diagnostic", "IFS diagnostic VIS", "#4A4A4A"),
+    ("ifs", "VisGen (IFS inputs)", "#7A7A7A"),
+    ("ifs_diagnostic", "IFS diagnostic VIS", "#2F2F2F"),
 )
 
 PANELS: Sequence[Tuple[str, Sequence[Tuple[str, str]]]] = (
     (
         "Precision",
-        (("fog_precision", "Ultra-low\n(<500 m)"), ("mist_precision", "Moderate-low\n(500–1,000 m)"), ("low_vis_precision", "Low-vis event\n(<1,000 m)")),
+        (("fog_precision", "Ultra-low\n(<500 m)"), ("mist_precision", "Moderate-low\n(500-1000 m)"), ("low_vis_precision", "Low-vis event\n(<1000 m)")),
     ),
     (
         "Recall",
-        (("fog_pod", "Ultra-low\n(<500 m)"), ("mist_pod", "Moderate-low\n(500–1,000 m)"), ("low_vis_recall", "Low-vis event\n(<1,000 m)")),
+        (("fog_pod", "Ultra-low\n(<500 m)"), ("mist_pod", "Moderate-low\n(500-1000 m)"), ("low_vis_recall", "Low-vis event\n(<1000 m)")),
     ),
     (
         "F1 score",
-        (("fog_f1", "Ultra-low\n(<500 m)"), ("mist_f1", "Moderate-low\n(500–1,000 m)"), ("low_vis_f1", "Low-vis event\n(<1,000 m)")),
+        (("fog_f1", "Ultra-low\n(<500 m)"), ("mist_f1", "Moderate-low\n(500-1000 m)"), ("low_vis_f1", "Low-vis event\n(<1000 m)")),
     ),
     (
         "CSI",
-        (("fog_csi", "Ultra-low\n(<500 m)"), ("mist_csi", "Moderate-low\n(500–1,000 m)"), ("low_vis_csi", "Low-vis event\n(<1,000 m)")),
+        (("fog_csi", "Ultra-low\n(<500 m)"), ("mist_csi", "Moderate-low\n(500-1000 m)"), ("low_vis_csi", "Low-vis event\n(<1000 m)")),
     ),
 )
 
@@ -75,15 +75,24 @@ def setup_style() -> None:
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
             "svg.fonttype": "none",
             "pdf.fonttype": 42,
-            "font.size": 9.2,
-            "axes.titlesize": 11,
-            "axes.titleweight": "bold",
-            "axes.labelsize": 9.5,
+            "ps.fonttype": 42,
+            "font.size": 7.5,
+            "axes.labelsize": 8,
+            "axes.titlesize": 8.5,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 7.5,
+            "figure.dpi": 150,
+            "savefig.dpi": 600,
+            "savefig.bbox": "tight",
+            "axes.grid": True,
+            "grid.alpha": 0.18,
             "axes.spines.top": False,
             "axes.spines.right": False,
+            "axes.linewidth": 0.75,
             "axes.axisbelow": True,
         }
     )
@@ -160,56 +169,72 @@ def source_table(rows: Dict[str, pd.Series], metrics_csv: Path) -> pd.DataFrame:
 
 def draw(rows: Dict[str, pd.Series], out_dir: Path, stem: str, dpi: int, metrics_csv: Path) -> None:
     setup_style()
-    fig, axes = plt.subplots(2, 2, figsize=(10.9, 7.2))
-    fig.subplots_adjust(left=0.08, right=0.985, bottom=0.12, top=0.80, hspace=0.42, wspace=0.18)
-    width = 0.32
+    fig, axes = plt.subplots(2, 2, figsize=(11.8, 7.25), sharey=False)
+    fig.subplots_adjust(left=0.075, right=0.985, bottom=0.105, top=0.80, hspace=0.40, wspace=0.16)
+    width = min(0.13, 0.80 / len(METHODS))
     for panel_index, (ax, (title, metrics)) in enumerate(zip(axes.flat, PANELS)):
         x = np.arange(len(metrics), dtype=float)
         all_values = [metric_value(rows[source], metric) for source, _label, _color in METHODS for metric, _category in metrics]
         y_max = adaptive_upper(all_values)
         for method_index, (source, label, color) in enumerate(METHODS):
             values = [metric_value(rows[source], metric) for metric, _category in metrics]
-            offset = (method_index - 0.5) * width
+            offset = (method_index - (len(METHODS) - 1) / 2.0) * width
             bars = ax.bar(
                 x + offset,
-                values,
+                [value if np.isfinite(value) else 0.0 for value in values],
                 width * 0.92,
                 color=color,
                 edgecolor="white",
-                linewidth=0.55,
+                linewidth=0.35,
+                alpha=0.96,
+                zorder=3,
                 label=label if panel_index == 0 else None,
             )
             for bar, value in zip(bars, values):
-                if np.isfinite(value):
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        min(value + y_max * 0.025, y_max * 0.97),
-                        f"{value:.2f}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=8,
-                    )
-        ax.set_title(title, loc="left")
+                if not np.isfinite(value):
+                    bar.set_alpha(0.0)
+        ax.set_title(title, loc="left", fontweight="bold", pad=5)
         ax.set_xticks(x, [category for _metric, category in metrics])
         ax.set_ylim(0, y_max)
-        ax.grid(axis="y", alpha=0.24)
-        ax.text(-0.13, 1.06, "abcd"[panel_index], transform=ax.transAxes, fontsize=12, fontweight="bold")
+        ax.grid(axis="y", alpha=0.22, linewidth=0.6)
+        ax.grid(axis="x", visible=False)
+        ax.text(
+            -0.11,
+            1.04,
+            "abcd"[panel_index],
+            transform=ax.transAxes,
+            fontsize=10.5,
+            fontweight="bold",
+            va="bottom",
+        )
         if panel_index % 2 == 0:
             ax.set_ylabel("Score")
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.53, 0.91))
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=2,
+        frameon=False,
+        bbox_to_anchor=(0.53, 0.965),
+        columnspacing=1.15,
+        handlelength=1.6,
+    )
     fig.suptitle(
-        "A learned visibility operator recovers low-visibility signals from IFS forecast states",
-        fontsize=13,
+        "IFS-input VisGen versus IFS Diagnostic Visibility",
+        x=0.53,
+        y=0.995,
+        fontsize=11.2,
         fontweight="bold",
-        y=0.975,
     )
     fig.text(
-        0.08,
-        0.035,
-        "Same matched station–time evaluation; zero-based panel-specific ranges. Low-vis FPR is retained in the source-data table.",
-        fontsize=8,
+        0.985,
+        0.015,
+        "Same matched station-time samples; zero-based panel-specific ranges",
+        ha="right",
+        va="bottom",
+        fontsize=7.0,
         color="#555555",
     )
 
