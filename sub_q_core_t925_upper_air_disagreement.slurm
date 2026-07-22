@@ -35,11 +35,20 @@ PAPER_EVAL_DIR="${PAPER_EVAL_DIR:-${BASE}/paper_eval}"
 
 mkdir -p "${BASELINE_DIR}/logs"
 cd "${BASELINE_DIR}"
-source "${BASELINE_DIR}/activate_eval_torch_runtime.sh"
+PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "ERROR: Python runtime is not executable: ${PYTHON_BIN}" >&2
+  exit 2
+fi
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
+
+# This is a CPU-only table/figure diagnostic.  Deliberately do not import
+# Torch: loading the cluster HIP runtime is unnecessary and can conflict with
+# the system libgalaxyhip selected on some nodes.
+"${PYTHON_BIN}" -c 'import sys, numpy, pandas, matplotlib; print(f"[analysis-env] python={sys.executable} numpy={numpy.__version__} pandas={pandas.__version__} matplotlib={matplotlib.__version__}")'
 
 for path in \
   "${EVAL_ROOT}/seed_42/per_sample_${PANGU_TAG}.csv" \
@@ -52,7 +61,7 @@ do
 done
 
 CMD=(
-  python "${BASELINE_DIR}/analyze_q_core_t925_upper_air_disagreement.py"
+  "${PYTHON_BIN}" "${BASELINE_DIR}/analyze_q_core_t925_upper_air_disagreement.py"
   --eval-root "${EVAL_ROOT}"
   --pangu-data-dir "${PANGU_DATA_DIR}"
   --tianji-data-dir "${TIANJI_DATA_DIR}"

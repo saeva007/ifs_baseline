@@ -33,6 +33,18 @@ def workspace_temp_dir():
 
 
 class T925UpperAirDisagreementTest(unittest.TestCase):
+    def test_cpu_slurm_entrypoints_do_not_bootstrap_torch(self) -> None:
+        root = Path(__file__).resolve().parent
+        for filename in (
+            "sub_q_core_t925_upper_air_disagreement.slurm",
+            "sub_pangu_qcore_t925_evidence_story.slurm",
+        ):
+            text = (root / filename).read_text(encoding="utf-8")
+            self.assertNotIn("activate_eval_torch_runtime.sh", text, filename)
+            self.assertNotIn("import torch", text, filename)
+            self.assertIn('PYTHON_BIN="${PYTHON_BIN:-', text, filename)
+            self.assertIn('"${PYTHON_BIN}"', text, filename)
+
     def test_common_reference_alignment_is_explicit_and_bounded(self) -> None:
         events = pd.DataFrame(
             {

@@ -25,11 +25,18 @@ DPI="${DPI:-600}"
 
 mkdir -p "${BASELINE_DIR}/logs"
 cd "${BASELINE_DIR}"
-source "${BASELINE_DIR}/activate_eval_torch_runtime.sh"
+PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "ERROR: Python runtime is not executable: ${PYTHON_BIN}" >&2
+  exit 2
+fi
 export PYTHONUNBUFFERED=1
 
+# Figure export is CPU-only and must not bootstrap the Torch/HIP runtime.
+"${PYTHON_BIN}" -c 'import sys, numpy, pandas, matplotlib; print(f"[plot-env] python={sys.executable} numpy={numpy.__version__} pandas={pandas.__version__} matplotlib={matplotlib.__version__}")'
+
 CMD=(
-  python "${BASELINE_DIR}/plot_pangu_qcore_t925_evidence_story.py"
+  "${PYTHON_BIN}" "${BASELINE_DIR}/plot_pangu_qcore_t925_evidence_story.py"
   --fair-eval-root "${FAIR_EVAL_ROOT}"
   --paired-quality-dir "${PAIRED_QUALITY_DIR}"
   --event-analysis-dir "${EVENT_ANALYSIS_DIR}"
