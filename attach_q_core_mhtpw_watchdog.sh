@@ -1,0 +1,45 @@
+#!/bin/bash
+# Inspect and optionally attach an independent CPU watchdog to one already
+# submitted q-core+T925 MHTPW chain.
+
+set -euo pipefail
+
+BASELINE_DIR="${BASELINE_DIR:-/public/home/putianshu/vis_mlp/ifs_baseline}"
+RUN_TAG="${RUN_TAG:?RUN_TAG is required}"
+EVAL_ROOT="${EVAL_ROOT:-/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/q_core_t925_factorial/${RUN_TAG}}"
+CONFIRM_WATCH="${CONFIRM_WATCH:-NO}"
+WATCH_PYTHON="${WATCH_PYTHON:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
+if [[ ! -x "${WATCH_PYTHON}" ]]; then
+  WATCH_PYTHON="$(command -v python3 || command -v python)"
+fi
+
+cd "${BASELINE_DIR}"
+test -s "${EVAL_ROOT}/submission_manifest_${RUN_TAG}.txt" || {
+  echo "ERROR: submission manifest not found under ${EVAL_ROOT}" >&2
+  exit 2
+}
+
+echo "Inspecting the exact submitted chain; no cancellation or submission occurs in this step."
+RUN_TAG="${RUN_TAG}" EVAL_ROOT="${EVAL_ROOT}" BASELINE_DIR="${BASELINE_DIR}" \
+  WATCH_AUTO_RETRY=0 "${WATCH_PYTHON}" watch_q_core_mhtpw_chain.py --preflight
+
+if [[ "${CONFIRM_WATCH}" != "YES" ]]; then
+  echo
+  echo "Inspection only. If the mapping is correct, rerun with CONFIRM_WATCH=YES."
+  exit 0
+fi
+
+WATCH_JOB="$(sbatch --parsable \
+  --export="ALL,RUN_TAG=${RUN_TAG},EVAL_ROOT=${EVAL_ROOT},BASELINE_DIR=${BASELINE_DIR},WATCH_AUTO_RETRY=1,WATCH_ADOPT_MISSING=1,WATCH_POLL_SECONDS=${WATCH_POLL_SECONDS:-180},WATCH_STARTUP_STALE_MINUTES=${WATCH_STARTUP_STALE_MINUTES:-45},WATCH_DATA_STALE_MINUTES=${WATCH_DATA_STALE_MINUTES:-60},WATCH_TRAIN_STALE_MINUTES=${WATCH_TRAIN_STALE_MINUTES:-45},WATCH_VALIDATION_STALE_MINUTES=${WATCH_VALIDATION_STALE_MINUTES:-120},WATCH_CONFIRMATIONS=${WATCH_CONFIRMATIONS:-2},WATCH_RECHECK_SECONDS=${WATCH_RECHECK_SECONDS:-20},WATCH_MAX_RETRIES=${WATCH_MAX_RETRIES:-2},WATCH_EXCLUDE_FAILED_NODES=${WATCH_EXCLUDE_FAILED_NODES:-1}" \
+  sub_q_core_mhtpw_watchdog.slurm)"
+WATCH_JOB="${WATCH_JOB%%;*}"
+[[ "${WATCH_JOB}" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid watchdog JobID=${WATCH_JOB}" >&2; exit 2; }
+
+STATE_FILE="${EVAL_ROOT}/watchdog/watchdog_job.env"
+mkdir -p "$(dirname "${STATE_FILE}")"
+printf 'RUN_TAG=%q\nEVAL_ROOT=%q\nWATCH_JOB=%q\n' "${RUN_TAG}" "${EVAL_ROOT}" "${WATCH_JOB}" > "${STATE_FILE}"
+
+echo "WATCH_JOB=${WATCH_JOB}"
+echo "STATE_FILE=${STATE_FILE}"
+echo "Watch log: tail -f ${BASELINE_DIR}/logs/${WATCH_JOB}_mhtpw_watch.out"
+echo "Stopping only the watchdog is safe: scancel ${WATCH_JOB}"

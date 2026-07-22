@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Regression tests for the scoped MHTPW Slurm watchdog."""
+
+from __future__ import annotations
+
+import shutil
+import unittest
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import watch_q_core_mhtpw_chain as mod
+
+
+@contextmanager
+def workspace_temp_dir():
+    path = Path(__file__).resolve().parent / f".tmp_mhtpw_watchdog_{uuid.uuid4().hex}"
+    path.mkdir()
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+class MHTPWWatchdogTest(unittest.TestCase):
+    def test_job_names_and_dependency_ids_are_exact(self) -> None:
+        self.assertEqual(mod.logical_from_job_name("mhtpw_s1_s2025"), "s1:2025")
+        self.assertEqual(mod.logical_from_job_name("mhtpw_10110_s42"), "s2:42:10110")
+        self.assertIsNone(mod.logical_from_job_name("mhtpw_imp_s42"))
+        detail = "JobId=10 JobName=x Dependency=afterok:101:102:103(unfulfilled) WorkDir=/tmp"
+        self.assertEqual(mod.dependency_job_ids(detail), ["101", "102", "103"])
+
+    def test_modern_training_progress_is_semantic(self) -> None:
+        with workspace_temp_dir() as tmp:
+            path = tmp / "job.out"
+            path.write_text(
+                "RUN_ID          : exp_qcore_hybrid_demo_mhtpw00000_seed42_pm10_pm25\n"
+                "[S2_PhaseA] start steps=12000 trainable=head\n"
+                "[S2_PhaseA] step=50/12000 loss=0.123 at=2026-07-22T00:00:00+08:00\n"
+                "[S2_PhaseA] validation start step=50/12000 at=2026-07-22T00:01:00+08:00\n",
+                encoding="utf-8",
+            )
+            progress = mod.parse_progress(path)
+            self.assertEqual(progress.phase, "validation")
+            self.assertIn("validation:S2_PhaseA:50", progress.token)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("[S2_PhaseB] step=100/40000 loss=0.111 at=2026-07-22T00:10:00+08:00\n")
+            progress = mod.parse_progress(path)
+            self.assertEqual(progress.phase, "training")
+            self.assertIn("step:S2_PhaseB:100/40000", progress.token)
+
+    def test_unrelated_startup_output_does_not_fake_progress(self) -> None:
+        with workspace_temp_dir() as tmp:
+            path = tmp / "job.out"
+            path.write_text("WARNING: NUMA setting\n", encoding="utf-8")
+            first = mod.parse_progress(path)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("WARNING: another transport warning\n")
+            second = mod.parse_progress(path)
+            self.assertEqual(first.phase, "startup")
+            self.assertEqual(first.token, second.token)
+
+    def test_artifact_triplet_and_quarantine_are_scoped(self) -> None:
+        with workspace_temp_dir() as tmp:
+            ckpt = tmp
+            run_id = "exp_qcore_hybrid_demo_mhtpw00000_seed42_pm10_pm25"
+            files = [
+                ckpt / f"{run_id}_S2_PhaseB_best_score.pt",
+                ckpt / f"{run_id}_static_rnn_config.json",
+                ckpt / f"robust_scaler_{run_id}_s2_w12_dyn18_pm.pkl",
+            ]
+            for path in files:
+                path.write_bytes(b"x")
+            self.assertTrue(mod.artifact_complete(ckpt, run_id, "s2"))
+            moved = mod.quarantine_artifacts(ckpt, "demo", "s2:42:00000", 1)
+            self.assertEqual(len(moved), 3)
+            self.assertFalse(mod.artifact_complete(ckpt, run_id, "s2"))
+            self.assertTrue(all(Path(path).is_file() for path in moved))
+
+    def test_confirmed_s2_stall_cancels_only_that_job(self) -> None:
+        watch = object.__new__(mod.ChainWatch)
+        watch.args = SimpleNamespace(
+            auto_retry=True,
+            max_retries=2,
+            recheck_seconds=10,
+            cancel_wait_seconds=1,
+            exclude_failed_nodes=True,
+        )
+        watch.run_tag = "demo"
+        watch.checkpoint_dir = Path("C:/unused")
+        watch.state = {
+            "generation": 0,
+            "jobs": {"s2:42:00000": "123"},
+            "retries": {},
+            "watchdog_cancelled_job_ids": [],
+            "progress": {},
+        }
+        watch.log_action = lambda *args, **kwargs: None
+        watch.save = lambda: None
+        progress = mod.Progress("training", "step:S2_PhaseA:100/12000:best0", "")
+        watch.current_progress = lambda logical, job_id: progress
+        statuses = [
+            mod.JobStatus("123", "mhtpw_00000_s42", "RUNNING", "n1", "squeue"),
+            mod.JobStatus("123", "mhtpw_00000_s42", "RUNNING", "n1", "squeue"),
+            mod.JobStatus("123", "mhtpw_00000_s42", "CANCELLED", "n1", "sacct"),
+        ]
+        commands = []
+
+        def fake_command(args, **kwargs):
+            commands.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(mod, "query_job", side_effect=statuses),
+            patch.object(mod.time, "sleep", return_value=None),
+            patch.object(mod, "run_command", side_effect=fake_command),
+            patch.object(mod, "quarantine_artifacts", return_value=[]),
+        ):
+            self.assertTrue(watch.cancel_stalled("s2:42:00000", "123", progress))
+        self.assertIn(["scancel", "123"], commands)
+        self.assertEqual(watch.state["watchdog_cancelled_job_ids"], ["123"])
+        self.assertEqual(watch.state["failed_node_lists"], ["n1"])
+        self.assertTrue(watch.state["needs_resume"])
+
+    def test_dead_s1_cleanup_is_limited_to_same_seed_dependents(self) -> None:
+        watch = object.__new__(mod.ChainWatch)
+        watch.args = SimpleNamespace(auto_retry=True, cancel_wait_seconds=1)
+        watch.run_tag = "demo"
+        watch.checkpoint_dir = Path("C:/unused")
+        watch.state = {
+            "generation": 0,
+            "jobs": {
+                "s1:42": "100",
+                "s2:42:00000": "101",
+                "s2:42:00001": "102",
+                "s2:2025:00000": "201",
+            },
+            "watchdog_cancelled_job_ids": [],
+        }
+        watch.log_action = lambda *args, **kwargs: None
+        status_by_id = {
+            "101": ["PENDING", "CANCELLED"],
+            "102": ["PENDING", "CANCELLED"],
+            "201": ["PENDING"],
+        }
+
+        def fake_query(job_id):
+            state = status_by_id[str(job_id)].pop(0)
+            return mod.JobStatus(str(job_id), "x", state, "", "squeue" if state == "PENDING" else "sacct")
+
+        commands = []
+
+        def fake_command(args, **kwargs):
+            commands.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(mod, "query_job", side_effect=fake_query),
+            patch.object(mod, "scontrol_detail", return_value="Dependency=afterok:100"),
+            patch.object(mod, "run_command", side_effect=fake_command),
+            patch.object(mod, "quarantine_artifacts", return_value=[]),
+        ):
+            watch.cancel_dead_s1_children("s1:42", "100", "NODE_FAIL")
+        self.assertIn(["scancel", "101", "102"], commands)
+        self.assertNotIn("201", watch.state["watchdog_cancelled_job_ids"])
+        self.assertEqual(watch.state["watchdog_cancelled_job_ids"], ["101", "102"])
+
+    def test_transient_terminal_artifacts_are_quarantined_once(self) -> None:
+        watch = object.__new__(mod.ChainWatch)
+        watch.args = SimpleNamespace(auto_retry=True, exclude_failed_nodes=True)
+        watch.run_tag = "demo"
+        watch.checkpoint_dir = Path("C:/unused")
+        watch.state = {
+            "generation": 0,
+            "jobs": {"s2:42:00000": "123"},
+            "retries": {},
+            "watchdog_cancelled_job_ids": [],
+            "progress": {},
+        }
+        watch.log_action = lambda *args, **kwargs: None
+        watch.save = lambda: None
+        watch.cancel_dead_s1_children = lambda *args, **kwargs: None
+        watch.missing_artifacts = lambda: ["s2:42:00000"]
+        status = mod.JobStatus("123", "mhtpw_00000_s42", "NODE_FAIL", "n2", "sacct")
+        quarantines = []
+
+        def fake_quarantine(*args):
+            quarantines.append(args)
+            return ["moved"]
+
+        with (
+            patch.object(mod, "query_job", return_value=status),
+            patch.object(mod, "quarantine_artifacts", side_effect=fake_quarantine),
+        ):
+            # Other generation jobs would normally keep the controller from
+            # resubmitting in this cycle. Exercise the terminal processing
+            # twice and assert the same failed attempt is handled once.
+            watch.state["jobs"]["s2:2025:00000"] = "456"
+            active = mod.JobStatus("456", "mhtpw_00000_s2025", "PENDING", "", "squeue")
+            with patch.object(mod, "query_job", side_effect=[status, active, status, active]):
+                self.assertEqual(watch.cycle(), (False, True))
+                self.assertEqual(watch.cycle(), (False, True))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual(watch.state["failed_node_lists"], ["n2"])
+
+
+if __name__ == "__main__":
+    unittest.main()

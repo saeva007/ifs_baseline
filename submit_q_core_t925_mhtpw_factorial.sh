@@ -26,6 +26,7 @@ SEEDS="${SEEDS:-42:2025:20260702}"
 DRY_RUN="${DRY_RUN:-0}"
 RESUME_EXISTING_RUN="${RESUME_EXISTING_RUN:-0}"
 RUN_IMPORTANCE="${RUN_IMPORTANCE:-1}"
+TRAIN_EXCLUDE_NODES="${TRAIN_EXCLUDE_NODES:-}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
 LIMIT_SAMPLES="${LIMIT_SAMPLES:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
@@ -209,6 +210,7 @@ for seed_raw in "${seed_array[@]}"; do
     echo "[RESUME] S1 ${seed}"
   else
     s1_args=(--job-name="mhtpw_s1_s${seed}" --export="ALL,EXPERIMENT=s1_q_core_t925_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
+    [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s1_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${base_dep}" ]] || s1_args+=("${base_dep}")
     s1_jobs[${seed}]="$(submit "s1_seed${seed}" "${s1_args[@]}" sub_ifs_overlap_baseline.slurm)"
     scheduled_training="$(append_dep "${scheduled_training}" "${s1_jobs[${seed}]}")"
@@ -230,6 +232,7 @@ for seed_raw in "${seed_array[@]}"; do
     deps="$(append_dep "${deps}" "${s1_jobs[${seed}]}")"
     dep="$(dep_arg "${deps}")"
     s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1")
+    [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s2_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${dep}" ]] || s2_args+=("${dep}")
     s2_jobs[${seed}_${mask}]="$(submit "s2_${mask}_seed${seed}" "${s2_args[@]}" sub_ifs_overlap_baseline.slurm)"
     scheduled_training="$(append_dep "${scheduled_training}" "${s2_jobs[${seed}_${mask}]}")"
@@ -267,6 +270,16 @@ analysis_args=(--job-name=mhtpw_analysis --export="ALL,RUN_TAG=${RUN_TAG},MODE=a
 [[ -z "${analysis_dep}" ]] || analysis_args+=("${analysis_dep}")
 analysis_job="$(submit factorial_analysis "${analysis_args[@]}" sub_q_core_hybrid_factorial_eval.slurm)"
 
+eval_job_ids=""
+importance_job_ids=""
+for seed_raw in "${seed_array[@]}"; do
+  seed="${seed_raw//[[:space:]]/}"
+  eval_job_ids="$(append_dep "${eval_job_ids}" "${eval_jobs[${seed}]}")"
+  if [[ "${RUN_IMPORTANCE}" == "1" ]]; then
+    importance_job_ids="$(append_dep "${importance_job_ids}" "${importance_jobs[${seed}]}")"
+  fi
+done
+
 if [[ "${DRY_RUN}" != "1" ]]; then
   mkdir -p "${EVAL_ROOT}"
   {
@@ -284,9 +297,22 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "base_data_audit_job=${base_audit_job}"
     echo "hybrid_build_job=${hybrid_build_job}"
     echo "hybrid_audit_job=${hybrid_audit_job}"
+    echo "training_job_ids=${scheduled_training}"
     echo "artifact_audit_job=${artifact_job}"
+    echo "eval_job_ids=${eval_job_ids}"
+    echo "importance_job_ids=${importance_job_ids}"
     echo "factorial_analysis_job=${analysis_job}"
     echo "analysis_dir=${ANALYSIS_DIR}"
+    echo "run_importance=${RUN_IMPORTANCE}"
+    echo "bootstrap_iters=${BOOTSTRAP_ITERS}"
+    echo "bootstrap_max_rows=${BOOTSTRAP_MAX_ROWS}"
+    echo "limit_samples=${LIMIT_SAMPLES}"
+    echo "obs_root=${OBS_ROOT}"
+    echo "era5_data_dir=${ERA5_DATA_DIR}"
+    echo "s1_steps=${LOWVIS_RNN_S1_STEPS:-15000}"
+    echo "s2_a_steps=${LOWVIS_RNN_S2_A_STEPS:-12000}"
+    echo "s2_b_steps=${LOWVIS_RNN_S2_B_STEPS:-40000}"
+    echo "train_exclude_nodes=${TRAIN_EXCLUDE_NODES}"
     echo "claim_limit=source_block_predictive_attribution_not_isolated_variable_causality"
   } > "${EVAL_ROOT}/submission_manifest_${RUN_TAG}.txt"
 fi

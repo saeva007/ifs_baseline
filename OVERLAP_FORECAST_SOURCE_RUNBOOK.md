@@ -612,6 +612,68 @@ If a subset of training jobs fails, rerun the same command with
 all 32 hybrid datasets are re-audited, and only incomplete models are
 resubmitted.
 
+#### Attach automatic stall recovery after the chain is already submitted
+
+The manual resume flag does not detect a job that remains `RUNNING` while its
+training step, validation marker, or initialization state has stopped moving.
+For the 99-model formal matrix, attach the independent CPU watchdog after the
+initial submission. It scopes itself to one `RUN_TAG` and reconstructs the
+first generation from that run's recorded artifact-audit dependency; it never
+scans or modifies unrelated training families.
+
+The first command is inspection-only:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+Check that the report identifies the intended run, 99 expected training rows,
+and only `mhtpw_s1_*` / `mhtpw_<mask>_*` jobs. Then attach automatic recovery:
+
+```bash
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+CONFIRM_WATCH=YES \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+The watchdog requires two repeated semantic-stall confirmations plus a final
+authoritative recheck before cancellation. Defaults are 45 min for startup,
+60 min for data/model initialization, 45 min for training steps, and 120 min
+for validation. `PENDING`, `CONFIGURING`, ordinary queue delay, and changing
+training-step tokens are never cancelled. A stalled S2 is cancelled alone; a
+stalled S1 is cancelled together with only its still-dependent S2 jobs. Partial
+files for the cancelled run ID are moved under
+`checkpoints/watchdog_quarantine/<RUN_TAG>/` rather than silently accepted.
+The confirmed stalled allocation or transient failed NodeList is also excluded
+from replacement training by default, reducing repeated RCCL hangs on the same
+nodes.
+
+After every other job in that generation becomes terminal, the watchdog calls
+the tracked launcher with `RESUME_EXISTING_RUN=1`. Complete checkpoint/scaler/
+config triplets are reused; only missing training is submitted. The launcher
+then records fresh artifact-audit, evaluation, endpoint-importance, and final
+analysis JobIDs. `NODE_FAIL`, `PREEMPTED`, and `BOOT_FAIL` are eligible for the
+same bounded recovery. `FAILED`, OOM, TIMEOUT, ambiguous job identities, query
+errors, and downstream analysis failures stop safely for diagnosis instead of
+being retried blindly. The default limit is two attempts per logical model.
+
+Persistent records are under `<EVAL_ROOT>/watchdog/`:
+
+- `mhtpw_watchdog_state.json`: current generation, progress tokens, retry
+  counts, and any blocking reason;
+- `mhtpw_watchdog_actions.tsv`: append-only actions and cancellation evidence;
+- `resolved_submission_manifest.txt`: the final dependency chain after a
+  recovery;
+- `watchdog_job.env`: the CPU watchdog JobID.
+
+Stopping the watchdog does not cancel any managed training job. If its
+240-hour allocation ends while the experiment is still queued/running, rerun
+the same confirmed attach command; the persistent state and single-run lock
+prevent a second active controller.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do

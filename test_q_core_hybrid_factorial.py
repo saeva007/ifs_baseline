@@ -490,6 +490,7 @@ class ArtifactAndAleTest(unittest.TestCase):
                 "DRY_RUN": "1",
                 "BASELINE_DIR": str(repo),
                 "BASE": str(repo.parent),
+                "TRAIN_EXCLUDE_NODES": "e16r3n05",
             }
         )
         result = subprocess.run(
@@ -503,6 +504,7 @@ class ArtifactAndAleTest(unittest.TestCase):
         self.assertEqual(output.count("[DRY-RUN]"), 113)
         self.assertEqual(output.count("EXPERIMENT=s1_q_core_t925_no_rh2m"), 3)
         self.assertEqual(output.count("EXPERIMENT=s2_q_core_t925_mhtpw"), 96)
+        self.assertEqual(output.count("--exclude=e16r3n05"), 99)
         self.assertEqual(output.count("sub_multi_source_feature_importance.slurm"), 3)
         self.assertIn("GROUP_PROFILE=mhtpw", output)
         self.assertIn("GROUPS=M:Q1000+DP1000;H:T925+Q925+DP925+RH925", output)
