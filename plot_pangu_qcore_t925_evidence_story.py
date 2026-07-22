@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 import matplotlib
 
@@ -21,9 +21,51 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 import plot_pangu_qcore_mechanism_ppt as story
 from analyze_q_core_t925_upper_air_disagreement import plot_summary as plot_upper_air
+
+
+PRESSURE_FIGURE_SPECS: Tuple[Mapping[str, str], ...] = (
+    {
+        "feature": "T_925",
+        "label": "925-hPa temperature",
+        "title": "925-hPa Temperature RMSE",
+        "unit": "K",
+        "output": "07a_t925_quality",
+    },
+    {
+        "feature": "Q_1000",
+        "label": "1000-hPa specific humidity",
+        "title": "1000-hPa Specific-humidity RMSE",
+        "unit": r"g kg$^{-1}$",
+        "output": "07b_q1000_quality",
+    },
+    {
+        "feature": "Q_925",
+        "label": "925-hPa specific humidity",
+        "title": "925-hPa Specific-humidity RMSE",
+        "unit": r"g kg$^{-1}$",
+        "output": "07c_q925_quality",
+    },
+    {
+        "feature": "UV_925_VECTOR",
+        "label": "925-hPa vector wind",
+        "title": "925-hPa Vector-wind RMSE",
+        "unit": r"m s$^{-1}$",
+        "output": "07d_uv925_quality",
+    },
+)
+PRESSURE_SCOPES = ("all_paired_test", "true_low_visibility")
+PRESSURE_SCOPE_LABELS = {
+    "all_paired_test": "All test samples",
+    "true_low_visibility": "Observed visibility <1 km",
+}
+PRESSURE_SCOPE_MARKERS = {
+    "all_paired_test": "o",
+    "true_low_visibility": "D",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,120 +168,271 @@ def plot_t925_flow(
     )
 
 
-def t925_quality_source(pressure: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for scope in ("all_paired_test", "true_low_visibility"):
-        part = pressure[(pressure["feature"] == "T_925") & (pressure["scope"] == scope)]
-        if len(part) != 1:
-            raise ValueError(f"Expected one T925 pressure-quality row for {scope}")
-        row = part.iloc[0]
-        for source in ("pangu", "tianji"):
+def pressure_rmse_source(pressure: pd.DataFrame) -> pd.DataFrame:
+    required = [
+        "feature",
+        "scope",
+        "pangu",
+        "tianji",
+        "pangu_ci_low",
+        "pangu_ci_high",
+        "tianji_ci_low",
+        "tianji_ci_high",
+        "delta_pangu_minus_tianji",
+        "delta_ci_low",
+        "delta_ci_high",
+        "n",
+        "represented_utc_dates",
+    ]
+    require_columns(pressure, required, "pressure-level paired quality")
+    rows: List[Dict[str, object]] = []
+    for spec in PRESSURE_FIGURE_SPECS:
+        for scope in PRESSURE_SCOPES:
+            part = pressure[
+                (pressure["feature"] == spec["feature"])
+                & (pressure["scope"] == scope)
+            ]
+            if len(part) != 1:
+                raise ValueError(
+                    f"Expected one pressure-quality row for {spec['feature']}/{scope}"
+                )
+            row = part.iloc[0]
+            for source_key in ("pangu", "tianji"):
+                rows.append(
+                    {
+                        **spec,
+                        "scope": scope,
+                        "scope_label": PRESSURE_SCOPE_LABELS[scope],
+                        "source": source_key,
+                        "rmse": float(row[source_key]),
+                        "ci_low": float(row[f"{source_key}_ci_low"]),
+                        "ci_high": float(row[f"{source_key}_ci_high"]),
+                        "pangu_minus_tianji": float(
+                            row["delta_pangu_minus_tianji"]
+                        ),
+                        "delta_ci_low": float(row["delta_ci_low"]),
+                        "delta_ci_high": float(row["delta_ci_high"]),
+                        "n": int(row["n"]),
+                        "represented_utc_dates": int(
+                            row["represented_utc_dates"]
+                        ),
+                        "reference": "ERA5 reference analysis",
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def pressure_ratio_source(pressure: pd.DataFrame) -> pd.DataFrame:
+    ratio_columns = [
+        "tianji_to_pangu_ratio",
+        "tianji_to_pangu_ratio_ci_low",
+        "tianji_to_pangu_ratio_ci_high",
+        "valid_relative_bootstrap_draws",
+    ]
+    require_columns(
+        pressure,
+        ratio_columns,
+        "pressure-level quality; rerun the paired-quality analysis for exact paired RMSE-ratio CIs",
+    )
+    rows: List[Dict[str, object]] = []
+    for spec in PRESSURE_FIGURE_SPECS:
+        for scope in PRESSURE_SCOPES:
+            part = pressure[
+                (pressure["feature"] == spec["feature"])
+                & (pressure["scope"] == scope)
+            ]
+            if len(part) != 1:
+                raise ValueError(
+                    f"Expected one pressure-ratio row for {spec['feature']}/{scope}"
+                )
+            row = part.iloc[0]
+            ratio = float(row["tianji_to_pangu_ratio"])
+            expected = float(row["tianji"]) / float(row["pangu"])
+            if not np.isclose(ratio, expected, rtol=1.0e-10, atol=1.0e-12):
+                raise ValueError(f"RMSE ratio identity failed for {spec['feature']}/{scope}")
             rows.append(
                 {
-                    "feature": "T_925",
+                    **spec,
                     "scope": scope,
-                    "source": source,
-                    "rmse": float(row[source]),
-                    "ci_low": float(row[f"{source}_ci_low"]),
-                    "ci_high": float(row[f"{source}_ci_high"]),
-                    "pangu_minus_tianji": float(row["delta_pangu_minus_tianji"]),
-                    "delta_ci_low": float(row["delta_ci_low"]),
-                    "delta_ci_high": float(row["delta_ci_high"]),
+                    "scope_label": PRESSURE_SCOPE_LABELS[scope],
+                    "tianji_to_pangu_rmse_ratio": ratio,
+                    "ratio_ci_low": float(row["tianji_to_pangu_ratio_ci_low"]),
+                    "ratio_ci_high": float(row["tianji_to_pangu_ratio_ci_high"]),
+                    "pangu_rmse": float(row["pangu"]),
+                    "tianji_rmse": float(row["tianji"]),
                     "n": int(row["n"]),
                     "represented_utc_dates": int(row["represented_utc_dates"]),
+                    "valid_relative_bootstrap_draws": int(
+                        row["valid_relative_bootstrap_draws"]
+                    ),
                     "reference": "ERA5 reference analysis",
                 }
             )
     return pd.DataFrame(rows)
 
 
-def plot_t925_quality(
+def plot_pressure_ratio_overview(
     source: pd.DataFrame, out_dir: Path, formats: Sequence[str], dpi: int
 ) -> List[str]:
-    scopes = ("all_paired_test", "true_low_visibility")
-    base_y = {scope: float(1 - index) for index, scope in enumerate(scopes)}
+    fig, ax = plt.subplots(figsize=story.FIGURE_SIZES["pressure"])
+    fig.subplots_adjust(left=0.31, right=0.97, top=0.76, bottom=0.24)
+    y_base = {
+        str(spec["feature"]): float(len(PRESSURE_FIGURE_SPECS) - 1 - index)
+        for index, spec in enumerate(PRESSURE_FIGURE_SPECS)
+    }
+    offsets = {"all_paired_test": 0.11, "true_low_visibility": -0.11}
+    for row in source.itertuples(index=False):
+        ratio = float(row.tianji_to_pangu_rmse_ratio)
+        low = min(float(row.ratio_ci_low), ratio)
+        high = max(float(row.ratio_ci_high), ratio)
+        if low <= 1.0 <= high:
+            color = "#697077"
+        elif ratio < 1.0:
+            color = story.TIANJI
+        else:
+            color = story.PANGU_DARK
+        y = y_base[str(row.feature)] + offsets[str(row.scope)]
+        ax.plot([low, high], [y, y], color=color, linewidth=1.8, solid_capstyle="round")
+        ax.scatter(
+            ratio,
+            y,
+            s=44,
+            marker=PRESSURE_SCOPE_MARKERS[str(row.scope)],
+            color=color,
+            edgecolor="white",
+            linewidth=0.65,
+            zorder=3,
+        )
+    ax.axvline(1.0, color=story.INK, linewidth=0.9)
+    ax.set_xscale("log", base=2)
+    lows = source["ratio_ci_low"].to_numpy(dtype=float)
+    highs = source["ratio_ci_high"].to_numpy(dtype=float)
+    if np.any(lows <= 0.0):
+        raise ValueError("RMSE-ratio confidence intervals must be positive")
+    lo_log = float(np.log2(lows.min()))
+    hi_log = float(np.log2(highs.max()))
+    span = max(hi_log - lo_log, 0.6)
+    ax.set_xlim(2.0 ** (lo_log - 0.10 * span), 2.0 ** (hi_log + 0.10 * span))
+    ticks = np.asarray([0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0])
+    visible = ticks[(ticks >= ax.get_xlim()[0]) & (ticks <= ax.get_xlim()[1])]
+    ax.set_xticks(visible, [f"{value:g}" for value in visible])
+    ax.set_yticks(
+        [y_base[str(spec["feature"])] for spec in PRESSURE_FIGURE_SPECS],
+        [str(spec["label"]) for spec in PRESSURE_FIGURE_SPECS],
+    )
+    ax.set_ylim(-0.48, len(PRESSURE_FIGURE_SPECS) - 0.50)
+    ax.set_xlabel("Tianji RMSE / Pangu RMSE (log scale)")
+    story.add_mainline_figure_title(fig, "Pressure-Level RMSE Ratios", y=0.95)
+    ax.text(
+        0.01,
+        1.025,
+        "← Tianji closer",
+        transform=ax.transAxes,
+        fontsize=7.0,
+        fontweight="bold",
+        color=story.TIANJI,
+        ha="left",
+    )
+    ax.text(
+        0.99,
+        1.025,
+        "Pangu closer →",
+        transform=ax.transAxes,
+        fontsize=7.0,
+        fontweight="bold",
+        color=story.PANGU_DARK,
+        ha="right",
+    )
+    scope_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=PRESSURE_SCOPE_MARKERS[scope],
+            linestyle="none",
+            markersize=5.2,
+            markerfacecolor=story.INK,
+            markeredgecolor="white",
+            label=PRESSURE_SCOPE_LABELS[scope],
+        )
+        for scope in PRESSURE_SCOPES
+    ]
+    ax.legend(
+        handles=scope_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.20),
+        ncol=2,
+        handletextpad=0.4,
+        columnspacing=1.2,
+    )
+    story.style_axis(ax, horizontal_grid=False, vertical_grid=True)
+    fig.text(
+        0.5,
+        0.055,
+        "Pointwise RMSE against ERA5 reference analysis; 95% CIs use paired UTC-date bootstrap.",
+        ha="center",
+        fontsize=6.7,
+        color="#4A5056",
+    )
+    return story.save_figure(fig, out_dir / "07_pressure_level_quality", formats, dpi)
+
+
+def plot_pressure_feature_rmse(
+    source: pd.DataFrame,
+    spec: Mapping[str, str],
+    out_dir: Path,
+    formats: Sequence[str],
+    dpi: int,
+) -> List[str]:
+    feature = str(spec["feature"])
+    part = source[source["feature"] == feature]
+    if len(part) != 2 * len(PRESSURE_SCOPES):
+        raise ValueError(f"Incomplete absolute RMSE source table for {feature}")
+    y_base = {
+        scope: float(len(PRESSURE_SCOPES) - 1 - index)
+        for index, scope in enumerate(PRESSURE_SCOPES)
+    }
     offsets = {"pangu": 0.10, "tianji": -0.10}
-    fig, ax = plt.subplots(figsize=story.FIGURE_SIZES["surface"])
-    fig.subplots_adjust(left=0.23, right=0.72, top=0.79, bottom=0.22)
+    fig, ax = plt.subplots(figsize=(story.SINGLE_COLUMN_WIDTH, 2.75))
+    fig.subplots_adjust(left=0.37, right=0.97, top=0.76, bottom=0.24)
     for source_key in ("pangu", "tianji"):
-        for row in source[source["source"] == source_key].itertuples(index=False):
+        for row in part[part["source"] == source_key].itertuples(index=False):
             estimate = float(row.rmse)
             low = min(float(row.ci_low), estimate)
             high = max(float(row.ci_high), estimate)
             ax.errorbar(
                 estimate,
-                base_y[str(row.scope)] + offsets[source_key],
+                y_base[str(row.scope)] + offsets[source_key],
                 xerr=np.asarray([[estimate - low], [high - estimate]]),
                 fmt=story.SOURCE_MARKERS[source_key],
-                markersize=5.8,
+                markersize=5.5,
                 color=story.SOURCE_COLORS[source_key],
                 ecolor=story.SOURCE_COLORS[source_key],
-                elinewidth=1.25,
-                capsize=2.6,
+                elinewidth=1.2,
+                capsize=2.5,
                 markeredgecolor="white",
                 markeredgewidth=0.55,
                 label=story.SOURCE_LABELS[source_key]
-                if str(row.scope) == scopes[0]
+                if str(row.scope) == PRESSURE_SCOPES[0]
                 else None,
                 zorder=3,
             )
     ax.set_yticks(
-        [base_y[scope] for scope in scopes],
-        ["All test samples", "Observed visibility <1 km"],
+        [y_base[scope] for scope in PRESSURE_SCOPES],
+        [PRESSURE_SCOPE_LABELS[scope] for scope in PRESSURE_SCOPES],
     )
-    lower = max(0.0, float(source["ci_low"].min()) * 0.84)
-    upper = float(source["ci_high"].max()) * 1.10
-    ax.set_xlim(lower, upper)
+    ax.set_xlim(0.0, max(float(part["ci_high"].max()) * 1.10, 1.0e-6))
     ax.set_ylim(-0.42, 1.42)
-    ax.set_xlabel("RMSE vs ERA5 reference analysis (K)")
-    story.add_mainline_figure_title(fig, "925-hPa Temperature RMSE", y=0.95)
+    ax.set_xlabel(f"RMSE vs ERA5 analysis ({spec['unit']})")
+    story.add_mainline_figure_title(fig, str(spec["title"]), y=0.95)
     ax.legend(
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.02),
+        bbox_to_anchor=(0.5, 1.05),
         ncol=2,
-        handletextpad=0.4,
-        columnspacing=1.2,
+        handletextpad=0.35,
+        columnspacing=0.9,
     )
-    ax.text(
-        1.30,
-        1.02,
-        "Pangu−Tianji ΔRMSE [95% CI]",
-        transform=ax.transAxes,
-        fontsize=6.7,
-        fontweight="bold",
-        color=story.INK,
-        ha="center",
-        va="bottom",
-        clip_on=False,
-    )
-    for scope in scopes:
-        row = source[source["scope"] == scope].iloc[0]
-        delta = float(row["pangu_minus_tianji"])
-        low = float(row["delta_ci_low"])
-        high = float(row["delta_ci_high"])
-        color = story.TIANJI if delta > 0 else story.PANGU_DARK
-        ax.text(
-            1.03,
-            base_y[scope],
-            f"{delta:+.2f}  [{low:+.2f}, {high:+.2f}]",
-            transform=ax.get_yaxis_transform(),
-            fontsize=7.2,
-            fontweight="bold",
-            color=color,
-            ha="left",
-            va="center",
-            clip_on=False,
-        )
     story.style_axis(ax, horizontal_grid=False, vertical_grid=True)
-    fig.text(
-        0.50,
-        0.055,
-        "ERA5 is a reference analysis, not truth; 95% CIs use UTC-date block bootstrap.",
-        ha="center",
-        fontsize=6.7,
-        color="#4A5056",
-    )
-    return story.save_figure(fig, out_dir / "07a_t925_quality", formats, dpi)
+    return story.save_figure(fig, out_dir / str(spec["output"]), formats, dpi)
 
 
 def main() -> None:
@@ -334,16 +527,21 @@ def main() -> None:
             source, label, unit, scopes, name, out_dir, formats, args.dpi
         )
 
-    pressure = story.pressure_source(quality["pressure"], "true_low_visibility")
-    pressure.to_csv(source_dir / "07_pressure_level_quality.csv", index=False)
-    generated["07_pressure_level_quality"] = story.plot_pressure(
-        pressure, out_dir, formats, args.dpi
+    pressure_ratio = pressure_ratio_source(quality["pressure"])
+    pressure_ratio.to_csv(source_dir / "07_pressure_level_quality.csv", index=False)
+    generated["07_pressure_level_quality"] = plot_pressure_ratio_overview(
+        pressure_ratio, out_dir, formats, args.dpi
     )
-    t925_quality = t925_quality_source(quality["pressure"])
-    t925_quality.to_csv(source_dir / "07a_t925_quality.csv", index=False)
-    generated["07a_t925_quality"] = plot_t925_quality(
-        t925_quality, out_dir, formats, args.dpi
-    )
+    pressure_rmse = pressure_rmse_source(quality["pressure"])
+    for spec in PRESSURE_FIGURE_SPECS:
+        feature_source = pressure_rmse[
+            pressure_rmse["feature"] == str(spec["feature"])
+        ].copy()
+        output_name = str(spec["output"])
+        feature_source.to_csv(source_dir / f"{output_name}.csv", index=False)
+        generated[output_name] = plot_pressure_feature_rmse(
+            feature_source, spec, out_dir, formats, args.dpi
+        )
     unique = story.event_source(event_counts)
     unique.to_csv(source_dir / "08_qcore_t925_unique_event_hits.csv", index=False)
     generated["08_qcore_t925_unique_event_hits"] = story.plot_events(
@@ -385,7 +583,24 @@ def main() -> None:
         },
         "recomputation_policy": {
             "performance_and_event_panels": "recomputed from q-core+T925 three-seed endpoints",
-            "source_quality_and_qc_panels": "re-exported from model-independent paired diagnoses",
+            "source_quality_and_qc_panels": (
+                "re-exported from model-independent paired diagnoses; pressure-level "
+                "RMSE ratios and their CIs are computed jointly in the UTC-date bootstrap"
+            ),
+        },
+        "pressure_level_figure_roles": {
+            "07_pressure_level_quality": (
+                "cross-unit overview using exact paired Tianji/Pangu RMSE ratios for "
+                "all-test and observed-Low-vis scopes"
+            ),
+            "07a_to_07d": (
+                "native-unit pointwise RMSE and source-specific 95% CIs for the same "
+                "four non-redundant pressure-level quantities and both scopes"
+            ),
+            "09d": (
+                "endpoint-conditioned signed bias and paired MAE for T925, Q1000, "
+                "Q925 and 925-hPa wind speed"
+            ),
         },
         "claim_limits": [
             "ERA5 is a reference analysis, not truth or an independent forecast source.",

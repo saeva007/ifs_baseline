@@ -16,7 +16,7 @@ set -euo pipefail
 BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 SOURCE_RUN_TAG="${SOURCE_RUN_TAG:-qcore_t925_fair_formal_v1_20260721}"
-RUN_TAG="${RUN_TAG:-qcore_t925_upper_air_disagreement_v1_20260722}"
+RUN_TAG="${RUN_TAG:-qcore_t925_upper_air_disagreement_v3_20260722}"
 EVAL_ROOT="${EVAL_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_t925_fair/${SOURCE_RUN_TAG}}"
 DATA_ROOT="${DATA_ROOT:-${BASELINE_DIR}/q_core_t925_fair_datasets/${SOURCE_RUN_TAG}}"
 PANGU_DATA_DIR="${PANGU_DATA_DIR:-${DATA_ROOT}/pangu2025}"

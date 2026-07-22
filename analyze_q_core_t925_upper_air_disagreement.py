@@ -3,9 +3,10 @@
 
 This diagnostic is deliberately independent of the 32-mask factorial.  Event
 categories are defined from three-seed Pangu/Tianji endpoint probabilities at
-validation-matched false-positive rates.  Forecast T925, Q925 and 925-hPa wind
-speed are then compared point by point with ERA5 reference analysis at the
-last input step (valid time).  ERA5 is never described as truth.
+validation-matched false-positive rates.  Forecast T925, Q1000, Q925 and
+925-hPa wind speed are then compared point by point with ERA5 reference
+analysis at the last input step (valid time).  ERA5 is never described as
+truth.
 
 The primary estimates are signed bias and paired MAE.  Confidence intervals
 use a joint UTC-valid-date block bootstrap so all stations on a sampled weather
@@ -54,6 +55,12 @@ FEATURE_SPECS: Tuple[Mapping[str, object], ...] = (
         "label": "925-hPa temperature",
         "unit": "K",
         "members": ("T_925",),
+    },
+    {
+        "feature": "Q_1000",
+        "label": "1000-hPa specific humidity",
+        "unit": r"g kg$^{-1}$",
+        "members": ("Q_1000",),
     },
     {
         "feature": "Q_925",
@@ -256,6 +263,7 @@ def extract_source_state(layout: DatasetLayout, positions: np.ndarray) -> Dict[s
         "WSPD10",
         "T_925",
         "RH_925",
+        "Q_1000",
         "Q_925",
         "U_925",
         "V_925",
@@ -270,11 +278,17 @@ def extract_source_state(layout: DatasetLayout, positions: np.ndarray) -> Dict[s
         for name, column in columns.items()
     }
     units = dict(layout.config.get("canonical_dynamic_units", {}))
-    if units.get("T_925") != "K" or units.get("Q_925") != "kg kg-1":
+    if (
+        units.get("T_925") != "K"
+        or units.get("Q_1000") != "kg kg-1"
+        or units.get("Q_925") != "kg kg-1"
+    ):
         raise ValueError(
-            f"{layout.path}: unexpected T925/Q925 units "
-            f"{units.get('T_925')!r}/{units.get('Q_925')!r}"
+            f"{layout.path}: unexpected T925/Q1000/Q925 units "
+            f"{units.get('T_925')!r}/{units.get('Q_1000')!r}/"
+            f"{units.get('Q_925')!r}"
         )
+    result["Q_1000"] *= 1000.0
     result["Q_925"] *= 1000.0
     result["WSPD925"] = np.hypot(result["U_925"], result["V_925"])
     return result
@@ -287,7 +301,7 @@ def attach_source_state(
     for dataset_key, layout in layouts.items():
         positions = event_positions(layout, events)
         values = extract_source_state(layout, positions)
-        for feature in ("T_925", "Q_925", "WSPD925"):
+        for feature in ("T_925", "Q_1000", "Q_925", "WSPD925"):
             output[f"{feature}_{dataset_key}"] = values[feature]
         if dataset_key in {"pangu", "tianji"}:
             for feature in ("T2M", "WSPD10", "RH_925", "MSLP"):
@@ -306,7 +320,7 @@ def block_bootstrap_summary(
     ).dt.floor("D")
     required_values = [
         f"{feature}_{dataset}"
-        for feature in ("T_925", "Q_925", "WSPD925")
+        for feature in ("T_925", "Q_1000", "Q_925", "WSPD925")
         for dataset in ("tianji", "pangu", "era5")
     ]
     rng = np.random.default_rng(seed)
@@ -407,8 +421,20 @@ def plot_summary(
         ("physics", "Physics forecast", TIANJI, "o"),
         ("ai", "AI forecast", PANGU, "D"),
     )
-    fig, axes = plt.subplots(1, 3, figsize=FIGURE_SIZES["event_bias"])
-    fig.subplots_adjust(left=0.095, right=0.985, top=0.73, bottom=0.27, wspace=0.46)
+    fig, axes_grid = plt.subplots(
+        2,
+        2,
+        figsize=(FIGURE_SIZES["event_bias"][0], 5.45),
+    )
+    axes = np.asarray(axes_grid).ravel()
+    fig.subplots_adjust(
+        left=0.10,
+        right=0.985,
+        top=0.82,
+        bottom=0.17,
+        wspace=0.40,
+        hspace=0.67,
+    )
     for panel_index, (ax, spec) in enumerate(zip(axes, FEATURE_SPECS)):
         feature = str(spec["feature"])
         part = source[source["feature"] == feature]
@@ -508,7 +534,7 @@ def plot_summary(
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.865),
+        bbox_to_anchor=(0.5, 0.895),
         ncol=2,
         frameon=False,
     )
@@ -522,7 +548,7 @@ def plot_summary(
     )
     fig.text(
         0.5,
-        0.055,
+        0.035,
         "Signed bias (forecast − ERA5 reference analysis); 95% CIs use UTC-date block bootstrap. "
         "ΔMAE = Physics − AI (negative favours Physics).\n"
         "ERA5 is a reference analysis, not truth; endpoint-conditioned diagnostic, not a causal intervention.",
@@ -631,7 +657,7 @@ def main() -> None:
         },
         "interpretation_constraints": [
             "ERA5 is a reference analysis rather than truth or an independent forecast source.",
-            "T925 and Q925 are native source variables; WSPD925 is derived from U925 and V925.",
+            "T925, Q1000 and Q925 are native source variables; WSPD925 is derived from U925 and V925.",
             "The estimates are conditioned on endpoint disagreement and are descriptive, not causal.",
             "This analysis does not require or use the unfinished 32-mask factorial.",
         ],

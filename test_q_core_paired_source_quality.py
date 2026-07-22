@@ -25,6 +25,10 @@ from analyze_q_core_paired_source_quality import (
 )
 from preflight_q_core_paired_source_quality import REQUIRED_FEATURES, validate_quality_dataset
 from preflight_q_core_t925_diagnostic_inputs import EXPECTED_UNIT_POLICY, REQUIRED_ARTIFACTS
+from plot_pangu_qcore_t925_evidence_story import (
+    pressure_ratio_source,
+    pressure_rmse_source,
+)
 
 
 BASH_EXE = shutil.which("bash")
@@ -197,11 +201,36 @@ class PairedSourceQualityTest(unittest.TestCase):
         )
         self.assertTrue(np.all(table["delta_pangu_minus_tianji"].to_numpy(dtype=float) > 0.0))
         self.assertTrue(np.all(table["delta_ci_low"].to_numpy(dtype=float) > 0.0))
+        self.assertTrue(
+            np.allclose(
+                table["tianji_to_pangu_ratio"].to_numpy(dtype=float),
+                0.5,
+            )
+        )
+        self.assertTrue(
+            np.all(
+                table["tianji_to_pangu_ratio_ci_high"].to_numpy(dtype=float)
+                < 1.0
+            )
+        )
         t925 = table[table["feature"] == "T_925"]
         self.assertTrue(np.all(~t925["original_q_core_input"].astype(bool)))
         wspd = table[table["feature"] == "WSPD925"]
         self.assertTrue(np.all(~wspd["independent_evidence"].astype(bool)))
         self.assertTrue(np.all(~qc["excluded_from_primary_rmse"].astype(bool)))
+
+        ratio = pressure_ratio_source(table)
+        absolute = pressure_rmse_source(table)
+        self.assertEqual(len(ratio), 4 * 2)
+        self.assertEqual(len(absolute), 4 * 2 * 2)
+        self.assertEqual(
+            set(ratio["feature"]),
+            {"T_925", "Q_1000", "Q_925", "UV_925_VECTOR"},
+        )
+        self.assertEqual(
+            set(ratio["scope"]),
+            {"all_paired_test", "true_low_visibility"},
+        )
 
     def test_low_visibility_scope_excludes_exact_1000m_boundary(self) -> None:
         split = synthetic_split()

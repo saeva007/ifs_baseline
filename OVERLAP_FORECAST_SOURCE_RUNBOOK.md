@@ -683,37 +683,46 @@ quality and physical-QC panels are model-independent and may reuse their paired
 diagnostic tables. The old Shapley panel is deliberately omitted until all 32
 MHTPW masks are complete.
 
-The first CPU job defines Physics-only/AI-only Low-vis cases from the completed
-q-core+T925 three-seed mean probabilities at validation-matched FPR. It then
-compares T925, Q925, and vector-derived 925-hPa wind speed point by point with
-ERA5 reference analysis at valid time. This is a zero-training diagnosis and
-does not depend on the unfinished 96 S2 jobs.
+The paired-quality CPU job first recomputes exact paired RMSE-ratio confidence
+intervals from joint UTC-date bootstrap draws. The event CPU job independently
+defines Physics-only/AI-only Low-vis cases from the completed q-core+T925
+three-seed mean probabilities at validation-matched FPR, then compares T925,
+Q1000, Q925, and vector-derived 925-hPa wind speed point by point with ERA5
+reference analysis at valid time. Both jobs are zero-training diagnoses and do
+not depend on the unfinished 96 S2 jobs.
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline
 
+QUALITY_TAG=qcore_paired_quality_pressure_scopes_v2_20260722
+QUALITY_RAW=$(RUN_TAG=${QUALITY_TAG} bash submit_q_core_paired_source_quality.sh)
+QUALITY_JOB=$(printf '%s\n' "${QUALITY_RAW}" | sed -n 's/^analysis_job=//p' | tail -n 1)
+
 UPPER_JOB=$(sbatch --parsable \
-  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,RUN_TAG=qcore_t925_upper_air_disagreement_v1_20260722 \
+  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,RUN_TAG=qcore_t925_upper_air_disagreement_v3_20260722 \
   sub_q_core_t925_upper_air_disagreement.slurm)
 UPPER_JOB=${UPPER_JOB%%;*}
 
 STORY_JOB=$(sbatch --parsable \
-  --dependency=afterok:${UPPER_JOB} \
-  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,UPPER_RUN_TAG=qcore_t925_upper_air_disagreement_v1_20260722 \
+  --dependency=afterok:${QUALITY_JOB}:${UPPER_JOB} \
+  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,UPPER_RUN_TAG=qcore_t925_upper_air_disagreement_v3_20260722,PAIRED_QUALITY_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/${QUALITY_TAG}/analysis,OUT_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/q_core_t925_fair/qcore_t925_fair_formal_v1_20260721/evidence_story_figures_t925_nc_v3 \
   sub_pangu_qcore_t925_evidence_story.slurm)
 STORY_JOB=${STORY_JOB%%;*}
 
+echo "QUALITY_JOB=${QUALITY_JOB}"
 echo "UPPER_JOB=${UPPER_JOB}"
 echo "STORY_JOB=${STORY_JOB}"
 ```
 
 The redraw is written under the completed fair run as
-`evidence_story_figures_t925_nc_v1/`. It keeps the old filenames for panels
-that are direct replacements, adds
-`07a_t925_quality` plus
-`09d_disagreement_case_upper_air_reference_bias`, and records the intentional
-Shapley omission in `qcore_t925_evidence_story_report.json`. Every figure is
-exported as SVG, PDF, PNG, and 600-dpi TIFF.
+`evidence_story_figures_t925_nc_v3/`. Panel 07 is a unit-free, log-scale
+Tianji/Pangu RMSE-ratio overview for T925, Q1000, Q925 and 925-hPa vector wind
+in both all-test and observed-Low-vis samples. Panels 07a--07d show the same
+four quantities as native-unit absolute RMSE comparisons. Panel 09d uses the
+same upper-air coverage for event-conditioned signed bias; its wind panel uses
+speed because a signed vector-error direction is not defined. The report also
+records the intentional Shapley omission. Every figure is exported as SVG,
+PDF, PNG, and 600-dpi TIFF.
 
 ### Corrected canonical-station rerun (fair + best effort)
 

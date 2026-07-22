@@ -468,6 +468,11 @@ def bootstrap_pair_loss(
     t_point = float(np.nansum(tianji_loss) / max(np.isfinite(tianji_loss).sum(), 1))
     if square_root:
         p_point, t_point = math.sqrt(max(p_point, 0.0)), math.sqrt(max(t_point, 0.0))
+    positive = np.isfinite(p_draw) & np.isfinite(t_draw) & (p_draw > 0.0)
+    if not positive.any() or not np.isfinite(p_point) or p_point <= 0.0:
+        raise RuntimeError("Paired relative-loss inference requires positive Pangu draws")
+    ratio_draw = t_draw[positive] / p_draw[positive]
+    ratio_point = t_point / p_point
     return {
         "pangu": p_point,
         "tianji": t_point,
@@ -478,6 +483,17 @@ def bootstrap_pair_loss(
         "pangu_ci_high": float(np.quantile(p_draw, 0.975)),
         "tianji_ci_low": float(np.quantile(t_draw, 0.025)),
         "tianji_ci_high": float(np.quantile(t_draw, 0.975)),
+        "tianji_to_pangu_ratio": ratio_point,
+        "tianji_to_pangu_ratio_ci_low": float(np.quantile(ratio_draw, 0.025)),
+        "tianji_to_pangu_ratio_ci_high": float(np.quantile(ratio_draw, 0.975)),
+        "relative_delta_percent_of_pangu": 100.0 * (1.0 - ratio_point),
+        "relative_delta_percent_ci_low": float(
+            np.quantile(100.0 * (1.0 - ratio_draw), 0.025)
+        ),
+        "relative_delta_percent_ci_high": float(
+            np.quantile(100.0 * (1.0 - ratio_draw), 0.975)
+        ),
+        "valid_relative_bootstrap_draws": int(positive.sum()),
     }
 
 

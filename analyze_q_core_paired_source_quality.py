@@ -34,8 +34,9 @@ SOURCES = ("pangu", "tianji", "era5_reference_analysis")
 FORECAST_SOURCES = ("pangu", "tianji")
 
 # These are the pressure-level fields available in the completed
-# q_core_t925_no_rh2m diagnostic datasets.  T_925 is diagnosis-only; the other
-# fields are present in the original q_core_no_rh2m input layout.
+# q_core_t925_no_rh2m datasets.  T_925 was absent from the legacy q-core
+# layout but is part of the completed q-core+T925 fair experiment; the other
+# fields were already present in q_core_no_rh2m.
 PRESSURE_LEVEL_FEATURES = (
     "T_925",
     "RH_925",
@@ -74,7 +75,7 @@ FEATURE_INFO: Dict[str, Dict[str, object]] = {
         "offset": 0.0,
         "broad_range": (180.0, 340.0),
         "family": "thermal",
-        "lineage": "native source field; diagnosis-only, absent from original q-core input",
+        "lineage": "native source field; added in q-core+T925 and absent from legacy q-core",
         "independent_evidence": True,
     },
     "RH_925": {
@@ -679,7 +680,7 @@ def main() -> None:
         "original_q_core_pressure_level_inputs": [
             feature for feature in PRESSURE_LEVEL_FEATURES if feature in ORIGINAL_Q_CORE_INPUTS
         ],
-        "diagnosis_only_pressure_level_features": [
+        "legacy_q_core_absent_pressure_level_features": [
             feature for feature in PRESSURE_LEVEL_FEATURES if feature not in ORIGINAL_Q_CORE_INPUTS
         ],
         "upper_wind_input_audit": {
@@ -705,11 +706,20 @@ def main() -> None:
             "surface": "automatic-station observations are the primary reference",
             "era5_surface": "analysis benchmark against observations; not a third forecast and not independent",
         },
+        "pressure_relative_effect": {
+            "estimand": "Tianji pointwise RMSE divided by Pangu pointwise RMSE",
+            "parity": 1.0,
+            "direction": "below 1 favours Tianji; above 1 favours Pangu",
+            "confidence_interval": (
+                "computed from paired UTC-date bootstrap draws using the same sampled "
+                "weather days for both sources; not reconstructed from marginal intervals"
+            ),
+        },
         "interpretation_constraints": [
             "RMSE comparisons use exact common finite station-time rows for Pangu, Tianji and ERA5.",
             "Broad physical-range failures are reported in pressure_level_source_qc.csv and retained in primary RMSE.",
             "Derived DP, RH and WSPD fields are not independent evidence from their parent variables.",
-            "T925 is diagnosis-only and was not used by the original q-core training experiment.",
+            "T925 was absent from legacy q-core but is included in the completed q-core+T925 fair endpoints; this quality analysis itself performs no training.",
             "A closer match to ERA5 does not by itself imply a closer match to observations.",
         ],
         "outputs": [
