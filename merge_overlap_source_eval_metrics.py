@@ -410,7 +410,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 handlelength=1.6,
             )
         fig.suptitle(
-            "Best-effort Forecast-source Performance Across Visibility Targets",
+            "Forecast-source Performance with Source-specific Full Inputs",
             x=0.53,
             y=0.995,
             fontsize=11.2,
@@ -452,7 +452,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         ax.set_yticks(y, [_short_source_label(item[0]) for item in rows])
         ax.invert_yaxis()
         ax.set_xlabel("Low-vis false-positive rate (lower is better)")
-        ax.set_title("Best-effort Low-vis False-positive Rate", loc="left", fontweight="bold")
+        ax.set_title("Low-vis False-positive Rate with Source-specific Full Inputs", loc="left", fontweight="bold")
         ax.set_xlim(0.0, _adaptive_score_ylim(values))
         ax.grid(axis="x", alpha=0.22)
         ax.grid(axis="y", visible=False)

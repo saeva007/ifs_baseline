@@ -124,6 +124,7 @@ SOURCE_LABELS = {
     "tianji_compact_common_core": "Tianji compact no-RH2M-trained",
     "T2ND_rh2m_compact_common_core": "Tianji T2ND compact no-RH2M-trained",
     "ifs": "IFS-trained/IFS-input model",
+    "ifs_diagnostic_matched_model": "VisGen (IFS inputs; diagnostic-matched)",
     "T2ND_rh2m_source_full": "Tianji T2ND",
     "pangu2021_source_full": "Pangu-2021",
     "pangu2025_source_full": "Pangu",
@@ -427,6 +428,15 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--limit_samples", type=int, default=0, help="Smoke-test limit for val/test rows; 0 means all.")
     ap.add_argument("--no_per_sample_csv", action="store_true")
     ap.add_argument("--no_figures", action="store_true", help="Skip publication-style summary figures.")
+    ap.add_argument(
+        "--require_best_effort_ensemble",
+        "--require-best-effort-ensemble",
+        action="store_true",
+        help=(
+            "Fail the run when the Tianji+T2ND+IFS post-softmax probability mean cannot be computed. "
+            "Use this for the formal source-full paper figure so an incomplete panel is never written silently."
+        ),
+    )
     ap.add_argument("--feature_importance_csv", default="", help="Optional feature-importance table used to choose replacement variables.")
     ap.add_argument("--feature_swap_top_k", type=int, default=0, help="Replace top-K dynamic variables from --feature_importance_csv; 0 disables unless --feature_swap_features is set.")
     ap.add_argument(
@@ -2245,7 +2255,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
                 handlelength=1.6,
             )
         fig.suptitle(
-            "Best-effort Forecast-source Performance Across Visibility Targets",
+            "Forecast-source Performance with Source-specific Full Inputs",
             x=0.53,
             y=0.995,
             fontsize=11.2,
@@ -2291,7 +2301,7 @@ def plot_key_metrics_figure(overall_df: pd.DataFrame, out_dir: Path) -> List[str
         ax.set_yticks(y, [source_labels.get(item[0], item[0]) for item in rows])
         ax.invert_yaxis()
         ax.set_xlabel("Low-vis false-positive rate (lower is better)")
-        ax.set_title("Best-effort Low-vis False-positive Rate", loc="left", fontweight="bold")
+        ax.set_title("Low-vis False-positive Rate with Source-specific Full Inputs", loc="left", fontweight="bold")
         ax.set_xlim(0.0, _adaptive_score_ylim(values))
         ax.grid(axis="x", alpha=0.22)
         ax.grid(axis="y", visible=False)
@@ -3004,10 +3014,18 @@ def write_independent_source_outputs(
             ensemble_info.update({"status": "failed", "error": str(exc)})
             print(f"[WARN] best-effort mean-softmax ensemble skipped: {exc}", flush=True)
 
+    if args.require_best_effort_ensemble and not ensemble_info["enabled"]:
+        missing = ",".join(str(item) for item in ensemble_info.get("missing_members", [])) or "none"
+        detail = str(ensemble_info.get("error", ensemble_info.get("status", "unknown")))
+        raise RuntimeError(
+            "Required best-effort ensemble was not produced; refusing to write an incomplete formal figure. "
+            f"missing_members={missing}; detail={detail}"
+        )
+
     if not args.skip_ifs_forecast_baseline:
         ref_order = [
-            "tianji",
             "ifs",
+            "tianji",
             "T2ND_rh2m_common_core",
             "T2ND_rh2m_compact_common_core",
             "era5_2025_common_core",
@@ -3048,6 +3066,26 @@ def write_independent_source_outputs(
                 continue
             valid = np.asarray(ifs_valid, dtype=bool)
             diag_metrics = compute_metrics(eval_obj.test_targets[valid], ifs_preds[valid], probs=None)
+            if ref_source == "ifs":
+                model_matched_metrics = compute_metrics(
+                    eval_obj.test_targets[valid],
+                    eval_obj.test_preds[valid],
+                    probs=eval_obj.test_probs[valid],
+                )
+                overall_rows.append(
+                    rows_from_metrics(
+                        "ifs_diagnostic_matched_model",
+                        model_matched_metrics,
+                        {
+                            "matched_rows": matched,
+                            "reference_source": ref_source,
+                            "checkpoint": eval_obj.spec.ckpt_path,
+                            "data_dir": eval_obj.spec.data_dir,
+                            "threshold_source": eval_obj.threshold_source,
+                            "evaluation_mode": "independent_source_diagnostic_matched_model",
+                        },
+                    )
+                )
             overall_rows.append(
                 rows_from_metrics(
                     "ifs_diagnostic",

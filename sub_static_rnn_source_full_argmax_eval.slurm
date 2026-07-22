@@ -36,6 +36,7 @@ BASE="${BASE:-/public/home/putianshu/vis_mlp}"
 BASELINE_DIR="${BASELINE_DIR:-${BASE}/ifs_baseline}"
 EVAL_SCRIPT="${EVAL_SCRIPT:-${BASELINE_DIR}/test_PMST_overlap_forecast_source_s2.py}"
 MERGE_SCRIPT="${MERGE_SCRIPT:-${BASELINE_DIR}/merge_overlap_source_eval_metrics.py}"
+IFS_OPERATOR_PLOT_SCRIPT="${IFS_OPERATOR_PLOT_SCRIPT:-${BASELINE_DIR}/plot_ifs_trained_vs_diagnostic_metrics.py}"
 TRAIN_DIR="${TRAIN_DIR:-${BASE}/train}"
 CKPT_DIR="${CKPT_DIR:-${BASELINE_DIR}/checkpoints}"
 OUT_ROOT="${OUT_ROOT:-${BASE}/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax}"
@@ -67,6 +68,8 @@ STRICT_META="${STRICT_META:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 EVAL_SCENARIO="${EVAL_SCENARIO:-figure1_all_sources}"
 MERGE_ONLY=0
+REQUIRE_BEST_EFFORT_ENSEMBLE="${REQUIRE_BEST_EFFORT_ENSEMBLE:-}"
+DRAW_IFS_OPERATOR_COMPARISON=0
 
 T2ND_SPEC="T2ND_rh2m_source_full=${T2ND_DATA_DIR}|${T2ND_CKPT}|AUTO|T2ND RH2M source-full"
 PANGU2025_SPEC="pangu2025_source_full=${PANGU2025_DATA_DIR}|${PANGU2025_CKPT}|AUTO|Pangu-2025 source-full"
@@ -78,6 +81,8 @@ case "${EVAL_SCENARIO}" in
         EXTRA_SOURCES="${EXTRA_SOURCES:-${T2ND_SPEC}; ${PANGU2025_SPEC}; ${ERA5_2025_SPEC}}"
         OUT_DIR="${OUT_DIR:-${OUT_ROOT}/figure1_all_sources}"
         SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-0}"
+        REQUIRE_BEST_EFFORT_ENSEMBLE="${REQUIRE_BEST_EFFORT_ENSEMBLE:-1}"
+        DRAW_IFS_OPERATOR_COMPARISON=1
         ;;
     figure2_pangu|figure2_pangu_ifs_empirical|pangu_ifs_empirical|pangu2025)
         SOURCE_SUBSET="${SOURCE_SUBSET:-pangu2025_source_full}"
@@ -144,6 +149,9 @@ fi
 if [[ "${NO_FIGURES}" == "1" || "${NO_FIGURES}" == "true" ]]; then
     CMD+=(--no_figures)
 fi
+if [[ "${REQUIRE_BEST_EFFORT_ENSEMBLE}" == "1" || "${REQUIRE_BEST_EFFORT_ENSEMBLE}" == "true" ]]; then
+    CMD+=(--require-best-effort-ensemble)
+fi
 if [[ "${ALLOW_LEGACY_TIME_ALIGNMENT}" == "1" || "${ALLOW_LEGACY_TIME_ALIGNMENT}" == "true" ]]; then
     CMD+=(--allow_legacy_time_alignment)
 fi
@@ -161,5 +169,11 @@ fi
 
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"
+
+if [[ "${DRAW_IFS_OPERATOR_COMPARISON}" == "1" && "${NO_FIGURES}" != "1" && "${NO_FIGURES}" != "true" ]]; then
+    python "${IFS_OPERATOR_PLOT_SCRIPT}" \
+        --metrics_csv "${OUT_DIR}/overall_metrics.csv" \
+        --out_dir "${OUT_DIR}"
+fi
 
 echo "Static-RNN source-full argmax evaluation finished at: $(date)"
