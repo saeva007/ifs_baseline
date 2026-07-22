@@ -674,6 +674,47 @@ Stopping the watchdog does not cancel any managed training job. If its
 the same confirmed attach command; the persistent state and single-run lock
 prevent a second active controller.
 
+#### Redraw the evidence story from completed q-core+T925 endpoints
+
+Do not use the old no-T925 endpoint figures as the final companion to the
+MHTPW attribution. Performance and hit/miss-conditioned panels must be rebuilt
+from the completed three-seed q-core+T925 fair run. Surface/pressure-level
+quality and physical-QC panels are model-independent and may reuse their paired
+diagnostic tables. The old Shapley panel is deliberately omitted until all 32
+MHTPW masks are complete.
+
+The first CPU job defines Physics-only/AI-only Low-vis cases from the completed
+q-core+T925 three-seed mean probabilities at validation-matched FPR. It then
+compares T925, Q925, and vector-derived 925-hPa wind speed point by point with
+ERA5 reference analysis at valid time. This is a zero-training diagnosis and
+does not depend on the unfinished 96 S2 jobs.
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+UPPER_JOB=$(sbatch --parsable \
+  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,RUN_TAG=qcore_t925_upper_air_disagreement_v1_20260722 \
+  sub_q_core_t925_upper_air_disagreement.slurm)
+UPPER_JOB=${UPPER_JOB%%;*}
+
+STORY_JOB=$(sbatch --parsable \
+  --dependency=afterok:${UPPER_JOB} \
+  --export=ALL,SOURCE_RUN_TAG=qcore_t925_fair_formal_v1_20260721,UPPER_RUN_TAG=qcore_t925_upper_air_disagreement_v1_20260722 \
+  sub_pangu_qcore_t925_evidence_story.slurm)
+STORY_JOB=${STORY_JOB%%;*}
+
+echo "UPPER_JOB=${UPPER_JOB}"
+echo "STORY_JOB=${STORY_JOB}"
+```
+
+The redraw is written under the completed fair run as
+`evidence_story_figures_t925_nc_v1/`. It keeps the old filenames for panels
+that are direct replacements, adds
+`07a_t925_quality` plus
+`09d_disagreement_case_upper_air_reference_bias`, and records the intentional
+Shapley omission in `qcore_t925_evidence_story_report.json`. Every figure is
+exported as SVG, PDF, PNG, and 600-dpi TIFF.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do
