@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from analyze_q_core_ale import centered_curve
+from analyze_multi_source_feature_importance import add_physical_packages
 from analyze_q_core_hybrid_factorial import (
     SampleSet,
     adaptive_ap_histograms,
@@ -44,6 +46,9 @@ from pmst_overlap_common import (
 WINDOW = 12
 STATIC_DIM = 6
 CYCLICAL_DIM = 4
+BASH_EXE = shutil.which("bash")
+if BASH_EXE is None and Path("C:/Program Files/Git/bin/bash.exe").is_file():
+    BASH_EXE = "C:/Program Files/Git/bin/bash.exe"
 
 
 @contextmanager
@@ -318,6 +323,71 @@ class HybridBuilderTest(unittest.TestCase):
             self.assertFalse(cfg["thermodynamic_source_channels_recomputed"])
             self.assertTrue(cfg["recomputed_fog_features"])
 
+    def test_mhtpw_profile_partitions_t925_qcore_without_cross_layer_wind_split(self) -> None:
+        with workspace_temp_dir() as root:
+            order = list(Q_CORE_T925_NO_RH2M_DYN_FEATURES)
+            rng = np.random.default_rng(9255)
+            n = 8
+            p_dyn = rng.normal(size=(n, WINDOW, len(order))).astype(np.float32)
+            p_dyn[:, :, order.index("T_925")] = 275.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("T2M")] = 278.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("MSLP")] = 1013.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("Q_925")] = 0.006 + 0.0002 * rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("Q_1000")] = 0.007 + 0.0002 * rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("RH_925")] = 75.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("DP_925")] = 271.0 + rng.normal(size=(n, WINDOW))
+            p_dyn[:, :, order.index("DP_1000")] = 273.0 + rng.normal(size=(n, WINDOW))
+            t_dyn = p_dyn.copy()
+            source_features = [name for name in order if name not in {"ZENITH", "PM10_ugm3", "PM25_ugm3"}]
+            for offset, feature in enumerate(source_features, start=1):
+                t_dyn[:, :, order.index(feature)] += np.float32(offset / 100.0)
+            y = np.asarray([300, 800, 5000, 5000, 800, 300, 5000, 5000], dtype=np.float32)
+            pangu = write_source(
+                root, "pangu", p_dyn, y, canonical_pangu=True,
+                order=order, feature_set="q_core_t925_no_rh2m",
+            )
+            tianji = write_source(
+                root, "tianji", t_dyn, y, canonical_pangu=False,
+                order=order, feature_set="q_core_t925_no_rh2m",
+            )
+            out = root / "hybrids"
+            masks = "00000,00001,00010,00100,01000,10000,11111"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "build_q_core_hybrid_factorial.py"),
+                    "--pangu-dir", str(pangu),
+                    "--tianji-dir", str(tianji),
+                    "--out-root", str(out),
+                    "--splits", "train",
+                    "--group-profile", "mhtpw",
+                    "--masks", masks,
+                    "--chunk-rows", "3",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue(np.array_equal(np.load(out / "mhtpw_00000" / "X_train.npy"), np.load(pangu / "X_train.npy")))
+            self.assertTrue(np.array_equal(np.load(out / "mhtpw_11111" / "X_train.npy"), np.load(tianji / "X_train.npy")))
+            expected_groups = {
+                "10000": {"Q_1000", "DP_1000"},
+                "01000": {"T_925", "Q_925", "DP_925", "RH_925"},
+                "00100": {"T2M"},
+                "00010": {"MSLP"},
+                "00001": {"U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"},
+            }
+            for mask, replaced in expected_groups.items():
+                rows = np.load(out / f"mhtpw_{mask}" / "X_train.npy")[:, : WINDOW * len(order)].reshape(n, WINDOW, len(order))
+                for idx, feature in enumerate(order):
+                    expected = t_dyn[:, :, idx] if feature in replaced else p_dyn[:, :, idx]
+                    self.assertTrue(np.array_equal(rows[:, :, idx], expected), f"{mask}/{feature}")
+            cfg = json.loads((out / "mhtpw_01000" / "dataset_build_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(cfg["hybrid_group_order"], ["M", "H", "T", "P", "W"])
+            self.assertEqual(cfg["replaced_feature_groups"], ["H"])
+            self.assertIn("always comes from one source", cfg["thermodynamic_cross_source_policy"])
+            self.assertTrue(cfg["recomputed_fog_features"])
+
     def test_different_order_and_partial_overlap_are_aligned(self) -> None:
         with workspace_temp_dir() as root:
             rng = np.random.default_rng(5)
@@ -397,6 +467,48 @@ class HybridBuilderTest(unittest.TestCase):
 
 
 class ArtifactAndAleTest(unittest.TestCase):
+    def test_wind_layer_packages_are_shared_for_qcore_t925_endpoints(self) -> None:
+        order = list(Q_CORE_T925_NO_RH2M_DYN_FEATURES)
+        groups = add_physical_packages([], order, WINDOW, order)
+        by_name = {str(group["feature"]): group for group in groups}
+        surface = by_name["native_surface_wind_ventilation"]
+        upper = by_name["native_925_wind"]
+        self.assertEqual(surface["members"], ["U10", "V10", "WSPD10", "WDIR10"])
+        self.assertEqual(upper["members"], ["U_925", "V_925", "WSPD925"])
+        self.assertEqual(surface["analysis_level"], "shared_package")
+        self.assertEqual(upper["analysis_level"], "shared_package")
+        self.assertEqual(surface["n_columns"], 4 * WINDOW)
+        self.assertEqual(upper["n_columns"], 3 * WINDOW)
+
+    @unittest.skipUnless(BASH_EXE, "bash is required for launcher dry-run regression")
+    def test_mhtpw_launcher_schedules_exact_formal_matrix(self) -> None:
+        repo = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env.update(
+            {
+                "RUN_TAG": "unit_test_mhtpw_formal",
+                "DRY_RUN": "1",
+                "BASELINE_DIR": str(repo),
+                "BASE": str(repo.parent),
+            }
+        )
+        result = subprocess.run(
+            [str(BASH_EXE), str(repo / "submit_q_core_t925_mhtpw_factorial.sh")],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
+        self.assertEqual(output.count("[DRY-RUN]"), 113)
+        self.assertEqual(output.count("EXPERIMENT=s1_q_core_t925_no_rh2m"), 3)
+        self.assertEqual(output.count("EXPERIMENT=s2_q_core_t925_mhtpw"), 96)
+        self.assertEqual(output.count("sub_multi_source_feature_importance.slurm"), 3)
+        self.assertIn("GROUP_PROFILE=mhtpw", output)
+        self.assertIn("GROUPS=M:Q1000+DP1000;H:T925+Q925+DP925+RH925", output)
+        self.assertNotIn("IFS_DATA_DIR", output)
+        self.assertNotIn("sub_ifs_data.slurm", output)
+
     def test_centered_ale_has_weighted_zero_mean(self) -> None:
         curve = centered_curve(np.asarray([0.1, -0.02, 0.04]), np.asarray([10, 20, 30]))
         self.assertAlmostEqual(float(np.average(curve, weights=[10, 20, 30])), 0.0, places=12)
@@ -909,6 +1021,23 @@ class AttributionMathTest(unittest.TestCase):
             self.assertAlmostEqual(phi["P"], 0.05)
             self.assertAlmostEqual(phi["W"], 0.3)
             self.assertAlmostEqual(sum(phi.values()), values["1111"] - values["0000"])
+            for value in pair_interactions(values).values():
+                self.assertAlmostEqual(value, 0.0)
+        finally:
+            set_analysis_group_profile("mtw")
+
+    def test_exact_five_group_shapley_and_efficiency(self) -> None:
+        try:
+            set_analysis_group_profile("mhtpw")
+            effects = {"M": 0.08, "H": 0.05, "T": 0.03, "P": -0.01, "W": 0.02}
+            values = {}
+            for i in range(32):
+                mask = f"{i:05b}"
+                values[mask] = 1.0 + sum(effects[group] * int(mask[j]) for j, group in enumerate(effects))
+            phi = shapley_values(values)
+            for group, effect in effects.items():
+                self.assertAlmostEqual(phi[group], effect)
+            self.assertAlmostEqual(sum(phi.values()), values["11111"] - values["00000"])
             for value in pair_interactions(values).values():
                 self.assertAlmostEqual(value, 0.0)
         finally:

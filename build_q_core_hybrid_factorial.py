@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.machinery
 import json
 import math
 import sys
@@ -29,7 +30,9 @@ try:
 except ModuleNotFoundError:
     # This builder reuses only deterministic feature-engineering helpers; it
     # never computes solar geometry. Keep the source dataset builders strict.
-    sys.modules["pvlib"] = types.ModuleType("pvlib")
+    pvlib_stub = types.ModuleType("pvlib")
+    pvlib_stub.__spec__ = importlib.machinery.ModuleSpec("pvlib", loader=None)
+    sys.modules["pvlib"] = pvlib_stub
 
 from pmst_overlap_common import (
     CANONICAL_UNIT_POLICY_VERSION,
@@ -89,6 +92,23 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
                 "V_925",
                 "WSPD925",
             ),
+        },
+    },
+    "mhtpw": {
+        "dataset_prefix": "mhtpw",
+        "description": (
+            "Five-package q-core+T925 factorial: near-surface moisture, coupled 925-hPa "
+            "thermodynamic/moisture state, T2M, MSLP, and low-level wind/ventilation."
+        ),
+        "order": ("M", "H", "T", "P", "W"),
+        "feature_set": "q_core_t925_no_rh2m",
+        "dynamic_order": tuple(Q_CORE_T925_NO_RH2M_DYN_FEATURES),
+        "groups": {
+            "M": ("Q_1000", "DP_1000"),
+            "H": ("T_925", "Q_925", "DP_925", "RH_925"),
+            "T": ("T2M",),
+            "P": ("MSLP",),
+            "W": ("U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925"),
         },
     },
 }
@@ -187,7 +207,10 @@ def parse_args() -> argparse.Namespace:
         "--group-profile",
         default="mtw",
         choices=sorted(GROUP_PROFILES),
-        help="Physical package profile: mtw keeps the original 3 groups; mt2pw splits T into T2M and MSLP.",
+        help=(
+            "Physical package profile. mhtpw is the final q-core+T925 five-package design; "
+            "its W package intentionally represents the full low-level wind/ventilation state."
+        ),
     )
     ap.add_argument(
         "--dataset-prefix",
@@ -535,11 +558,18 @@ def config_for_mask(
             "recomputed_fog_features": True,
             "thermodynamic_source_channels_recomputed": False,
             "thermodynamic_cross_source_policy": (
-                "For m925b, T_925 and the M channels are independently assigned by the factorial mask; "
-                "RH_925/DP_925/Q_925 are not re-derived after mixing because their cross-source consistency "
-                "is the experimental factor. Only downstream fog-engineered features are recomputed."
-                if GROUP_PROFILE == "m925b"
-                else "not_applicable"
+                "T_925/RH_925/DP_925/Q_925 are kept together as the H package so the 925-hPa "
+                "thermodynamic/moisture state always comes from one source. Q_1000/DP_1000 form "
+                "the separate near-surface moisture package. Only downstream fog-engineered "
+                "features are recomputed after source-block replacement."
+                if GROUP_PROFILE == "mhtpw"
+                else (
+                    "For m925b, T_925 and the M channels are independently assigned by the factorial mask; "
+                    "RH_925/DP_925/Q_925 are not re-derived after mixing because their cross-source consistency "
+                    "is the experimental factor. Only downstream fog-engineered features are recomputed."
+                    if GROUP_PROFILE == "m925b"
+                    else "not_applicable"
+                )
             ),
             "endpoint_source_fog_compatibility_atol": endpoint_fog_atol,
             "endpoint_identity_policy": (
@@ -551,10 +581,16 @@ def config_for_mask(
             "hybrid_smoke_limit_rows": int(limit_rows),
             "scientific_role": "controlled source-block retraining attribution; not a single-variable causal effect",
             "joint_structure_interpretation": (
-                "For m925b, the M:H interaction is evidence of predictive complementarity under retraining; "
-                "it is not by itself proof of dynamical-equation consistency."
-                if GROUP_PROFILE == "m925b"
-                else None
+                "Package Shapley effects and interactions quantify predictive source-block complementarity "
+                "under retraining; they do not by themselves prove governing-equation consistency. "
+                "The W package is a prespecified low-level wind/ventilation block spanning 10 m and 925 hPa."
+                if GROUP_PROFILE == "mhtpw"
+                else (
+                    "For m925b, the M:H interaction is evidence of predictive complementarity under retraining; "
+                    "it is not by itself proof of dynamical-equation consistency."
+                    if GROUP_PROFILE == "m925b"
+                    else None
+                )
             ),
         }
     )

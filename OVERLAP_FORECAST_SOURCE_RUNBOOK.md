@@ -550,6 +550,68 @@ Results are written to
 Use a fresh run tag for every formal submission; the launcher refuses to
 overwrite existing data, results, or checkpoints.
 
+### Final q-core + T925 five-package attribution
+
+Use `submit_q_core_t925_mhtpw_factorial.sh` for the final source-block
+attribution in the same `q_core_t925_no_rh2m` input space as the fair
+comparison. The exact Shapley bit order is `M,H,T,P,W`:
+
+- `M`: `Q_1000, DP_1000` (near-surface moisture);
+- `H`: `T_925, Q_925, DP_925, RH_925` (one-source 925-hPa
+  thermodynamic/moisture state);
+- `T`: `T2M`;
+- `P`: `MSLP`;
+- `W`: `U10, V10, WSPD10, WDIR10, U_925, V_925, WSPD925` (the
+  prespecified low-level wind/ventilation state).
+
+MSLP is independent of wind in the factorial, so a near-zero or negative
+pressure contribution cannot be hidden inside a favorable wind result. The
+two wind layers remain one primary physical-process package: splitting them
+would double the exact factorial from 32 to 64 masks and the formal S2 count
+from 96 to 192. The endpoint grouped-permutation output instead includes
+separate `native_surface_wind_ventilation` and `native_925_wind` rows. These
+are secondary model-reliance diagnostics, not Shapley source contributions.
+
+Reuse the completed q-core+T925 fair-data tree to avoid redundant source-data
+rebuilding. First run the one-seed, short-step, all-32-mask smoke chain:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_t925_fair_datasets/qcore_t925_fair_formal_v1_20260721 \
+RUN_TAG=qcore_t925_mhtpw_smoke_v1_20260722 \
+SEEDS=42 \
+LIMIT_ROWS=2000 \
+LIMIT_SAMPLES=2000 \
+LOWVIS_RNN_S1_STEPS=20 \
+LOWVIS_RNN_S2_A_STEPS=20 \
+LOWVIS_RNN_S2_B_STEPS=40 \
+BOOTSTRAP_ITERS=50 \
+RUN_IMPORTANCE=0 \
+bash submit_q_core_t925_mhtpw_factorial.sh
+```
+
+After the smoke artifact audit, evaluation, and Shapley efficiency checks pass,
+submit the formal three-seed matrix with a fresh tag:
+
+```bash
+SOURCE_DATA_ROOT=/public/home/putianshu/vis_mlp/ifs_baseline/q_core_t925_fair_datasets/qcore_t925_fair_formal_v1_20260721 \
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+SEEDS=42:2025:20260702 \
+BOOTSTRAP_ITERS=1000 \
+RUN_IMPORTANCE=1 \
+bash submit_q_core_t925_mhtpw_factorial.sh
+```
+
+This schedules three shared S1 anchors and 96 S2 models. `00000` and `11111`
+are the Pangu and Tianji fair endpoints on the exact common row intersection;
+there is no separate post-hoc T925 performance model. Results are written to
+`paper_eval_results_pm10_pm25_journal/q_core_t925_factorial/<RUN_TAG>/`.
+If a subset of training jobs fails, rerun the same command with
+`RESUME_EXISTING_RUN=1`; completed checkpoint/scaler/config triplets are kept,
+all 32 hybrid datasets are re-audited, and only incomplete models are
+resubmitted.
+
 ### Corrected canonical-station rerun (fair + best effort)
 
 The earlier corrected-Pangu launcher reused q-core S1/Tianji/IFS datasets. Do

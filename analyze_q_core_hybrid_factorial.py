@@ -52,6 +52,22 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
             "B": "Remaining q-core background",
         },
     },
+    "mhtpw": {
+        "dataset_prefix": "mhtpw",
+        "source_prefix": "qcore_hybrid_mhtpw_",
+        "description": (
+            "Final five-package q-core+T925 factorial with a coupled 925-hPa state and a "
+            "prespecified low-level wind/ventilation block."
+        ),
+        "order": ("M", "H", "T", "P", "W"),
+        "labels": {
+            "M": "Near-surface moisture",
+            "H": "925-hPa thermo-moisture",
+            "T": "T2M",
+            "P": "MSLP",
+            "W": "Low-level wind/ventilation",
+        },
+    },
 }
 GROUP_PROFILE = "mtw"
 GROUP_ORDER = tuple(GROUP_PROFILES[GROUP_PROFILE]["order"])  # type: ignore[arg-type]
@@ -1519,6 +1535,26 @@ def main() -> None:
             "claim_limit": (
                 "A positive interaction supports complementarity of the M and T925 source blocks under retraining; "
                 "it does not alone prove physical-law consistency."
+            ),
+        }
+    elif GROUP_PROFILE == "mhtpw":
+        gate = {
+            "status": "primary_factorial_complete" if formal_three_seed else "smoke_only",
+            "criterion": (
+                "All 32 prespecified M-H-T-P-W coalitions are evaluated for three independent training seeds."
+            ),
+            "largest_group": str(ap_rows.iloc[0]["group"]),
+            "moisture_shapley_mean": float(moisture["shapley_mean"]),
+            "moisture_ci": [float(moisture["ci_low"]), float(moisture["ci_high"])],
+            "moisture_seed_sign_consistent_positive": bool(moisture["seed_sign_consistent_positive"]),
+            "formal_three_seed_analysis": formal_three_seed,
+            "wind_scope": "10 m plus 925 hPa low-level wind/ventilation package",
+            "next_step": (
+                "interpret package Shapley effects with layer-wise grouped model reliance and source-quality evidence"
+            ),
+            "claim_limit": (
+                "Package effects quantify predictive source-block attribution under retraining, not isolated-variable "
+                "causality or proof of governing-equation consistency."
             ),
         }
     else:

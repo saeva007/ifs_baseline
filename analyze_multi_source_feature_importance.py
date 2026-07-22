@@ -76,6 +76,11 @@ PACKAGE_DEFINITIONS = {
     "native_wind_ventilation": [
         "U10", "V10", "WSPD10", "WDIR10", "U_925", "V_925", "WSPD925", "W_925", "W_1000",
     ],
+    # Pre-specified layer-wise diagnostics for the combined low-level wind
+    # package used by the mhtpw retraining factorial. These remain model-
+    # reliance analyses; they are not substituted for exact package Shapley.
+    "native_surface_wind_ventilation": ["U10", "V10", "WSPD10", "WDIR10"],
+    "native_925_wind": ["U_925", "V_925", "WSPD925"],
     "native_cloud_precip_radiation": ["PRECIP", "SW_RAD", "CAPE", "LCC"],
     "native_aerosol": ["PM10_ugm3", "PM25_ugm3"],
 }
@@ -300,6 +305,7 @@ def add_physical_packages(
 ) -> List[Dict[str, object]]:
     out = list(groups)
     lookup = {name.upper(): name for name in order}
+    shared_upper = {str(name).upper() for name in shared_dynamic}
     packages = dict(PACKAGE_DEFINITIONS)
     packages["shared_low_level_moisture"] = [name for name in SHARED_MOISTURE_CANDIDATES if name.upper() in {x.upper() for x in shared_dynamic}]
     packages["shared_dynamic_all"] = list(shared_dynamic)
@@ -308,6 +314,7 @@ def add_physical_packages(
         if not members:
             continue
         cols = dynamic_columns(members, order, window)
+        is_shared_package = bool(members) and all(member.upper() in shared_upper for member in members)
         out.append(
             {
                 "feature": name,
@@ -315,7 +322,11 @@ def add_physical_packages(
                 "columns": cols,
                 "n_columns": len(cols),
                 "members": members,
-                "analysis_level": "shared_package" if name.startswith("shared_") else "source_native_package",
+                "analysis_level": (
+                    "shared_package"
+                    if name.startswith("shared_") or is_shared_package
+                    else "source_native_package"
+                ),
             }
         )
     return out

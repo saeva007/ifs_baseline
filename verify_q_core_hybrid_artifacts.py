@@ -20,6 +20,7 @@ GROUP_PROFILES: Dict[str, Dict[str, object]] = {
     "mtw": {"width": 3, "dataset_prefix": "mtw", "run_mask_prefix": "mtw"},
     "mt2pw": {"width": 4, "dataset_prefix": "mt2pw", "run_mask_prefix": "mt2pw"},
     "m925b": {"width": 3, "dataset_prefix": "m925b", "run_mask_prefix": "m925b"},
+    "mhtpw": {"width": 5, "dataset_prefix": "mhtpw", "run_mask_prefix": "mhtpw"},
 }
 
 
