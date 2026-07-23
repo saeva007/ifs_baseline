@@ -715,6 +715,44 @@ files and resubmits only that S1 and its dependent missing S2 models.
 Do not run a second manual `RESUME_EXISTING_RUN=1` launcher, cancel all old
 S2 jobs, or delete checkpoints while this watchdog owns the run.
 
+If the original generation is already unusable and a remaining S1 allocation
+is preventing replacement S2 submission, explicitly end only the training
+jobs recorded in that generation and immediately resume the missing matrix.
+First stop the old CPU watchdog (not the training jobs), then run the normal
+attachment preflight with the force flag:
+
+```bash
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722
+EVAL_ROOT=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/q_core_t925_factorial/${RUN_TAG}
+
+if [ -s "${EVAL_ROOT}/watchdog/watchdog_job.env" ]; then
+  source "${EVAL_ROOT}/watchdog/watchdog_job.env"
+  scancel "${WATCH_JOB}" 2>/dev/null || true
+fi
+
+RUN_TAG="${RUN_TAG}" \
+ADOPT_MHTPW_DISPATCHER_FAILURE=YES \
+FORCE_END_CURRENT_GENERATION=YES \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+The preflight must show `force_end_current_generation: true`. Confirm once:
+
+```bash
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+ADOPT_MHTPW_DISPATCHER_FAILURE=YES \
+FORCE_END_CURRENT_GENERATION=YES \
+CONFIRM_WATCH=YES \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+The replacement launcher reuses every complete artifact triplet. Every MHTPW
+S1/S2 replacement also runs a strict per-node cache preflight before Torch:
+all four train/validation arrays must be copied to and size-verified under
+`/tmp` on every allocated node. There is no NFS fallback in this preflight.
+An exact local-cache failure is eligible for bounded watchdog recovery; other
+training failures remain blocked.
+
 Stopping the watchdog does not cancel any managed training job. If its
 240-hour allocation ends while the experiment is still queued/running, rerun
 the same confirmed attach command; the persistent state and single-run lock

@@ -504,6 +504,7 @@ class ArtifactAndAleTest(unittest.TestCase):
         self.assertEqual(output.count("[DRY-RUN]"), 113)
         self.assertEqual(output.count("EXPERIMENT=s1_q_core_t925_no_rh2m"), 3)
         self.assertEqual(output.count("EXPERIMENT=s2_q_core_t925_mhtpw"), 96)
+        self.assertEqual(output.count("LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1"), 99)
         self.assertEqual(output.count("--exclude=e16r3n05"), 99)
         self.assertEqual(output.count("sub_multi_source_feature_importance.slurm"), 3)
         self.assertIn("GROUP_PROFILE=mhtpw", output)

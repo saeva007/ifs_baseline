@@ -38,6 +38,7 @@ ACTIVE_STATES = {"PENDING", "CONFIGURING", "RUNNING", "COMPLETING", "SUSPENDED"}
 TRANSIENT_TERMINAL_STATES = {"NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "REQUEUED"}
 BLOCKED_TERMINAL_STATES = {"FAILED", "OUT_OF_MEMORY", "OOM", "TIMEOUT", "DEADLINE"}
 KNOWN_MHTPW_DISPATCHER_FAILURE = "Unknown EXPERIMENT=s2_q_core_t925_mhtpw"
+STRICT_LOCAL_CACHE_FAILURE = "[Local-Cache-Preflight] ERROR:"
 STATE_ALIASES = {
     "PD": "PENDING",
     "CF": "CONFIGURING",
@@ -243,8 +244,8 @@ def dispatcher_accepts_mhtpw_alias(baseline_dir: Path) -> bool:
     )
 
 
-def has_known_dispatcher_failure(
-    baseline_dir: Path, job_id: str, job_name: str
+def has_job_log_signature(
+    baseline_dir: Path, job_id: str, job_name: str, signature: str
 ) -> bool:
     safe_name = str(job_name).strip()
     candidates = [
@@ -264,9 +265,20 @@ def has_known_dispatcher_failure(
             if size > 256_000:
                 handle.seek(size - 256_000)
             text = handle.read().decode("utf-8", errors="replace")
-        if KNOWN_MHTPW_DISPATCHER_FAILURE in text:
+        if signature in text:
             return True
     return False
+
+
+def has_known_dispatcher_failure(
+    baseline_dir: Path, job_id: str, job_name: str
+) -> bool:
+    return has_job_log_signature(
+        baseline_dir,
+        job_id,
+        job_name,
+        KNOWN_MHTPW_DISPATCHER_FAILURE,
+    )
 
 
 def quarantine_artifacts(checkpoint_dir: Path, run_tag: str, logical: str, attempt: int) -> list[str]:
@@ -396,6 +408,11 @@ class ChainWatch:
                 "current_manifest": str(self.manifest_path),
             }
             self.save()
+        self.force_end_generation = (
+            int(self.state.get("generation", 0))
+            if args.force_end_current_generation
+            else None
+        )
         self.reconcile_inflight()
 
     def close(self) -> None:
@@ -530,6 +547,13 @@ class ChainWatch:
             "jobs": rows,
             "auto_retry": bool(self.args.auto_retry),
             "adopt_dispatcher_failure": bool(self.args.adopt_dispatcher_failure),
+            "adopt_local_cache_failure": bool(
+                self.args.adopt_local_cache_failure
+            ),
+            "force_end_current_generation": bool(
+                self.args.force_end_current_generation
+            ),
+            "force_end_generation": self.force_end_generation,
             "max_retries": self.args.max_retries,
         }
         return report
@@ -690,6 +714,94 @@ class ChainWatch:
             f"parent_state={parent_state} children={','.join(child_ids)} quarantined={moved}",
         )
 
+    def force_end_generation_now(self, jobs: Mapping[str, str]) -> None:
+        generation = int(self.state.get("generation", 0))
+        target = getattr(self, "force_end_generation", None)
+        if target is None or generation != target:
+            return
+        completed = self.state.setdefault("force_ended_generations", {})
+        key = str(generation)
+        if key in completed:
+            return
+        if not self.args.auto_retry:
+            raise RuntimeError("force-ending a generation requires --auto-retry")
+
+        active: list[tuple[str, str, JobStatus]] = []
+        for logical, job_id in jobs.items():
+            status = query_job(job_id)
+            if status.state not in ACTIVE_STATES:
+                continue
+            observed = logical_from_job_name(status.name)
+            if observed != logical:
+                raise RuntimeError(
+                    f"refusing forced generation end: job {job_id} identity "
+                    f"{observed!r} != {logical!r}"
+                )
+            active.append((logical, job_id, status))
+
+        if not active:
+            completed[key] = {
+                "at": now_iso(),
+                "job_ids": [],
+                "detail": "no active training jobs",
+            }
+            self.log_action("chain", "FORCE_END_NO_ACTIVE_JOBS", "", f"generation={generation}")
+            self.save()
+            return
+
+        job_ids = [job_id for _, job_id, _ in active]
+        self.state["force_end_intent"] = {
+            "generation": generation,
+            "created_at": now_iso(),
+            "jobs": {logical: job_id for logical, job_id, _ in active},
+        }
+        self.save()
+        run_command(["scancel", *job_ids], check=True)
+        deadline = time.time() + self.args.cancel_wait_seconds
+        remaining = set(job_ids)
+        while remaining and time.time() < deadline:
+            remaining = {
+                item for item in remaining
+                if query_job(item).state in ACTIVE_STATES
+            }
+            if remaining:
+                time.sleep(3)
+        if remaining:
+            raise RuntimeError(
+                f"forced generation-end cancellation timed out: {sorted(remaining)}"
+            )
+
+        cancelled = set(self.state.get("watchdog_cancelled_job_ids", []))
+        moved = 0
+        for logical, job_id, status in active:
+            cancelled.add(job_id)
+            self.record_failed_nodes(status.nodes)
+            attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
+            moved += len(
+                quarantine_artifacts(
+                    self.checkpoint_dir, self.run_tag, logical, attempt
+                )
+            )
+            self.state.setdefault("blocked", {}).pop(logical, None)
+            self.state.setdefault("retry_causes", {})[logical] = (
+                f"forced_generation_end:{generation}"
+            )
+        self.state["watchdog_cancelled_job_ids"] = sorted(cancelled)
+        self.state["needs_resume"] = True
+        completed[key] = {
+            "at": now_iso(),
+            "job_ids": job_ids,
+            "quarantined_files": moved,
+        }
+        self.state.pop("force_end_intent", None)
+        self.log_action(
+            "chain",
+            "FORCE_END_CURRENT_GENERATION",
+            ",".join(job_ids),
+            f"generation={generation} active={len(job_ids)} quarantined={moved}",
+        )
+        self.save()
+
     def observe_running(self, logical: str, job_id: str) -> None:
         progress = self.current_progress(logical, job_id)
         now = time.time()
@@ -830,8 +942,8 @@ class ChainWatch:
 
     def cycle(self) -> tuple[bool, bool]:
         jobs = dict(self.state.get("jobs", {}))
+        self.force_end_generation_now(jobs)
         any_active = False
-        auto_cancelled = set(self.state.get("watchdog_cancelled_job_ids", []))
         blocked = self.state.setdefault("blocked", {})
         for logical, job_id in jobs.items():
             status = query_job(job_id)
@@ -869,11 +981,46 @@ class ChainWatch:
                 self.state["needs_resume"] = True
                 self.state.setdefault("retry_causes", {})[logical] = f"transient_terminal:{status.state}"
                 continue
-            if status.state == "CANCELLED" and job_id in auto_cancelled:
+            if (
+                status.state == "CANCELLED"
+                and job_id
+                in set(self.state.get("watchdog_cancelled_job_ids", []))
+            ):
                 self.state["needs_resume"] = True
                 continue
             if status.state in {"UNKNOWN", "QUERY_ERROR"}:
                 any_active = True
+                continue
+            if (
+                status.state == "FAILED"
+                and getattr(self.args, "adopt_local_cache_failure", False)
+                and has_job_log_signature(
+                    self.baseline_dir,
+                    job_id,
+                    status.name,
+                    STRICT_LOCAL_CACHE_FAILURE,
+                )
+            ):
+                marker = f"{job_id}:{status.state}:{STRICT_LOCAL_CACHE_FAILURE}"
+                handled = self.state.setdefault("known_local_cache_failures", {})
+                blocked.pop(logical, None)
+                if handled.get(logical) != marker:
+                    self.record_failed_nodes(status.nodes)
+                    attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
+                    moved = quarantine_artifacts(
+                        self.checkpoint_dir, self.run_tag, logical, attempt
+                    )
+                    handled[logical] = marker
+                    self.log_action(
+                        logical,
+                        "ADOPT_STRICT_LOCAL_CACHE_FAILURE",
+                        job_id,
+                        f"quarantined={len(moved)} signature={STRICT_LOCAL_CACHE_FAILURE}",
+                    )
+                self.state["needs_resume"] = True
+                self.state.setdefault("retry_causes", {})[logical] = (
+                    "strict_local_cache_failure"
+                )
                 continue
             if (
                 status.state == "FAILED"
@@ -950,6 +1097,25 @@ def parse_args() -> argparse.Namespace:
         help=(
             "adopt only FAILED MHTPW S2 jobs whose own Slurm log contains the "
             "exact historical unknown-EXPERIMENT signature"
+        ),
+    )
+    parser.add_argument(
+        "--force-end-current-generation",
+        action="store_true",
+        default=os.environ.get("WATCH_FORCE_END_CURRENT_GENERATION", "0") == "1",
+        help=(
+            "explicitly cancel every still-active training job in the currently "
+            "tracked generation, quarantine its incomplete artifacts, and resume "
+            "only missing artifact triplets"
+        ),
+    )
+    parser.add_argument(
+        "--adopt-local-cache-failure",
+        action="store_true",
+        default=os.environ.get("WATCH_ADOPT_LOCAL_CACHE_FAILURE", "0") == "1",
+        help=(
+            "adopt only FAILED training jobs whose own Slurm log contains the "
+            "strict node-local-cache preflight error signature"
         ),
     )
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("WATCH_POLL_SECONDS", "180")))

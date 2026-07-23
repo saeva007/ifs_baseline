@@ -38,6 +38,7 @@ TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 LOWVIS_RNN_EXTRA_ARGS="${LOWVIS_RNN_EXTRA_ARGS:-}"
 export LOWVIS_RNN_LOCAL_CACHE_DIR="${LOWVIS_RNN_LOCAL_CACHE_DIR:-/tmp}"
 export LOWVIS_RNN_CLEAN_LOCAL_CACHE="${LOWVIS_RNN_CLEAN_LOCAL_CACHE:-0}"
+export LOWVIS_RNN_REQUIRE_LOCAL_CACHE="${LOWVIS_RNN_REQUIRE_LOCAL_CACHE:-0}"
 
 USER_LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-}"
 USER_LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-}"
@@ -600,6 +601,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     echo "NUM_WORKERS     : ${LOWVIS_RNN_NUM_WORKERS}"
     echo "LOCAL_CACHE_DIR : ${LOWVIS_RNN_LOCAL_CACHE_DIR}"
     echo "CLEAN_LOCAL_CACHE: ${LOWVIS_RNN_CLEAN_LOCAL_CACHE}"
+    echo "REQUIRE_LOCAL_CACHE: ${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}"
 fi
 
 # ==========================================
@@ -625,6 +627,30 @@ fi
 
 srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
      /bin/bash -c "rm -rf /dev/shm/torch_* /dev/shm/*X_train* /dev/shm/*y_train* /dev/shm/*static_rnn_lowvis* /dev/shm/*lowvis_rnn* 2>/dev/null; echo \"\$(hostname) SHM Cleaned\""
+
+if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}" = "1" ]; then
+    if [ -z "${LOWVIS_RNN_LOCAL_CACHE_ID:-}" ]; then
+        echo "ERROR: LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1 requires LOWVIS_RNN_LOCAL_CACHE_ID" >&2
+        exit 2
+    fi
+    if [ "${LOWVIS_RNN_MODE_EFFECTIVE}" = "s1" ]; then
+        STRICT_CACHE_DATA_DIR="${OVERLAP_S1_DATA_DIR}"
+    else
+        STRICT_CACHE_DATA_DIR="${STATIC_RNN_S2_DATA_DIR}"
+    fi
+    PYTHON_BIN="$(command -v python)"
+    STRICT_CACHE_SCRIPT="${BASELINE_DIR}/stage_lowvis_local_cache.py"
+    [ -x "${PYTHON_BIN}" ] || { echo "ERROR: python unavailable for strict local-cache staging" >&2; exit 2; }
+    [ -s "${STRICT_CACHE_SCRIPT}" ] || { echo "ERROR: strict local-cache stager missing: ${STRICT_CACHE_SCRIPT}" >&2; exit 2; }
+    echo "Strictly staging train/validation arrays on every allocated node..."
+    srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
+         --kill-on-bad-exit=1 \
+         "${PYTHON_BIN}" "${STRICT_CACHE_SCRIPT}" \
+         --data-dir "${STRICT_CACHE_DATA_DIR}" \
+         --cache-dir "${LOWVIS_RNN_LOCAL_CACHE_DIR}" \
+         --cache-id "${LOWVIS_RNN_LOCAL_CACHE_ID}"
+    echo "Strict node-local cache preflight passed on all ${SLURM_NNODES} nodes."
+fi
 
 # ==========================================
 # 5. Launch Training

@@ -46,6 +46,24 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 mod.has_known_dispatcher_failure(tmp, "123", "mhtpw_00000_s42")
             )
 
+    def test_strict_local_cache_failure_requires_exact_job_log_signature(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            path = logs / "321.err"
+            path.write_text(
+                f"{mod.STRICT_LOCAL_CACHE_FAILURE} host=n1 insufficient space\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                mod.has_job_log_signature(
+                    tmp,
+                    "321",
+                    "mhtpw_s1_s42",
+                    mod.STRICT_LOCAL_CACHE_FAILURE,
+                )
+            )
+
     def test_job_names_and_dependency_ids_are_exact(self) -> None:
         self.assertEqual(mod.logical_from_job_name("mhtpw_s1_s2025"), "s1:2025")
         self.assertEqual(mod.logical_from_job_name("mhtpw_10110_s42"), "s2:42:10110")
@@ -200,6 +218,88 @@ class MHTPWWatchdogTest(unittest.TestCase):
         self.assertIn(["scancel", "101", "102"], commands)
         self.assertNotIn("201", watch.state["watchdog_cancelled_job_ids"])
         self.assertEqual(watch.state["watchdog_cancelled_job_ids"], ["101", "102"])
+
+    def test_force_end_generation_cancels_only_exact_tracked_active_jobs(self) -> None:
+        with workspace_temp_dir() as tmp:
+            watch = object.__new__(mod.ChainWatch)
+            watch.args = SimpleNamespace(
+                auto_retry=True,
+                cancel_wait_seconds=1,
+                exclude_failed_nodes=True,
+            )
+            watch.run_tag = "demo"
+            watch.checkpoint_dir = tmp / "checkpoints"
+            watch.checkpoint_dir.mkdir()
+            watch.force_end_generation = 0
+            watch.state = {
+                "generation": 0,
+                "jobs": {
+                    "s1:20260702": "100",
+                    "s2:20260702:00000": "101",
+                    "s2:42:00000": "201",
+                },
+                "retries": {},
+                "watchdog_cancelled_job_ids": [],
+                "blocked": {},
+            }
+            run_id, _ = mod.run_id_for_logical("demo", "s1:20260702")
+            for name in (
+                f"{run_id}_S1_best_score.pt",
+                f"{run_id}_static_rnn_config.json",
+                f"robust_scaler_{run_id}_s1_w12_dyn18_pm.pkl",
+            ):
+                (watch.checkpoint_dir / name).write_bytes(b"x")
+            watch.log_action = lambda *args, **kwargs: None
+            watch.save = lambda: None
+
+            calls = {"100": 0, "101": 0, "201": 0}
+
+            def fake_query(job_id):
+                job_id = str(job_id)
+                calls[job_id] += 1
+                if job_id == "100":
+                    state = "RUNNING" if calls[job_id] == 1 else "CANCELLED"
+                    name = "mhtpw_s1_s20260702"
+                elif job_id == "101":
+                    state = "PENDING" if calls[job_id] == 1 else "CANCELLED"
+                    name = "mhtpw_00000_s20260702"
+                else:
+                    state = "FAILED"
+                    name = "mhtpw_00000_s42"
+                return mod.JobStatus(
+                    job_id,
+                    name,
+                    state,
+                    "n1" if job_id == "100" else "",
+                    "squeue" if state in mod.ACTIVE_STATES else "sacct",
+                )
+
+            commands = []
+
+            def fake_command(args, **kwargs):
+                commands.append(list(args))
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with (
+                patch.object(mod, "query_job", side_effect=fake_query),
+                patch.object(mod, "run_command", side_effect=fake_command),
+            ):
+                watch.force_end_generation_now(watch.state["jobs"])
+
+            self.assertIn(["scancel", "100", "101"], commands)
+            self.assertNotIn("201", watch.state["watchdog_cancelled_job_ids"])
+            self.assertEqual(
+                watch.state["watchdog_cancelled_job_ids"],
+                ["100", "101"],
+            )
+            self.assertTrue(watch.state["needs_resume"])
+            self.assertEqual(
+                watch.state["force_ended_generations"]["0"]["quarantined_files"],
+                3,
+            )
+            self.assertFalse(mod.artifact_complete(
+                watch.checkpoint_dir, run_id, "s1"
+            ))
 
     def test_transient_terminal_artifacts_are_quarantined_once(self) -> None:
         watch = object.__new__(mod.ChainWatch)
