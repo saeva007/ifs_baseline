@@ -37,6 +37,7 @@ MASKS = tuple(f"{value:05b}" for value in range(32))
 ACTIVE_STATES = {"PENDING", "CONFIGURING", "RUNNING", "COMPLETING", "SUSPENDED"}
 TRANSIENT_TERMINAL_STATES = {"NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "REQUEUED"}
 BLOCKED_TERMINAL_STATES = {"FAILED", "OUT_OF_MEMORY", "OOM", "TIMEOUT", "DEADLINE"}
+KNOWN_MHTPW_DISPATCHER_FAILURE = "Unknown EXPERIMENT=s2_q_core_t925_mhtpw"
 STATE_ALIASES = {
     "PD": "PENDING",
     "CF": "CONFIGURING",
@@ -229,6 +230,45 @@ def artifact_complete(checkpoint_dir: Path, run_id: str, stage: str) -> bool:
     return len(paths) == 3 and all(path.is_file() and path.stat().st_size > 0 for path in paths)
 
 
+def dispatcher_accepts_mhtpw_alias(baseline_dir: Path) -> bool:
+    path = baseline_dir / "sub_ifs_overlap_baseline.slurm"
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return bool(
+        re.search(
+            r"(?m)^\s*[^#\n]*s2_q_core_t925_mhtpw[^#\n]*\)\s*$",
+            text,
+        )
+    )
+
+
+def has_known_dispatcher_failure(
+    baseline_dir: Path, job_id: str, job_name: str
+) -> bool:
+    safe_name = str(job_name).strip()
+    candidates = [
+        baseline_dir / "logs" / f"{job_id}.{suffix}"
+        for suffix in ("out", "err")
+    ]
+    if safe_name:
+        candidates.extend(
+            baseline_dir / "logs" / f"{job_id}_{safe_name}.{suffix}"
+            for suffix in ("out", "err")
+        )
+    for path in candidates:
+        if not path.is_file():
+            continue
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > 256_000:
+                handle.seek(size - 256_000)
+            text = handle.read().decode("utf-8", errors="replace")
+        if KNOWN_MHTPW_DISPATCHER_FAILURE in text:
+            return True
+    return False
+
+
 def quarantine_artifacts(checkpoint_dir: Path, run_tag: str, logical: str, attempt: int) -> list[str]:
     run_id, _ = run_id_for_logical(run_tag, logical)
     candidates = list(checkpoint_dir.glob(f"{run_id}_*"))
@@ -308,6 +348,13 @@ class ChainWatch:
         self.args = args
         self.run_tag = args.run_tag
         self.baseline_dir = Path(args.baseline_dir).expanduser().resolve()
+        if args.adopt_dispatcher_failure and not dispatcher_accepts_mhtpw_alias(
+            self.baseline_dir
+        ):
+            raise RuntimeError(
+                "refusing known-dispatcher-failure recovery because the current "
+                "sub_ifs_overlap_baseline.slurm still lacks s2_q_core_t925_mhtpw"
+            )
         self.eval_root = Path(args.eval_root).expanduser().resolve()
         self.manifest_path = self.eval_root / f"submission_manifest_{self.run_tag}.txt"
         self.manifest = parse_manifest(self.manifest_path)
@@ -482,6 +529,7 @@ class ChainWatch:
             "missing_artifact_triplets": len(missing),
             "jobs": rows,
             "auto_retry": bool(self.args.auto_retry),
+            "adopt_dispatcher_failure": bool(self.args.adopt_dispatcher_failure),
             "max_retries": self.args.max_retries,
         }
         return report
@@ -827,6 +875,34 @@ class ChainWatch:
             if status.state in {"UNKNOWN", "QUERY_ERROR"}:
                 any_active = True
                 continue
+            if (
+                status.state == "FAILED"
+                and logical.startswith("s2:")
+                and getattr(self.args, "adopt_dispatcher_failure", False)
+                and has_known_dispatcher_failure(
+                    self.baseline_dir, job_id, status.name
+                )
+            ):
+                marker = f"{job_id}:{status.state}:{KNOWN_MHTPW_DISPATCHER_FAILURE}"
+                handled = self.state.setdefault("known_dispatcher_failures", {})
+                blocked.pop(logical, None)
+                if handled.get(logical) != marker:
+                    attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
+                    moved = quarantine_artifacts(
+                        self.checkpoint_dir, self.run_tag, logical, attempt
+                    )
+                    handled[logical] = marker
+                    self.log_action(
+                        logical,
+                        "ADOPT_KNOWN_DISPATCHER_FAILURE",
+                        job_id,
+                        f"quarantined={len(moved)} signature={KNOWN_MHTPW_DISPATCHER_FAILURE}",
+                    )
+                self.state["needs_resume"] = True
+                self.state.setdefault("retry_causes", {})[logical] = (
+                    "known_dispatcher_alias_failure"
+                )
+                continue
             self.cancel_dead_s1_children(logical, job_id, status.state)
             blocked[logical] = f"job {job_id} ended in {status.state}; automatic blind retry is disabled"
 
@@ -867,6 +943,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", default=os.environ.get("WATCH_ONCE", "0") == "1")
     parser.add_argument("--auto-retry", action="store_true", default=os.environ.get("WATCH_AUTO_RETRY", "0") == "1")
     parser.add_argument("--adopt-missing", action="store_true", default=os.environ.get("WATCH_ADOPT_MISSING", "0") == "1")
+    parser.add_argument(
+        "--adopt-dispatcher-failure",
+        action="store_true",
+        default=os.environ.get("WATCH_ADOPT_DISPATCHER_FAILURE", "0") == "1",
+        help=(
+            "adopt only FAILED MHTPW S2 jobs whose own Slurm log contains the "
+            "exact historical unknown-EXPERIMENT signature"
+        ),
+    )
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("WATCH_POLL_SECONDS", "180")))
     parser.add_argument("--startup-stale-minutes", type=int, default=int(os.environ.get("WATCH_STARTUP_STALE_MINUTES", "45")))
     parser.add_argument("--data-stale-minutes", type=int, default=int(os.environ.get("WATCH_DATA_STALE_MINUTES", "60")))

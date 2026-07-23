@@ -25,6 +25,27 @@ def workspace_temp_dir():
 
 
 class MHTPWWatchdogTest(unittest.TestCase):
+    def test_dispatcher_registers_mhtpw_experiment_alias(self) -> None:
+        repo = Path(__file__).resolve().parent
+        self.assertTrue(mod.dispatcher_accepts_mhtpw_alias(repo))
+
+    def test_known_dispatcher_failure_requires_exact_job_log_signature(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            path = logs / "123.out"
+            path.write_text(
+                "Unknown EXPERIMENT=s2_q_core_t925_mhtpw (use ...)\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                mod.has_known_dispatcher_failure(tmp, "123", "mhtpw_00000_s42")
+            )
+            path.write_text("unrelated training failure\n", encoding="utf-8")
+            self.assertFalse(
+                mod.has_known_dispatcher_failure(tmp, "123", "mhtpw_00000_s42")
+            )
+
     def test_job_names_and_dependency_ids_are_exact(self) -> None:
         self.assertEqual(mod.logical_from_job_name("mhtpw_s1_s2025"), "s1:2025")
         self.assertEqual(mod.logical_from_job_name("mhtpw_10110_s42"), "s2:42:10110")
@@ -217,6 +238,64 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 self.assertEqual(watch.cycle(), (False, True))
         self.assertEqual(len(quarantines), 1)
         self.assertEqual(watch.state["failed_node_lists"], ["n2"])
+
+    def test_exact_dispatcher_failure_is_adopted_but_other_failed_jobs_are_not(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "123.out").write_text(
+                mod.KNOWN_MHTPW_DISPATCHER_FAILURE + "\n",
+                encoding="utf-8",
+            )
+            watch = object.__new__(mod.ChainWatch)
+            watch.args = SimpleNamespace(
+                auto_retry=True,
+                adopt_dispatcher_failure=True,
+                checkpoint_grace_minutes=30,
+            )
+            watch.run_tag = "demo"
+            watch.baseline_dir = tmp
+            watch.checkpoint_dir = tmp / "checkpoints"
+            watch.expected = ("s2:42:00000", "s1:2025")
+            watch.state = {
+                "generation": 0,
+                "jobs": {"s2:42:00000": "123", "s1:2025": "456"},
+                "retries": {},
+                "watchdog_cancelled_job_ids": [],
+                "progress": {},
+                "blocked": {
+                    "s2:42:00000": "job 123 ended in FAILED; automatic blind retry is disabled"
+                },
+            }
+            watch.log_action = lambda *args, **kwargs: None
+            watch.save = lambda: None
+            watch.observe_running = lambda *args, **kwargs: None
+            watch.cancel_dead_s1_children = lambda *args, **kwargs: None
+            statuses = [
+                mod.JobStatus("123", "mhtpw_00000_s42", "FAILED", "n1", "sacct"),
+                mod.JobStatus("456", "mhtpw_s1_s2025", "RUNNING", "n2", "squeue"),
+            ]
+            with (
+                patch.object(mod, "query_job", side_effect=statuses),
+                patch.object(mod, "quarantine_artifacts", return_value=[]),
+            ):
+                self.assertEqual(watch.cycle(), (False, True))
+            self.assertNotIn("s2:42:00000", watch.state["blocked"])
+            self.assertTrue(watch.state["needs_resume"])
+            self.assertEqual(
+                watch.state["retry_causes"]["s2:42:00000"],
+                "known_dispatcher_alias_failure",
+            )
+
+            watch.state["blocked"] = {}
+            watch.state["jobs"] = {"s2:42:00000": "124", "s1:2025": "456"}
+            statuses = [
+                mod.JobStatus("124", "mhtpw_00000_s42", "FAILED", "n1", "sacct"),
+                mod.JobStatus("456", "mhtpw_s1_s2025", "RUNNING", "n2", "squeue"),
+            ]
+            with patch.object(mod, "query_job", side_effect=statuses):
+                with self.assertRaisesRegex(RuntimeError, "watchdog blocked"):
+                    watch.cycle()
 
 
 if __name__ == "__main__":

@@ -669,6 +669,52 @@ Persistent records are under `<EVAL_ROOT>/watchdog/`:
   recovery;
 - `watchdog_job.env`: the CPU watchdog JobID.
 
+#### Recover the July 2026 MHTPW dispatcher-alias failure
+
+The original formal launcher exported
+`EXPERIMENT=s2_q_core_t925_mhtpw`, while an older
+`sub_ifs_overlap_baseline.slurm` did not register that alias. Those S2 jobs
+therefore failed in the dispatcher before model training. This is one
+launcher/dispatcher integration defect, not independent optimization failure
+of every affected model.
+
+Pull a revision that accepts the alias before recovery. Then inspect the
+recorded chain with opt-in recognition of only this exact historical error:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+ADOPT_MHTPW_DISPATCHER_FAILURE=YES \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+The inspection must report `adopt_dispatcher_failure: true`, the intended run
+tag, and 99 expected training rows. To recover:
+
+```bash
+RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
+ADOPT_MHTPW_DISPATCHER_FAILURE=YES \
+CONFIRM_WATCH=YES \
+WATCH_POLL_SECONDS=180 \
+WATCH_TRAIN_STALE_MINUTES=60 \
+WATCH_VALIDATION_STALE_MINUTES=120 \
+WATCH_CONFIRMATIONS=2 \
+WATCH_MAX_RETRIES=2 \
+bash attach_q_core_mhtpw_watchdog.sh
+```
+
+This special adoption path applies only when an S2 job is `FAILED` and that
+job's own `logs/<JobID>.out` or `.err` contains the exact
+`Unknown EXPERIMENT=s2_q_core_t925_mhtpw` signature. Other failures remain
+blocked for diagnosis. Complete S1/S2 artifact triplets are reused. An active
+S1 is allowed to finish while its semantic progress changes; if it is
+confirmed stalled, the ordinary watchdog path quarantines its incomplete
+files and resubmits only that S1 and its dependent missing S2 models.
+
+Do not run a second manual `RESUME_EXISTING_RUN=1` launcher, cancel all old
+S2 jobs, or delete checkpoints while this watchdog owns the run.
+
 Stopping the watchdog does not cancel any managed training job. If its
 240-hour allocation ends while the experiment is still queued/running, rerun
 the same confirmed attach command; the persistent state and single-run lock
