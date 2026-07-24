@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
 
 try:
     import fcntl
@@ -40,6 +40,7 @@ BLOCKED_TERMINAL_STATES = {"FAILED", "OUT_OF_MEMORY", "OOM", "TIMEOUT", "DEADLIN
 KNOWN_MHTPW_DISPATCHER_FAILURE = "Unknown EXPERIMENT=s2_q_core_t925_mhtpw"
 STRICT_LOCAL_CACHE_FAILURE = "[Local-Cache-Preflight] ERROR:"
 KNOWN_RUNTIME_FAILURE_SIGNATURES = (
+    "[DCU-Runtime-Preflight] ERROR:",
     "RuntimeError: No HIP GPUs are available",
     "oom-kill event(s)",
     "Out Of Memory",
@@ -567,6 +568,7 @@ class ChainWatch:
             "complete_artifact_triplets": complete,
             "missing_artifact_triplets": len(missing),
             "jobs": rows,
+            "runtime_gate": self.runtime_gate_status_report(),
             "auto_retry": bool(self.args.auto_retry),
             "adopt_dispatcher_failure": bool(self.args.adopt_dispatcher_failure),
             "adopt_local_cache_failure": bool(
@@ -580,6 +582,69 @@ class ChainWatch:
             "max_retries": self.args.max_retries,
         }
         return report
+
+    def runtime_gate_status_report(self) -> Dict[str, str]:
+        manifest = getattr(self, "manifest", {})
+        job_id = str(manifest.get("runtime_gate_job", "")).strip()
+        if not job_id or not job_id.isdigit():
+            return {
+                "job_id": job_id,
+                "state": "NOT_RECORDED",
+                "name": "",
+                "nodes": "",
+                "source": "manifest",
+            }
+        return dataclasses.asdict(query_job(job_id))
+
+    def inspect_runtime_gate(
+        self, blocked: MutableMapping[str, str]
+    ) -> tuple[bool, str, bool]:
+        """Return (active, recognized_failure_signature, terminal_failure)."""
+        manifest = getattr(self, "manifest", {})
+        job_id = str(manifest.get("runtime_gate_job", "")).strip()
+        if not job_id or not job_id.isdigit():
+            return False, "", False
+        status = query_job(job_id)
+        if status.state in ACTIVE_STATES or status.state in {
+            "UNKNOWN",
+            "QUERY_ERROR",
+        }:
+            return True, "", False
+        if status.state == "COMPLETED":
+            blocked.pop("runtime_gate", None)
+            return False, "", False
+
+        signature = ""
+        if getattr(self.args, "adopt_runtime_failure", False):
+            signature = matching_job_log_signature(
+                self.baseline_dir,
+                job_id,
+                status.name,
+                KNOWN_RUNTIME_FAILURE_SIGNATURES,
+            )
+        if not signature:
+            blocked["runtime_gate"] = (
+                f"job {job_id} ended in {status.state} without a recognized "
+                "DCU runtime signature; automatic blind retry is disabled"
+            )
+            return False, "", True
+
+        marker = f"{job_id}:{status.state}:{signature}"
+        handled = self.state.setdefault("runtime_gate_failures", {})
+        blocked.pop("runtime_gate", None)
+        if handled.get("latest") != marker:
+            handled["latest"] = marker
+            self.log_action(
+                "runtime_gate",
+                "ADOPT_RUNTIME_GATE_FAILURE",
+                job_id,
+                f"state={status.state} signature={signature}",
+            )
+        self.state["needs_resume"] = True
+        self.state["runtime_gate_retry_cause"] = (
+            f"known_runtime_failure:{signature}"
+        )
+        return False, signature, True
 
     def phase_limit_seconds(self, phase: str) -> int:
         minutes = {
@@ -1023,8 +1088,11 @@ class ChainWatch:
     def cycle(self) -> tuple[bool, bool]:
         jobs = dict(self.state.get("jobs", {}))
         self.force_end_generation_now(jobs)
-        any_active = False
         blocked = self.state.setdefault("blocked", {})
+        gate_active, gate_signature, gate_terminal = (
+            self.inspect_runtime_gate(blocked)
+        )
+        any_active = gate_active
         for logical, job_id in jobs.items():
             status = query_job(job_id)
             if status.state in ACTIVE_STATES:
@@ -1076,6 +1144,22 @@ class ChainWatch:
             ):
                 self.state["needs_resume"] = True
                 continue
+            if status.state == "CANCELLED" and gate_terminal:
+                blocked.pop(logical, None)
+                if gate_signature:
+                    self.state["needs_resume"] = True
+                    self.state.setdefault("retry_causes", {})[logical] = (
+                        f"dependency_cancelled_after:runtime_gate:{gate_signature}"
+                    )
+                    self.log_action(
+                        logical,
+                        "ADOPT_RUNTIME_GATE_DEPENDENCY_CANCELLED",
+                        job_id,
+                        f"runtime_gate_signature={gate_signature}",
+                    )
+                # If the gate failure is unrecognized, runtime_gate remains the
+                # single blocker instead of emitting 99 misleading job errors.
+                continue
             if status.state == "CANCELLED" and logical.startswith("s2:"):
                 seed = logical.split(":")[1]
                 parent = f"s1:{seed}"
@@ -1122,7 +1206,6 @@ class ChainWatch:
                 handled = self.state.setdefault("known_runtime_failures", {})
                 blocked.pop(logical, None)
                 if handled.get(logical) != marker:
-                    self.record_failed_nodes(status.nodes)
                     attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
                     moved = quarantine_artifacts(
                         self.checkpoint_dir, self.run_tag, logical, attempt

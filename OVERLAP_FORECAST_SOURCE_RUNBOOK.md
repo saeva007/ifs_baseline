@@ -631,7 +631,8 @@ bash attach_q_core_mhtpw_watchdog.sh
 ```
 
 Check that the report identifies the intended run, 99 expected training rows,
-and only `mhtpw_s1_*` / `mhtpw_<mask>_*` jobs. Then attach automatic recovery:
+only `mhtpw_s1_*` / `mhtpw_<mask>_*` jobs, and the separately reported
+`mhtpw_runtime_gate`. Then attach automatic recovery:
 
 ```bash
 RUN_TAG=qcore_t925_mhtpw_formal_v1_20260722 \
@@ -753,9 +754,19 @@ with enough capacity for the required local copies plus a 1-GiB reserve. The
 large files are not preloaded before HIP initialization because Linux cgroup
 page-cache charging can otherwise starve the accelerator runtime. The
 established training loader performs the actual local copy after distributed
-device initialization. Exact cache-preflight, HIP-unavailable, and cgroup-OOM
-signatures are eligible for bounded watchdog recovery; unrelated failures
-remain blocked.
+device initialization.
+
+Before any replacement S1/S2 can start, one shared `mhtpw_runtime_gate` job
+must successfully initialize and allocate on all four DCUs of each of the five
+nodes. The gate and every training allocation use the validated loader order
+`Torch -> OpenSSL 1.1 -> compatible HIPNN -> DTK`, limit host allocator/thread
+fan-out, and stagger the four local workers' Torch imports by five seconds.
+Each training allocation repeats the same four-process device probe before
+reading training data. Exact cache-preflight, HIP-unavailable, and cgroup-OOM
+signatures are eligible for bounded watchdog recovery. If the shared gate
+fails, the dependency-cancelled S1/S2 matrix is treated as one infrastructure
+failure rather than 99 model failures; an unrecognized gate failure remains a
+hard blocker.
 
 Stopping the watchdog does not cancel any managed training job. If its
 240-hour allocation ends while the experiment is still queued/running, rerun

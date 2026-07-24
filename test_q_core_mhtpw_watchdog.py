@@ -25,6 +25,28 @@ def workspace_temp_dir():
 
 
 class MHTPWWatchdogTest(unittest.TestCase):
+    def test_dcu_runtime_contract_uses_validated_order_and_rank_stagger(self) -> None:
+        repo = Path(__file__).resolve().parent
+        runtime = (repo / "activate_mhtpw_dcu_runtime.sh").read_text(
+            encoding="utf-8"
+        )
+        compatibility = runtime.index(
+            'export LD_LIBRARY_PATH="${OPENSSL_COMPAT_LIB}:'
+        )
+        torch_prepend = runtime.index(
+            'source "${MHTPW_RUNTIME_DIR}/activate_torch_runtime.sh"'
+        )
+        self.assertLess(compatibility, torch_prepend)
+        self.assertIn(
+            'MHTPW_RANK_STAGGER_SECONDS="${MHTPW_RANK_STAGGER_SECONDS:-5}"',
+            runtime,
+        )
+        training = (repo / "sub_ifs_overlap_baseline.slurm").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("probe_mhtpw_dcu_runtime.py", training)
+        self.assertIn("stagger_mhtpw_torch_entrypoint.py", training)
+
     def test_dispatcher_registers_mhtpw_experiment_alias(self) -> None:
         repo = Path(__file__).resolve().parent
         self.assertTrue(mod.dispatcher_accepts_mhtpw_alias(repo))
@@ -81,6 +103,76 @@ class MHTPWWatchdogTest(unittest.TestCase):
                     mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
                 ),
                 "RuntimeError: No HIP GPUs are available",
+            )
+
+    def test_runtime_gate_failure_adopts_dependency_cancelled_matrix(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "900.err").write_text(
+                "[DCU-Runtime-Preflight] ERROR: "
+                "RuntimeError: No HIP GPUs are available\n",
+                encoding="utf-8",
+            )
+            watch = object.__new__(mod.ChainWatch)
+            watch.args = SimpleNamespace(
+                auto_retry=True,
+                adopt_runtime_failure=True,
+                adopt_local_cache_failure=False,
+                adopt_dispatcher_failure=False,
+                checkpoint_grace_minutes=30,
+                exclude_failed_nodes=False,
+            )
+            watch.run_tag = "demo"
+            watch.baseline_dir = tmp
+            watch.checkpoint_dir = tmp / "checkpoints"
+            watch.checkpoint_dir.mkdir()
+            watch.force_end_generation = None
+            watch.expected = ("s1:42", "s2:42:00000")
+            watch.manifest = {"runtime_gate_job": "900"}
+            watch.state = {
+                "generation": 2,
+                "jobs": {"s1:42": "901", "s2:42:00000": "902"},
+                "retries": {},
+                "watchdog_cancelled_job_ids": [],
+                "progress": {},
+                "blocked": {
+                    "s1:42": "old",
+                    "s2:42:00000": "old",
+                },
+            }
+            watch.log_action = lambda *args, **kwargs: None
+            watch.save = lambda: None
+            watch.missing_artifacts = lambda: ["s1:42", "s2:42:00000"]
+            resumed = []
+            watch.resume_chain = lambda missing: resumed.extend(missing)
+            statuses = {
+                "900": mod.JobStatus(
+                    "900", "mhtpw_runtime_gate", "FAILED", "n[1-5]", "sacct"
+                ),
+                "901": mod.JobStatus(
+                    "901", "mhtpw_s1_s42", "CANCELLED", "", "sacct"
+                ),
+                "902": mod.JobStatus(
+                    "902", "mhtpw_00000_s42", "CANCELLED", "", "sacct"
+                ),
+            }
+            with patch.object(
+                mod, "query_job", side_effect=lambda job_id: statuses[str(job_id)]
+            ):
+                self.assertEqual(watch.cycle(), (False, True))
+            self.assertEqual(watch.state["blocked"], {})
+            self.assertTrue(watch.state["needs_resume"])
+            self.assertTrue(
+                watch.state["runtime_gate_retry_cause"].startswith(
+                    "known_runtime_failure:"
+                )
+            )
+            self.assertEqual(resumed, ["s1:42", "s2:42:00000"])
+            self.assertTrue(
+                watch.state["retry_causes"]["s1:42"].startswith(
+                    "dependency_cancelled_after:runtime_gate:"
+                )
             )
 
     def test_job_names_and_dependency_ids_are_exact(self) -> None:
@@ -389,7 +481,7 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 "dependency_cancelled_after:s1:20260702",
             )
             self.assertEqual(watch.state["blocked"], {})
-            self.assertEqual(watch.state["failed_node_lists"], ["n5"])
+            self.assertNotIn("failed_node_lists", watch.state)
 
     def test_transient_terminal_artifacts_are_quarantined_once(self) -> None:
         watch = object.__new__(mod.ChainWatch)

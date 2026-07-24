@@ -39,6 +39,7 @@ LOWVIS_RNN_EXTRA_ARGS="${LOWVIS_RNN_EXTRA_ARGS:-}"
 export LOWVIS_RNN_LOCAL_CACHE_DIR="${LOWVIS_RNN_LOCAL_CACHE_DIR:-/tmp}"
 export LOWVIS_RNN_CLEAN_LOCAL_CACHE="${LOWVIS_RNN_CLEAN_LOCAL_CACHE:-0}"
 export LOWVIS_RNN_REQUIRE_LOCAL_CACHE="${LOWVIS_RNN_REQUIRE_LOCAL_CACHE:-0}"
+export LOWVIS_RNN_DCU_PREFLIGHT="${LOWVIS_RNN_DCU_PREFLIGHT:-0}"
 
 USER_LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-}"
 USER_LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-}"
@@ -509,17 +510,7 @@ EXTRA_TOKENS=( ${LOWVIS_RNN_EXTRA_ARGS} ${TRAIN_EXTRA_ARGS} )
 # ==========================================
 # 1. Environment（与 sub_s1.slurm 一致）
 # ==========================================
-module purge
-module load compiler/devtoolset/7.3.1
-module load mpi/hpcx/2.11.0/gcc-7.3.1
-source /public/home/xichen/ncydata/dtk/dtk-24.04.1/env.sh
-export LD_LIBRARY_PATH=/public/home/xichen/ncydata/dtk/dtk-24.04.1/.hyhal/lib:$LD_LIBRARY_PATH
-export TORCH_ENV="${TORCH_ENV:-/public/home/jarvis226/miniconda3/envs/torch}"
-source /public/home/putianshu/vis_mlp/ifs_baseline/activate_torch_runtime.sh
-export LD_LIBRARY_PATH=/public/home/xichen/.conda/envs/py310_ppy/openssl/lib:$LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/public/home/xichen/ncydata/panpy_test_liud/hipnn/lib/release/:$LD_LIBRARY_PATH
-export PYTHONUNBUFFERED=1
-export OMP_NUM_THREADS=4
+source "${BASELINE_DIR}/activate_mhtpw_dcu_runtime.sh"
 
 # 计算节点上的 srun 步常不继承登录式 PATH；用绝对路径调用 torchrun，避免 “command not found”。
 TORCHRUN_BIN="$(command -v torchrun)"
@@ -602,6 +593,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     echo "LOCAL_CACHE_DIR : ${LOWVIS_RNN_LOCAL_CACHE_DIR}"
     echo "CLEAN_LOCAL_CACHE: ${LOWVIS_RNN_CLEAN_LOCAL_CACHE}"
     echo "REQUIRE_LOCAL_CACHE: ${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}"
+    echo "DCU_PREFLIGHT   : ${LOWVIS_RNN_DCU_PREFLIGHT}"
 fi
 
 # ==========================================
@@ -653,6 +645,37 @@ if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}" =
     echo "Node-local cache capacity/writability preflight passed on all ${SLURM_NNODES} nodes."
 fi
 
+if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_DCU_PREFLIGHT}" = "1" ]; then
+    DCU_PROBE_SCRIPT="${BASELINE_DIR}/probe_mhtpw_dcu_runtime.py"
+    [ -s "${DCU_PROBE_SCRIPT}" ] || { echo "ERROR: DCU probe missing: ${DCU_PROBE_SCRIPT}" >&2; exit 2; }
+    echo "Running four-process DCU runtime probe on every allocated node..."
+    srun --export=ALL \
+         --nodes=${SLURM_NNODES} \
+         --ntasks=${SLURM_NNODES} \
+         --ntasks-per-node=1 \
+         --cpus-per-task=4 \
+         --gres=dcu:4 \
+         --kill-on-bad-exit=1 \
+         /bin/bash -c "
+             cd '${BASELINE_DIR}' || exit 1
+             '${TORCHRUN_BIN}' --standalone --nnodes=1 --nproc_per_node=4 \
+                 '${DCU_PROBE_SCRIPT}'
+         "
+    echo "Per-allocation DCU runtime preflight passed on all ${SLURM_NNODES} nodes."
+    sleep 10
+fi
+
+TRAIN_ENTRYPOINT_TOKENS=("${TRAIN_SCRIPT}")
+if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_DCU_PREFLIGHT}" = "1" ]; then
+    STAGGER_ENTRYPOINT="${BASELINE_DIR}/stagger_mhtpw_torch_entrypoint.py"
+    [ -s "${STAGGER_ENTRYPOINT}" ] || {
+        echo "ERROR: staggered Torch entrypoint missing: ${STAGGER_ENTRYPOINT}" >&2
+        exit 2
+    }
+    TRAIN_ENTRYPOINT_TOKENS=("${STAGGER_ENTRYPOINT}" "${TRAIN_SCRIPT}")
+    echo "MHTPW worker startup staggering: ${MHTPW_RANK_STAGGER_SECONDS}s per local rank"
+fi
+
 # ==========================================
 # 5. Launch Training
 # ==========================================
@@ -681,7 +704,7 @@ srun --export=ALL \
              --rdzv_id=${SLURM_JOBID} \
              --max_restarts=0 \
              ${TORCHRUN_EXTRA_ARGS} \
-             \"${TRAIN_SCRIPT}\" \
+             ${TRAIN_ENTRYPOINT_TOKENS[*]} \
              ${PY_ARGS[*]:-} \
              ${EXTRA_TOKENS[*]:-}
      "
