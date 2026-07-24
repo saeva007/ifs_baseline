@@ -750,25 +750,39 @@ class ChainWatch:
             raise RuntimeError("force-ending a generation requires --auto-retry")
 
         active: list[tuple[str, str, JobStatus]] = []
+        terminal_to_adopt: list[tuple[str, str, JobStatus]] = []
         for logical, job_id in jobs.items():
             status = query_job(job_id)
-            if status.state not in ACTIVE_STATES:
-                continue
+            if status.state in {"UNKNOWN", "QUERY_ERROR"}:
+                raise RuntimeError(
+                    f"refusing forced generation end: cannot authoritatively "
+                    f"resolve job {job_id} for {logical} ({status.state})"
+                )
             observed = logical_from_job_name(status.name)
             if observed != logical:
                 raise RuntimeError(
                     f"refusing forced generation end: job {job_id} identity "
                     f"{observed!r} != {logical!r}"
                 )
-            active.append((logical, job_id, status))
+            if status.state == "COMPLETED":
+                continue
+            if status.state in ACTIVE_STATES:
+                active.append((logical, job_id, status))
+            else:
+                terminal_to_adopt.append((logical, job_id, status))
 
-        if not active:
+        if not active and not terminal_to_adopt:
             completed[key] = {
                 "at": now_iso(),
                 "job_ids": [],
-                "detail": "no active training jobs",
+                "detail": "all tracked training jobs already completed",
             }
-            self.log_action("chain", "FORCE_END_NO_ACTIVE_JOBS", "", f"generation={generation}")
+            self.log_action(
+                "chain",
+                "FORCE_END_ALL_JOBS_COMPLETED",
+                "",
+                f"generation={generation}",
+            )
             self.save()
             return
 
@@ -776,25 +790,31 @@ class ChainWatch:
         self.state["force_end_intent"] = {
             "generation": generation,
             "created_at": now_iso(),
-            "jobs": {logical: job_id for logical, job_id, _ in active},
+            "active_jobs": {logical: job_id for logical, job_id, _ in active},
+            "terminal_jobs": {
+                logical: {"job_id": job_id, "state": status.state}
+                for logical, job_id, status in terminal_to_adopt
+            },
         }
         self.save()
-        run_command(["scancel", *job_ids], check=True)
-        deadline = time.time() + self.args.cancel_wait_seconds
-        remaining = set(job_ids)
-        while remaining and time.time() < deadline:
-            remaining = {
-                item for item in remaining
-                if query_job(item).state in ACTIVE_STATES
-            }
+        if job_ids:
+            run_command(["scancel", *job_ids], check=True)
+            deadline = time.time() + self.args.cancel_wait_seconds
+            remaining = set(job_ids)
+            while remaining and time.time() < deadline:
+                remaining = {
+                    item for item in remaining
+                    if query_job(item).state in ACTIVE_STATES
+                }
+                if remaining:
+                    time.sleep(3)
             if remaining:
-                time.sleep(3)
-        if remaining:
-            raise RuntimeError(
-                f"forced generation-end cancellation timed out: {sorted(remaining)}"
-            )
+                raise RuntimeError(
+                    f"forced generation-end cancellation timed out: {sorted(remaining)}"
+                )
 
         cancelled = set(self.state.get("watchdog_cancelled_job_ids", []))
+        force_adopted = set(self.state.get("force_adopted_terminal_job_ids", []))
         moved = 0
         for logical, job_id, status in active:
             cancelled.add(job_id)
@@ -807,13 +827,30 @@ class ChainWatch:
             )
             self.state.setdefault("blocked", {}).pop(logical, None)
             self.state.setdefault("retry_causes", {})[logical] = (
-                f"forced_generation_end:{generation}"
+                f"forced_generation_end:{generation}:active"
+            )
+        for logical, job_id, status in terminal_to_adopt:
+            force_adopted.add(job_id)
+            self.record_failed_nodes(status.nodes)
+            attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
+            moved += len(
+                quarantine_artifacts(
+                    self.checkpoint_dir, self.run_tag, logical, attempt
+                )
+            )
+            self.state.setdefault("blocked", {}).pop(logical, None)
+            self.state.setdefault("retry_causes", {})[logical] = (
+                f"forced_generation_end:{generation}:terminal:{status.state}"
             )
         self.state["watchdog_cancelled_job_ids"] = sorted(cancelled)
+        self.state["force_adopted_terminal_job_ids"] = sorted(force_adopted)
         self.state["needs_resume"] = True
         completed[key] = {
             "at": now_iso(),
             "job_ids": job_ids,
+            "terminal_job_ids": [
+                job_id for _, job_id, _ in terminal_to_adopt
+            ],
             "quarantined_files": moved,
         }
         self.state.pop("force_end_intent", None)
@@ -821,7 +858,8 @@ class ChainWatch:
             "chain",
             "FORCE_END_CURRENT_GENERATION",
             ",".join(job_ids),
-            f"generation={generation} active={len(job_ids)} quarantined={moved}",
+            f"generation={generation} active={len(job_ids)} "
+            f"terminal_adopted={len(terminal_to_adopt)} quarantined={moved}",
         )
         self.save()
 
@@ -993,6 +1031,14 @@ class ChainWatch:
                         blocked[logical] = f"job {job_id} completed without a valid {stage} artifact triplet"
                     else:
                         any_active = True
+                continue
+            if (
+                status.state not in ACTIVE_STATES
+                and job_id
+                in set(self.state.get("force_adopted_terminal_job_ids", []))
+            ):
+                blocked.pop(logical, None)
+                self.state["needs_resume"] = True
                 continue
             if status.state in TRANSIENT_TERMINAL_STATES:
                 handled = self.state.setdefault("transient_handled", {})

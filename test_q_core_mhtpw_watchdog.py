@@ -311,6 +311,10 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 watch.state["watchdog_cancelled_job_ids"],
                 ["100", "101"],
             )
+            self.assertEqual(
+                watch.state["force_adopted_terminal_job_ids"],
+                ["201"],
+            )
             self.assertTrue(watch.state["needs_resume"])
             self.assertEqual(
                 watch.state["force_ended_generations"]["0"]["quarantined_files"],
