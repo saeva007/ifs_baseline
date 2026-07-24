@@ -182,8 +182,10 @@ data_dep="$(dep_arg "${data_jobs}")"
 audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},AUDIT_PROFILE=qcore_t925,SOURCES=tianji=${TIANJI_DATA_DIR};pangu2025=${PANGU_DATA_DIR},S1_DATA_DIR=${S1_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit,EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}")
 [[ -z "${data_dep}" ]] || audit_args+=("${data_dep}")
 base_audit_job="$(submit base_data_audit "${audit_args[@]}" sub_q_core_fair_data_audit.slurm)"
+runtime_gate_job="$(submit runtime_gate --export="ALL,BASELINE_DIR=${BASELINE_DIR}" sub_q_core_mhtpw_runtime_gate.slurm)"
 
-base_dep="$(dep_arg "${base_audit_job}")"
+base_deps="${base_audit_job}:${runtime_gate_job}"
+base_dep="$(dep_arg "${base_deps}")"
 if [[ "${RESUME_EXISTING_RUN}" == "1" ]]; then
   for mask in "${mask_array[@]}"; do require_dataset "hybrid_${mask}" "${HYBRID_DATA_ROOT}/mhtpw_${mask}" train val test; done
   hybrid_build_job=""
@@ -209,7 +211,7 @@ for seed_raw in "${seed_array[@]}"; do
     s1_jobs[${seed}]=""
     echo "[RESUME] S1 ${seed}"
   else
-    s1_args=(--job-name="mhtpw_s1_s${seed}" --export="ALL,EXPERIMENT=s1_q_core_t925_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1")
+    s1_args=(--job-name="mhtpw_s1_s${seed}" --export="ALL,EXPERIMENT=s1_q_core_t925_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=1")
     [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s1_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${base_dep}" ]] || s1_args+=("${base_dep}")
     s1_jobs[${seed}]="$(submit "s1_seed${seed}" "${s1_args[@]}" sub_ifs_overlap_baseline.slurm)"
@@ -228,10 +230,10 @@ for seed_raw in "${seed_array[@]}"; do
       echo "[RESUME] S2 seed=${seed} mask=${mask}"
       continue
     fi
-    deps="${hybrid_audit_job}"
+    deps="${hybrid_audit_job}:${runtime_gate_job}"
     deps="$(append_dep "${deps}" "${s1_jobs[${seed}]}")"
     dep="$(dep_arg "${deps}")"
-    s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1")
+    s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=1")
     [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s2_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${dep}" ]] || s2_args+=("${dep}")
     s2_jobs[${seed}_${mask}]="$(submit "s2_${mask}_seed${seed}" "${s2_args[@]}" sub_ifs_overlap_baseline.slurm)"
@@ -295,6 +297,7 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "source_data_root=${DATA_ROOT}"
     echo "hybrid_data_root=${HYBRID_DATA_ROOT}"
     echo "base_data_audit_job=${base_audit_job}"
+    echo "runtime_gate_job=${runtime_gate_job}"
     echo "hybrid_build_job=${hybrid_build_job}"
     echo "hybrid_audit_job=${hybrid_audit_job}"
     echo "training_job_ids=${scheduled_training}"
