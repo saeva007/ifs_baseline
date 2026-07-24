@@ -936,10 +936,19 @@ class ChainWatch:
                 "ERA5_DATA_DIR": self.manifest.get("era5_data_dir", os.environ.get("WATCH_ERA5_DATA_DIR", "")),
             }
         )
-        existing_exclude = self.manifest.get("train_exclude_nodes", "").strip()
-        exclude_lists = [existing_exclude] if existing_exclude else []
-        exclude_lists.extend(str(value) for value in self.state.get("failed_node_lists", []))
-        env["TRAIN_EXCLUDE_NODES"] = ",".join(dict.fromkeys(value for value in exclude_lists if value))
+        if self.args.exclude_failed_nodes:
+            existing_exclude = self.manifest.get("train_exclude_nodes", "").strip()
+            exclude_lists = [existing_exclude] if existing_exclude else []
+            exclude_lists.extend(
+                str(value) for value in self.state.get("failed_node_lists", [])
+            )
+            env["TRAIN_EXCLUDE_NODES"] = ",".join(
+                dict.fromkeys(value for value in exclude_lists if value)
+            )
+        else:
+            # A code-induced failure (for example pre-Torch page-cache OOM)
+            # must not progressively blacklist otherwise healthy allocations.
+            env["TRAIN_EXCLUDE_NODES"] = ""
         launcher = self.baseline_dir / "submit_q_core_t925_mhtpw_factorial.sh"
         self.log_action("chain", "RESUME_SUBMIT_START", "", f"missing={len(missing)}")
         result = run_command(["bash", str(launcher)], cwd=self.baseline_dir, env=env)
