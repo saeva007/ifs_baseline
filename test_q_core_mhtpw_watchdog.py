@@ -64,6 +64,25 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 )
             )
 
+    def test_known_runtime_failure_signature_is_exact(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "777.err").write_text(
+                "RuntimeError: No HIP GPUs are available\n"
+                "slurmstepd: error: Detected 3 oom-kill event(s)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                mod.matching_job_log_signature(
+                    tmp,
+                    "777",
+                    "mhtpw_s1_s20260702",
+                    mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
+                ),
+                "RuntimeError: No HIP GPUs are available",
+            )
+
     def test_job_names_and_dependency_ids_are_exact(self) -> None:
         self.assertEqual(mod.logical_from_job_name("mhtpw_s1_s2025"), "s1:2025")
         self.assertEqual(mod.logical_from_job_name("mhtpw_10110_s42"), "s2:42:10110")
@@ -300,6 +319,73 @@ class MHTPWWatchdogTest(unittest.TestCase):
             self.assertFalse(mod.artifact_complete(
                 watch.checkpoint_dir, run_id, "s1"
             ))
+
+    def test_runtime_failed_s1_adopts_afterok_cancelled_children(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "100.err").write_text(
+                "RuntimeError: No HIP GPUs are available\n",
+                encoding="utf-8",
+            )
+            watch = object.__new__(mod.ChainWatch)
+            watch.args = SimpleNamespace(
+                auto_retry=True,
+                adopt_runtime_failure=True,
+                adopt_local_cache_failure=False,
+                adopt_dispatcher_failure=False,
+                checkpoint_grace_minutes=30,
+                exclude_failed_nodes=True,
+            )
+            watch.run_tag = "demo"
+            watch.baseline_dir = tmp
+            watch.checkpoint_dir = tmp / "checkpoints"
+            watch.checkpoint_dir.mkdir()
+            watch.force_end_generation = None
+            watch.expected = ("s1:20260702", "s2:20260702:00000", "s1:42")
+            watch.state = {
+                "generation": 1,
+                "jobs": {
+                    "s1:20260702": "100",
+                    "s2:20260702:00000": "101",
+                    "s1:42": "200",
+                },
+                "retries": {},
+                "watchdog_cancelled_job_ids": [],
+                "progress": {},
+                "blocked": {
+                    "s1:20260702": "old",
+                    "s2:20260702:00000": "old",
+                },
+            }
+            watch.log_action = lambda *args, **kwargs: None
+            watch.save = lambda: None
+            watch.observe_running = lambda *args, **kwargs: None
+            watch.cancel_dead_s1_children = lambda *args, **kwargs: None
+            watch.missing_artifacts = lambda: [
+                "s1:20260702",
+                "s2:20260702:00000",
+            ]
+            statuses = [
+                mod.JobStatus("100", "mhtpw_s1_s20260702", "FAILED", "n5", "sacct"),
+                mod.JobStatus("101", "mhtpw_00000_s20260702", "CANCELLED", "", "sacct"),
+                mod.JobStatus("200", "mhtpw_s1_s42", "PENDING", "", "squeue"),
+            ]
+            with (
+                patch.object(mod, "query_job", side_effect=statuses),
+                patch.object(mod, "quarantine_artifacts", return_value=[]),
+            ):
+                self.assertEqual(watch.cycle(), (False, True))
+            self.assertEqual(
+                watch.state["retry_causes"]["s1:20260702"],
+                "known_runtime_failure:RuntimeError: No HIP GPUs are available",
+            )
+            self.assertEqual(
+                watch.state["retry_causes"]["s2:20260702:00000"],
+                "dependency_cancelled_after:s1:20260702",
+            )
+            self.assertEqual(watch.state["blocked"], {})
+            self.assertEqual(watch.state["failed_node_lists"], ["n5"])
 
     def test_transient_terminal_artifacts_are_quarantined_once(self) -> None:
         watch = object.__new__(mod.ChainWatch)

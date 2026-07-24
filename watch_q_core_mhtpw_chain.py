@@ -39,6 +39,11 @@ TRANSIENT_TERMINAL_STATES = {"NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "REQUEUED"}
 BLOCKED_TERMINAL_STATES = {"FAILED", "OUT_OF_MEMORY", "OOM", "TIMEOUT", "DEADLINE"}
 KNOWN_MHTPW_DISPATCHER_FAILURE = "Unknown EXPERIMENT=s2_q_core_t925_mhtpw"
 STRICT_LOCAL_CACHE_FAILURE = "[Local-Cache-Preflight] ERROR:"
+KNOWN_RUNTIME_FAILURE_SIGNATURES = (
+    "RuntimeError: No HIP GPUs are available",
+    "oom-kill event(s)",
+    "Out Of Memory",
+)
 STATE_ALIASES = {
     "PD": "PENDING",
     "CF": "CONFIGURING",
@@ -279,6 +284,23 @@ def has_known_dispatcher_failure(
         job_name,
         KNOWN_MHTPW_DISPATCHER_FAILURE,
     )
+
+
+def matching_job_log_signature(
+    baseline_dir: Path,
+    job_id: str,
+    job_name: str,
+    signatures: Sequence[str],
+) -> str:
+    for signature in signatures:
+        if has_job_log_signature(
+            baseline_dir,
+            job_id,
+            job_name,
+            signature,
+        ):
+            return signature
+    return ""
 
 
 def quarantine_artifacts(checkpoint_dir: Path, run_tag: str, logical: str, attempt: int) -> list[str]:
@@ -550,6 +572,7 @@ class ChainWatch:
             "adopt_local_cache_failure": bool(
                 self.args.adopt_local_cache_failure
             ),
+            "adopt_runtime_failure": bool(self.args.adopt_runtime_failure),
             "force_end_current_generation": bool(
                 self.args.force_end_current_generation
             ),
@@ -892,6 +915,16 @@ class ChainWatch:
         self.state["generation"] = int(self.state["generation"]) + 1
         self.state["jobs"] = jobs
         self.state["progress"] = {}
+        causes = dict(self.state.get("retry_causes", {}))
+        if causes:
+            self.state.setdefault("retry_cause_history", []).append(
+                {
+                    "generation": int(self.state["generation"]) - 1,
+                    "recorded_at": now_iso(),
+                    "causes": causes,
+                }
+            )
+        self.state["retry_causes"] = {}
         self.state["needs_resume"] = False
         self.state.pop("resume_intent", None)
         self.state["current_manifest"] = str(self.manifest_path)
@@ -988,8 +1021,68 @@ class ChainWatch:
             ):
                 self.state["needs_resume"] = True
                 continue
+            if status.state == "CANCELLED" and logical.startswith("s2:"):
+                seed = logical.split(":")[1]
+                parent = f"s1:{seed}"
+                parent_cause = str(
+                    self.state.get("retry_causes", {}).get(parent, "")
+                )
+                allowed_parent_causes = (
+                    "known_runtime_failure:",
+                    "strict_local_cache_failure",
+                    "transient_terminal:",
+                    "semantic_stall:",
+                    "forced_generation_end:",
+                )
+                if parent_cause.startswith(allowed_parent_causes):
+                    blocked.pop(logical, None)
+                    self.state["needs_resume"] = True
+                    self.state.setdefault("retry_causes", {})[logical] = (
+                        f"dependency_cancelled_after:{parent}"
+                    )
+                    self.log_action(
+                        logical,
+                        "ADOPT_DEPENDENCY_CANCELLED",
+                        job_id,
+                        f"parent={parent} cause={parent_cause}",
+                    )
+                    continue
             if status.state in {"UNKNOWN", "QUERY_ERROR"}:
                 any_active = True
+                continue
+            runtime_signature = ""
+            if (
+                status.state
+                in {"FAILED", "OUT_OF_MEMORY", "OOM"}
+                and getattr(self.args, "adopt_runtime_failure", False)
+            ):
+                runtime_signature = matching_job_log_signature(
+                    self.baseline_dir,
+                    job_id,
+                    status.name,
+                    KNOWN_RUNTIME_FAILURE_SIGNATURES,
+                )
+            if runtime_signature:
+                marker = f"{job_id}:{status.state}:{runtime_signature}"
+                handled = self.state.setdefault("known_runtime_failures", {})
+                blocked.pop(logical, None)
+                if handled.get(logical) != marker:
+                    self.record_failed_nodes(status.nodes)
+                    attempt = int(self.state.get("retries", {}).get(logical, 0)) + 1
+                    moved = quarantine_artifacts(
+                        self.checkpoint_dir, self.run_tag, logical, attempt
+                    )
+                    handled[logical] = marker
+                    self.log_action(
+                        logical,
+                        "ADOPT_KNOWN_RUNTIME_FAILURE",
+                        job_id,
+                        f"state={status.state} quarantined={len(moved)} signature={runtime_signature}",
+                    )
+                self.state["needs_resume"] = True
+                self.state.setdefault("retry_causes", {})[logical] = (
+                    f"known_runtime_failure:{runtime_signature}"
+                )
                 continue
             if (
                 status.state == "FAILED"
@@ -1116,6 +1209,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "adopt only FAILED training jobs whose own Slurm log contains the "
             "strict node-local-cache preflight error signature"
+        ),
+    )
+    parser.add_argument(
+        "--adopt-runtime-failure",
+        action="store_true",
+        default=os.environ.get("WATCH_ADOPT_RUNTIME_FAILURE", "0") == "1",
+        help=(
+            "adopt only FAILED/OOM training jobs whose own Slurm log contains "
+            "a prespecified HIP-unavailable or cgroup-OOM infrastructure signature"
         ),
     )
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("WATCH_POLL_SECONDS", "180")))

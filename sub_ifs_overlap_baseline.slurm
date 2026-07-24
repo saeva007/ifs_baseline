@@ -642,14 +642,15 @@ if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}" =
     STRICT_CACHE_SCRIPT="${BASELINE_DIR}/stage_lowvis_local_cache.py"
     [ -x "${PYTHON_BIN}" ] || { echo "ERROR: python unavailable for strict local-cache staging" >&2; exit 2; }
     [ -s "${STRICT_CACHE_SCRIPT}" ] || { echo "ERROR: strict local-cache stager missing: ${STRICT_CACHE_SCRIPT}" >&2; exit 2; }
-    echo "Strictly staging train/validation arrays on every allocated node..."
+    echo "Checking node-local cache capacity/writability on every allocated node..."
     srun --nodes=${SLURM_NNODES} --ntasks=${SLURM_NNODES} --ntasks-per-node=1 \
          --kill-on-bad-exit=1 \
          "${PYTHON_BIN}" "${STRICT_CACHE_SCRIPT}" \
          --data-dir "${STRICT_CACHE_DATA_DIR}" \
          --cache-dir "${LOWVIS_RNN_LOCAL_CACHE_DIR}" \
-         --cache-id "${LOWVIS_RNN_LOCAL_CACHE_ID}"
-    echo "Strict node-local cache preflight passed on all ${SLURM_NNODES} nodes."
+         --cache-id "${LOWVIS_RNN_LOCAL_CACHE_ID}" \
+         --check-only
+    echo "Node-local cache capacity/writability preflight passed on all ${SLURM_NNODES} nodes."
 fi
 
 # ==========================================

@@ -32,12 +32,19 @@ def stage_dataset(
     cache_dir: Path,
     cache_id: str,
     reserve_bytes: int,
+    copy_files: bool = True,
 ) -> dict[str, object]:
     if not cache_id.strip():
         raise ValueError("cache_id must be non-empty")
     data_dir = data_dir.expanduser()
     cache_dir = cache_dir.expanduser()
     cache_dir.mkdir(parents=True, exist_ok=True)
+    probe = cache_dir / f".lowvis_cache_probe_{os.getpid()}"
+    try:
+        probe.write_bytes(b"ok")
+    finally:
+        if probe.exists():
+            probe.unlink()
 
     pairs: list[tuple[Path, Path, int]] = []
     copy_bytes = 0
@@ -63,6 +70,8 @@ def stage_dataset(
     copied = 0
     reused = 0
     for source, target, size in pairs:
+        if not copy_files:
+            continue
         if target.is_file() and target.stat().st_size == size:
             reused += 1
             continue
@@ -94,6 +103,7 @@ def stage_dataset(
         "required_files": len(REQUIRED_FILES),
         "copy_bytes": copy_bytes,
         "free_bytes_before": free_bytes,
+        "mode": "stage" if copy_files else "check_only",
         "status": "passed",
     }
 
@@ -109,6 +119,14 @@ def parse_args() -> argparse.Namespace:
         default=1024 * 1024 * 1024,
         help="Free-space reserve retained after staging (default: 1 GiB).",
     )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help=(
+            "verify source files plus per-node cache capacity/writability without "
+            "preloading large files into the job cgroup page cache"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -120,6 +138,7 @@ def main() -> int:
             Path(args.cache_dir),
             args.cache_id,
             args.reserve_bytes,
+            copy_files=not args.check_only,
         )
     except Exception as exc:
         print(

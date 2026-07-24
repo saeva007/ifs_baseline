@@ -57,6 +57,25 @@ class StageLowVisLocalCacheTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "insufficient local space"):
                     mod.stage_dataset(data, cache, "demo", reserve_bytes=0)
 
+    def test_check_only_verifies_capacity_without_populating_page_cache_files(self) -> None:
+        with workspace_temp_dir() as root:
+            data = root / "data"
+            cache = root / "cache"
+            data.mkdir()
+            for name in mod.REQUIRED_FILES:
+                (data / name).write_bytes(b"1234")
+
+            report = mod.stage_dataset(
+                data,
+                cache,
+                "demo",
+                reserve_bytes=0,
+                copy_files=False,
+            )
+            self.assertEqual(report["mode"], "check_only")
+            self.assertEqual(report["copied_files"], 0)
+            self.assertEqual(list(cache.glob("*.npy")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

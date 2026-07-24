@@ -747,11 +747,15 @@ bash attach_q_core_mhtpw_watchdog.sh
 ```
 
 The replacement launcher reuses every complete artifact triplet. Every MHTPW
-S1/S2 replacement also runs a strict per-node cache preflight before Torch:
-all four train/validation arrays must be copied to and size-verified under
-`/tmp` on every allocated node. There is no NFS fallback in this preflight.
-An exact local-cache failure is eligible for bounded watchdog recovery; other
-training failures remain blocked.
+S1/S2 replacement also runs a per-node cache preflight before Torch: all four
+train/validation sources must exist and every node's `/tmp` must be writable
+with enough capacity for the required local copies plus a 1-GiB reserve. The
+large files are not preloaded before HIP initialization because Linux cgroup
+page-cache charging can otherwise starve the accelerator runtime. The
+established training loader performs the actual local copy after distributed
+device initialization. Exact cache-preflight, HIP-unavailable, and cgroup-OOM
+signatures are eligible for bounded watchdog recovery; unrelated failures
+remain blocked.
 
 Stopping the watchdog does not cancel any managed training job. If its
 240-hour allocation ends while the experiment is still queued/running, rerun
