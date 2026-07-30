@@ -363,6 +363,16 @@ def pressure_level_quality(
                 seed + offset,
                 square_root=True,
             )
+            bias_result, bias_pairs = bootstrap_multi_source_bias(
+                {
+                    "pangu": pangu - reference,
+                    "tianji": tianji - reference,
+                },
+                dates[valid],
+                iterations,
+                seed + 10000 + offset,
+            )
+            bias_pair = bias_pairs[("pangu", "tianji")]
             p_metrics = source_metrics(pangu, reference)
             t_metrics = source_metrics(tianji, reference)
             rows.append(
@@ -378,11 +388,20 @@ def pressure_level_quality(
                     "represented_utc_dates": int(np.unique(dates[valid]).size),
                     **inferred,
                     "pangu_bias": p_metrics["bias"],
+                    "pangu_bias_ci_low": bias_result["pangu"]["ci_low"],
+                    "pangu_bias_ci_high": bias_result["pangu"]["ci_high"],
                     "pangu_mae": p_metrics["mae"],
                     "pangu_correlation": p_metrics["correlation"],
                     "tianji_bias": t_metrics["bias"],
+                    "tianji_bias_ci_low": bias_result["tianji"]["ci_low"],
+                    "tianji_bias_ci_high": bias_result["tianji"]["ci_high"],
                     "tianji_mae": t_metrics["mae"],
                     "tianji_correlation": t_metrics["correlation"],
+                    "bias_delta_pangu_minus_tianji": bias_pair[
+                        "delta_left_minus_right"
+                    ],
+                    "bias_delta_ci_low": bias_pair["delta_ci_low"],
+                    "bias_delta_ci_high": bias_pair["delta_ci_high"],
                     "original_q_core_input": feature in ORIGINAL_Q_CORE_INPUTS,
                     "independent_evidence": bool(FEATURE_INFO[feature]["independent_evidence"]),
                     "lineage_caveat": FEATURE_INFO[feature]["lineage"],
@@ -427,6 +446,28 @@ def pressure_level_quality(
             seed + offset,
             square_root=True,
         )
+        reference_speed = np.hypot(
+            wind["era5_reference_analysis"]["U_925"][valid],
+            wind["era5_reference_analysis"]["V_925"][valid],
+        )
+        pangu_speed = np.hypot(
+            wind["pangu"]["U_925"][valid],
+            wind["pangu"]["V_925"][valid],
+        )
+        tianji_speed = np.hypot(
+            wind["tianji"]["U_925"][valid],
+            wind["tianji"]["V_925"][valid],
+        )
+        bias_result, bias_pairs = bootstrap_multi_source_bias(
+            {
+                "pangu": pangu_speed - reference_speed,
+                "tianji": tianji_speed - reference_speed,
+            },
+            dates[valid],
+            iterations,
+            seed + 10000 + offset,
+        )
+        bias_pair = bias_pairs[("pangu", "tianji")]
         rows.append(
             {
                 "feature": "UV_925_VECTOR",
@@ -439,6 +480,18 @@ def pressure_level_quality(
                 "n": n,
                 "represented_utc_dates": int(np.unique(dates[valid]).size),
                 **inferred,
+                "pangu_bias": bias_result["pangu"]["bias"],
+                "pangu_bias_ci_low": bias_result["pangu"]["ci_low"],
+                "pangu_bias_ci_high": bias_result["pangu"]["ci_high"],
+                "tianji_bias": bias_result["tianji"]["bias"],
+                "tianji_bias_ci_low": bias_result["tianji"]["ci_low"],
+                "tianji_bias_ci_high": bias_result["tianji"]["ci_high"],
+                "bias_delta_pangu_minus_tianji": bias_pair[
+                    "delta_left_minus_right"
+                ],
+                "bias_delta_ci_low": bias_pair["delta_ci_low"],
+                "bias_delta_ci_high": bias_pair["delta_ci_high"],
+                "bias_definition": "signed 925-hPa wind-speed error; vector RMSE uses U/V components",
                 "original_q_core_input": True,
                 "independent_evidence": False,
                 "lineage_caveat": (
@@ -496,8 +549,59 @@ def bootstrap_multi_source_rmse(
     pair_results: Dict[Tuple[str, str], Dict[str, float]] = {}
     for left, right in itertools.combinations(losses, 2):
         delta = draws[left] - draws[right]
+        positive = (draws[left] > 0.0) & np.isfinite(draws[left]) & np.isfinite(draws[right])
+        ratio = draws[right][positive] / draws[left][positive]
         pair_results[(left, right)] = {
             "delta_left_minus_right": source_results[left]["rmse"] - source_results[right]["rmse"],
+            "delta_ci_low": float(np.quantile(delta, 0.025)),
+            "delta_ci_high": float(np.quantile(delta, 0.975)),
+            "ratio_right_over_left": (
+                source_results[right]["rmse"] / source_results[left]["rmse"]
+                if source_results[left]["rmse"] > 0.0
+                else math.nan
+            ),
+            "ratio_right_over_left_ci_low": (
+                float(np.quantile(ratio, 0.025)) if ratio.size else math.nan
+            ),
+            "ratio_right_over_left_ci_high": (
+                float(np.quantile(ratio, 0.975)) if ratio.size else math.nan
+            ),
+        }
+    return source_results, pair_results
+
+
+def bootstrap_multi_source_bias(
+    errors: Mapping[str, np.ndarray],
+    dates: np.ndarray,
+    iterations: int,
+    seed: int,
+) -> Tuple[Dict[str, Dict[str, float]], Dict[Tuple[str, str], Dict[str, float]]]:
+    unique, sums, counts = aggregate_daily_losses(errors, dates)
+    if len(unique) == 0:
+        raise RuntimeError("No represented UTC dates for bias bootstrap")
+    rng = np.random.default_rng(seed)
+    draws = {source: np.empty(iterations, dtype=np.float64) for source in errors}
+    for iteration in range(iterations):
+        chosen = rng.integers(0, len(unique), size=len(unique))
+        weights = np.bincount(chosen, minlength=len(unique))
+        denominator = max(float(weights @ counts), 1.0)
+        for source in errors:
+            draws[source][iteration] = float(weights @ sums[source]) / denominator
+    source_results: Dict[str, Dict[str, float]] = {}
+    for source, error in errors.items():
+        point = float(np.mean(error))
+        source_results[source] = {
+            "bias": point,
+            "ci_low": float(np.quantile(draws[source], 0.025)),
+            "ci_high": float(np.quantile(draws[source], 0.975)),
+        }
+    pair_results: Dict[Tuple[str, str], Dict[str, float]] = {}
+    for left, right in itertools.combinations(errors, 2):
+        delta = draws[left] - draws[right]
+        pair_results[(left, right)] = {
+            "delta_left_minus_right": (
+                source_results[left]["bias"] - source_results[right]["bias"]
+            ),
             "delta_ci_low": float(np.quantile(delta, 0.025)),
             "delta_ci_high": float(np.quantile(delta, 0.975)),
         }
@@ -556,6 +660,15 @@ def surface_observation_quality(
             source_result, pair_result = bootstrap_multi_source_rmse(
                 losses, dates[valid], iterations, seed + offset
             )
+            bias_result, bias_pair_result = bootstrap_multi_source_bias(
+                {
+                    source: forecasts[source][valid] - observation[valid]
+                    for source in SOURCES
+                },
+                dates[valid],
+                iterations,
+                seed + 10000 + offset,
+            )
             for source in SOURCES:
                 metrics = source_metrics(forecasts[source][valid], observation[valid])
                 source_rows.append(
@@ -572,6 +685,8 @@ def surface_observation_quality(
                         "represented_utc_dates": int(np.unique(dates[valid]).size),
                         **source_result[source],
                         "bias": metrics["bias"],
+                        "bias_ci_low": bias_result[source]["ci_low"],
+                        "bias_ci_high": bias_result[source]["ci_high"],
                         "mae": metrics["mae"],
                         "correlation": metrics["correlation"],
                         "bootstrap_iterations": int(iterations),
@@ -580,6 +695,7 @@ def surface_observation_quality(
                     }
                 )
             for (left, right), inferred in pair_result.items():
+                bias_inferred = bias_pair_result[(left, right)]
                 pair_rows.append(
                     {
                         "feature": feature,
@@ -592,6 +708,11 @@ def surface_observation_quality(
                         "n": n,
                         "represented_utc_dates": int(np.unique(dates[valid]).size),
                         **inferred,
+                        "bias_delta_left_minus_right": bias_inferred[
+                            "delta_left_minus_right"
+                        ],
+                        "bias_delta_ci_low": bias_inferred["delta_ci_low"],
+                        "bias_delta_ci_high": bias_inferred["delta_ci_high"],
                         "delta_direction": "positive means left source has larger observation RMSE",
                         "bootstrap_iterations": int(iterations),
                         "bootstrap_seed": int(seed + offset),

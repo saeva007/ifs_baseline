@@ -24,13 +24,16 @@ ERA5_DATA_DIR="${ERA5_DATA_DIR:-${DATA_ROOT}/era5_2025}"
 OBS_ROOT="${OBS_ROOT:-${BASE}/auto_station}"
 PAPER_EVAL_DIR="${PAPER_EVAL_DIR:-${BASE}/paper_eval}"
 OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_paired_source_quality/${RUN_TAG}/analysis}"
+FIGURE_OUT_DIR="${FIGURE_OUT_DIR:-${OUT_DIR}/figures_common_error_regimes}"
 TEST_MAX_ROWS="${TEST_MAX_ROWS:-0}"
 BOOTSTRAP_ITERS="${BOOTSTRAP_ITERS:-1000}"
 BOOTSTRAP_SEED="${BOOTSTRAP_SEED:-20260715}"
 LOW_VIS_THRESHOLD_M="${LOW_VIS_THRESHOLD_M:-1000}"
 PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
+PLOT_ERROR_REGIMES="${PLOT_ERROR_REGIMES:-1}"
+PLOT_SCRIPT="${PLOT_SCRIPT:-${BASELINE_DIR}/plot_common_variable_error_regimes.py}"
 
-mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
+mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}" "${FIGURE_OUT_DIR}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "ERROR: analysis Python is missing: ${PYTHON_BIN}" >&2
   exit 2
@@ -56,3 +59,15 @@ CMD=(
 echo "Paired pressure-level/surface quality diagnosis (training jobs: 0)"
 echo "Command: ${CMD[*]}"
 "${CMD[@]}"
+
+if [[ "${PLOT_ERROR_REGIMES}" == "1" || "${PLOT_ERROR_REGIMES}" == "true" ]]; then
+  PLOT_CMD=(
+    "${PYTHON_BIN}" "${PLOT_SCRIPT}"
+    --paired-quality-dir "${OUT_DIR}"
+    --out-dir "${FIGURE_OUT_DIR}"
+    --formats "svg,pdf,png,tiff"
+    --dpi 600
+  )
+  echo "Common-variable error-regime figure: ${PLOT_CMD[*]}"
+  "${PLOT_CMD[@]}"
+fi

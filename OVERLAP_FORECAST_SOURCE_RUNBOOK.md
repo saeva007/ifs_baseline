@@ -147,6 +147,27 @@ source-full data/checkpoint paths, `AUTO` scaler entries when using
 `--extra_sources`, `--skip_ifs_forecast_baseline`, and an output directory such as
 `paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources`.
 
+The formal `figure1_all_sources` evaluation now also writes a compact,
+exact-intersection best-effort analysis without requiring the large per-sample
+CSVs. In addition to the original four-metric comparison it exports paired
+metrics, precision-recall curves, reliability bins, response across the full
+observed-visibility distribution, member-hit complementarity, every individual
+panel, and the full six-panel figure:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+bash submit_static_rnn_source_full_argmax_eval.sh figure1_all_sources
+```
+
+To redraw from an older completed directory, use the plot-only job. It reuses
+compact tables when present, otherwise it derives them from the existing
+`per_sample_*.csv` files:
+
+```bash
+sbatch --export=ALL,RUN_DIR=/public/home/putianshu/vis_mlp/paper_eval_results_pm10_pm25_journal/best_effort_source_full_argmax/figure1_all_sources \
+  sub_plot_best_effort_extended.slurm
+```
+
 5. Evaluate Figure 2 in two pieces: run
 `sub_static_rnn_overlap_softmax_ensemble.slurm` with source-full Tianji/IFS
 paths and `SOURCE_THRESHOLD_MODE=argmax,ENSEMBLE_THRESHOLD_MODE=argmax`, then
@@ -789,6 +810,14 @@ three-seed mean probabilities at validation-matched FPR, then compares T925,
 Q1000, Q925, and vector-derived 925-hPa wind speed point by point with ERA5
 reference analysis at valid time. Both jobs are zero-training diagnoses and do
 not depend on the unfinished 96 S2 jobs.
+
+The paired-quality job also bootstraps signed biases and automatically writes
+`fig_common_variable_error_regimes.*`. Its top row compares paired RMSE for all
+test samples and observed Low-vis samples; its bottom row compares signed bias
+normalized by each source's RMSE for the same two scopes. Surface fields are
+referenced to station observations and pressure-level fields to ERA5 analysis.
+Panels a--d and the complete page are exported separately in
+SVG/PDF/PNG/TIFF.
 
 ```bash
 cd /public/home/putianshu/vis_mlp/ifs_baseline

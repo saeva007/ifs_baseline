@@ -2884,6 +2884,11 @@ def write_independent_source_outputs(
         "status": "missing_members",
         "missing_members": [m for m in BEST_EFFORT_ENSEMBLE_MEMBERS if m not in evals],
     }
+    best_effort_payloads: Optional[Dict[str, Dict[str, object]]] = None
+    best_effort_extended_info: Dict[str, object] = {
+        "status": "not_run",
+        "reason": "best_effort_ensemble_not_available",
+    }
     for source, eval_obj in evals.items():
         test_metrics = compute_metrics(
             eval_obj.test_targets,
@@ -2995,6 +3000,24 @@ def write_independent_source_outputs(
                     "missing_members": [],
                 }
             )
+            best_effort_payloads = {}
+            for member in BEST_EFFORT_ENSEMBLE_MEMBERS:
+                member_eval = evals[member]
+                member_idx = idx_by_source[member]
+                best_effort_payloads[member] = {
+                    "label": SOURCE_LABELS.get(member, member),
+                    "probs": member_eval.test_probs[member_idx],
+                    "preds": member_eval.test_preds[member_idx],
+                    "targets": member_eval.test_targets[member_idx],
+                    "raw_visibility_m": member_eval.test_raw_vis[member_idx],
+                }
+            best_effort_payloads[BEST_EFFORT_ENSEMBLE_SOURCE] = {
+                "label": "Best effort",
+                "probs": ensemble_probs,
+                "preds": ensemble_preds,
+                "targets": ensemble_targets,
+                "raw_visibility_m": ensemble_raw_vis,
+            }
             if not args.no_per_sample_csv:
                 sample = meta_common.reset_index(drop=True).copy()
                 sample["y_cls"] = ensemble_targets
@@ -3114,6 +3137,41 @@ def write_independent_source_outputs(
     validation_df = pd.DataFrame(validation_rows)
     overall_df.to_csv(out_dir / "overall_metrics.csv", index=False)
     validation_df.to_csv(out_dir / "validation_metrics.csv", index=False)
+    if best_effort_payloads is not None:
+        try:
+            from analyze_best_effort_extended import write_analysis_bundle
+
+            best_effort_extended_info = write_analysis_bundle(
+                best_effort_payloads,
+                out_dir,
+                members=BEST_EFFORT_ENSEMBLE_MEMBERS,
+                ensemble_source=BEST_EFFORT_ENSEMBLE_SOURCE,
+            )
+            if not args.no_figures:
+                from plot_best_effort_extended_figure import plot_bundle
+
+                figure_report = plot_bundle(
+                    out_dir,
+                    out_dir,
+                    stem="fig_best_effort_extended",
+                    formats=("svg", "pdf", "png", "tiff"),
+                    dpi=600,
+                )
+                best_effort_extended_info = {
+                    **best_effort_extended_info,
+                    "figure_manifest": figure_report["manifest"],
+                }
+        except Exception as exc:
+            best_effort_extended_info = {
+                "status": "failed",
+                "error": str(exc),
+            }
+            if args.require_best_effort_ensemble:
+                raise
+            print(
+                f"[WARN] extended best-effort analysis/figure skipped: {exc}",
+                flush=True,
+            )
 
     run_config = {
         "args": vars(args),
@@ -3134,6 +3192,7 @@ def write_independent_source_outputs(
         },
         "ifs_diagnostic": ifs_diagnostic_info,
         "best_effort_mean_softmax_ensemble": ensemble_info,
+        "best_effort_extended_analysis": best_effort_extended_info,
         "class_definition": {
             "0": "0 <= visibility < 500 m",
             "1": "500 <= visibility < 1000 m",
