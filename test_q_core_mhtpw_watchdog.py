@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import unittest
 import uuid
@@ -247,6 +248,113 @@ class MHTPWWatchdogTest(unittest.TestCase):
         self.assertEqual(status.name, "mhtpw_s1_s42")
         self.assertEqual(mod.logical_from_job_name(status.name), "s1:42")
         self.assertEqual(status.nodes, "e16r3n[05-09]")
+
+    def test_manifest_generation_mismatch_requires_explicit_adoption(self) -> None:
+        watch = object.__new__(mod.ChainWatch)
+        watch.args = SimpleNamespace(adopt_current_manifest=False)
+        watch.manifest = {
+            "artifact_audit_job": "900",
+            "runtime_gate_job": "800",
+            "training_job_ids": "201",
+        }
+        watch.state = {
+            "generation": 0,
+            "jobs": {"s2:42:11010": "101"},
+        }
+        watch.discover_training_jobs = lambda manifest: {
+            "s2:42:11010": "201"
+        }
+        with self.assertRaisesRegex(
+            RuntimeError, "different submission generation"
+        ):
+            watch.reconcile_manifest_generation()
+
+    def test_explicit_manifest_adoption_archives_stale_state(self) -> None:
+        with workspace_temp_dir() as tmp:
+            watch = object.__new__(mod.ChainWatch)
+            watch.args = SimpleNamespace(adopt_current_manifest=True)
+            watch.run_tag = "demo"
+            watch.watch_dir = tmp / "watchdog"
+            watch.watch_dir.mkdir()
+            watch.state_path = watch.watch_dir / "mhtpw_watchdog_state.json"
+            watch.actions_path = watch.watch_dir / "mhtpw_watchdog_actions.tsv"
+            watch.resolved_manifest = (
+                watch.watch_dir / "resolved_submission_manifest.txt"
+            )
+            watch.manifest_path = tmp / "submission_manifest_demo.txt"
+            watch.manifest_path.write_text(
+                "run_tag=demo\n"
+                "artifact_audit_job=900\n"
+                "runtime_gate_job=800\n"
+                "training_job_ids=201\n",
+                encoding="utf-8",
+            )
+            watch.manifest = mod.parse_manifest(watch.manifest_path)
+            watch.state = {
+                "run_tag": "demo",
+                "created_at": "old",
+                "generation": 0,
+                "jobs": {"s2:42:11010": "101"},
+                "progress": {"s2:42:11010": {"token": "old"}},
+                "retries": {"s2:42:11010": 1},
+                "watchdog_cancelled_job_ids": ["101"],
+                "blocked": {"s2:42:11010": "old failure"},
+            }
+            mod.atomic_json(watch.state_path, watch.state)
+            watch.actions_path.write_text("old actions\n", encoding="utf-8")
+            watch.resolved_manifest.write_text(
+                "old manifest\n", encoding="utf-8"
+            )
+            watch.discover_training_jobs = lambda manifest: {
+                "s2:42:11010": "201"
+            }
+
+            watch.reconcile_manifest_generation()
+
+            self.assertEqual(
+                watch.state["jobs"], {"s2:42:11010": "201"}
+            )
+            self.assertEqual(watch.state["generation"], 1)
+            self.assertEqual(watch.state["progress"], {})
+            self.assertEqual(watch.state["blocked"], {})
+            self.assertEqual(watch.state["retries"]["s2:42:11010"], 1)
+            history = list(
+                (watch.watch_dir / "history").glob(
+                    "manifest_adopt_*_generation_0"
+                )
+            )
+            self.assertEqual(len(history), 1)
+            self.assertTrue(
+                (history[0] / "mhtpw_watchdog_state.json").is_file()
+            )
+
+    def test_newly_adopted_running_job_uses_existing_log_age(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            log_path = logs / "123.out"
+            log_path.write_text(
+                "RUN_ID          : demo\n"
+                "[Data-Copy] Entering RCCL barrier before X_train.npy\n",
+                encoding="utf-8",
+            )
+            old_epoch = 1_700_000_000.0
+            os.utime(log_path, (old_epoch, old_epoch))
+
+            watch = object.__new__(mod.ChainWatch)
+            watch.baseline_dir = tmp
+            watch.state = {"progress": {}}
+            watch.current_progress = lambda logical, job_id: mod.Progress(
+                "data", "data:110000", ""
+            )
+            watch.log_action = lambda *args, **kwargs: None
+
+            with patch.object(mod.time, "time", return_value=old_epoch + 7200):
+                watch.observe_running("s2:42:11010", "123")
+
+            entry = watch.state["progress"]["s2:42:11010"]
+            self.assertEqual(entry["last_change_epoch"], old_epoch)
+            self.assertEqual(entry["confirmations"], 0)
 
     def test_modern_training_progress_is_semantic(self) -> None:
         with workspace_temp_dir() as tmp:

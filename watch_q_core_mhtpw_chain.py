@@ -90,6 +90,18 @@ def parse_colon(value: str) -> list[str]:
     return [part.strip() for part in str(value).replace(",", ":").split(":") if part.strip()]
 
 
+def manifest_generation_record(
+    manifest: Mapping[str, str], jobs: Mapping[str, str]
+) -> Dict[str, object]:
+    """Return the submission-generation fields that must not drift silently."""
+    return {
+        "artifact_audit_job": str(manifest.get("artifact_audit_job", "")).strip(),
+        "runtime_gate_job": str(manifest.get("runtime_gate_job", "")).strip(),
+        "training_job_ids": parse_colon(manifest.get("training_job_ids", "")),
+        "jobs": {str(key): str(value) for key, value in sorted(jobs.items())},
+    }
+
+
 def normalize_state(value: str) -> str:
     state = str(value).strip().upper().split("+")[0].split()[0] if str(value).strip() else "UNKNOWN"
     return STATE_ALIASES.get(state, state)
@@ -429,6 +441,9 @@ class ChainWatch:
                 "needs_resume": False,
                 "blocked": {},
                 "current_manifest": str(self.manifest_path),
+                "manifest_generation": manifest_generation_record(
+                    self.manifest, jobs
+                ),
             }
             self.save()
         self.force_end_generation = (
@@ -437,6 +452,7 @@ class ChainWatch:
             else None
         )
         self.reconcile_inflight()
+        self.reconcile_manifest_generation()
 
     def close(self) -> None:
         try:
@@ -495,6 +511,90 @@ class ChainWatch:
                 changed = True
         if changed:
             self.save()
+
+    def reconcile_manifest_generation(self) -> None:
+        """Prevent an overwritten manifest from being paired with stale state.
+
+        A RESUME_EXISTING_RUN submission rewrites the manifest at the same path.
+        Comparing only ``current_manifest`` therefore cannot distinguish the old
+        and new generations.  The exact logical-to-JobID mapping is authoritative.
+        """
+        current_jobs = self.discover_training_jobs(self.manifest)
+        tracked_jobs = {
+            str(key): str(value)
+            for key, value in dict(self.state.get("jobs", {})).items()
+        }
+        current_record = manifest_generation_record(self.manifest, current_jobs)
+        if tracked_jobs == current_jobs:
+            if self.state.get("manifest_generation") != current_record:
+                self.state["manifest_generation"] = current_record
+                self.save()
+            return
+
+        if not self.args.adopt_current_manifest:
+            tracked_ids = sorted(tracked_jobs.values())
+            current_ids = sorted(current_jobs.values())
+            raise RuntimeError(
+                "watchdog state tracks a different submission generation; "
+                f"tracked_jobs={len(tracked_jobs)} current_manifest_jobs={len(current_jobs)} "
+                f"tracked_sample={tracked_ids[:3]} current_sample={current_ids[:3]}. "
+                "No cancellation or submission was performed. Re-run the attachment "
+                "with ADOPT_CURRENT_MANIFEST=YES after checking the preflight mapping."
+            )
+
+        timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        old_generation = int(self.state.get("generation", 0))
+        history_dir = (
+            self.watch_dir
+            / "history"
+            / f"manifest_adopt_{timestamp}_generation_{old_generation}"
+        )
+        history_dir.mkdir(parents=True, exist_ok=False)
+        for path in (
+            self.state_path,
+            self.actions_path,
+            self.resolved_manifest,
+        ):
+            if path.is_file():
+                shutil.copy2(path, history_dir / path.name)
+        shutil.copy2(
+            self.manifest_path,
+            history_dir / f"adopted_{self.manifest_path.name}",
+        )
+
+        old_state = self.state
+        self.state = {
+            "run_tag": self.run_tag,
+            "created_at": old_state.get("created_at", now_iso()),
+            "updated_at": now_iso(),
+            "generation": old_generation + 1,
+            "jobs": current_jobs,
+            "progress": {},
+            "retries": dict(old_state.get("retries", {})),
+            "watchdog_cancelled_job_ids": list(
+                old_state.get("watchdog_cancelled_job_ids", [])
+            ),
+            "failed_node_lists": list(old_state.get("failed_node_lists", [])),
+            "needs_resume": False,
+            "blocked": {},
+            "current_manifest": str(self.manifest_path),
+            "manifest_generation": current_record,
+            "adopted_previous_generation": {
+                "at": now_iso(),
+                "old_generation": old_generation,
+                "old_jobs": tracked_jobs,
+                "history_dir": str(history_dir),
+            },
+        }
+        shutil.copy2(self.manifest_path, self.resolved_manifest)
+        self.save()
+        self.log_action(
+            "chain",
+            "ADOPT_CURRENT_MANIFEST",
+            "",
+            f"old_jobs={len(tracked_jobs)} current_jobs={len(current_jobs)} "
+            f"history={history_dir}",
+        )
 
     def log_action(self, logical: str, action: str, old_job: str = "", detail: str = "") -> None:
         new_file = not self.actions_path.exists()
@@ -575,6 +675,9 @@ class ChainWatch:
                 self.args.adopt_local_cache_failure
             ),
             "adopt_runtime_failure": bool(self.args.adopt_runtime_failure),
+            "adopt_current_manifest": bool(
+                self.args.adopt_current_manifest
+            ),
             "force_end_current_generation": bool(
                 self.args.force_end_current_generation
             ),
@@ -995,15 +1098,34 @@ class ChainWatch:
         now = time.time()
         entries = self.state.setdefault("progress", {})
         entry = entries.get(logical)
-        if not isinstance(entry, dict) or entry.get("job_id") != job_id or entry.get("token") != progress.token:
+        is_new_job = (
+            not isinstance(entry, dict) or entry.get("job_id") != job_id
+        )
+        token_changed = (
+            isinstance(entry, dict) and entry.get("token") != progress.token
+        )
+        if is_new_job or token_changed:
+            last_change_epoch = now
+            if is_new_job:
+                log_path = self.baseline_dir / "logs" / f"{job_id}.out"
+                try:
+                    last_change_epoch = min(now, log_path.stat().st_mtime)
+                except OSError:
+                    pass
             entries[logical] = {
                 "job_id": job_id,
                 "token": progress.token,
                 "phase": progress.phase,
-                "last_change_epoch": now,
+                "last_change_epoch": last_change_epoch,
                 "confirmations": 0,
             }
-            self.log_action(logical, "PROGRESS", job_id, f"{progress.phase} {progress.token}")
+            age_minutes = max(0.0, (now - last_change_epoch) / 60.0)
+            self.log_action(
+                logical,
+                "PROGRESS",
+                job_id,
+                f"{progress.phase} {progress.token} observed_age_min={age_minutes:.1f}",
+            )
             return
         elapsed = now - float(entry.get("last_change_epoch", now))
         if elapsed < self.phase_limit_seconds(progress.phase):
@@ -1160,6 +1282,7 @@ class ChainWatch:
         for logical, job_id in jobs.items():
             status = query_job(job_id)
             if status.state in ACTIVE_STATES:
+                blocked.pop(logical, None)
                 any_active = True
                 if status.state == "RUNNING":
                     self.observe_running(logical, job_id)
@@ -1388,6 +1511,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", default=os.environ.get("WATCH_ONCE", "0") == "1")
     parser.add_argument("--auto-retry", action="store_true", default=os.environ.get("WATCH_AUTO_RETRY", "0") == "1")
     parser.add_argument("--adopt-missing", action="store_true", default=os.environ.get("WATCH_ADOPT_MISSING", "0") == "1")
+    parser.add_argument(
+        "--adopt-current-manifest",
+        action="store_true",
+        default=os.environ.get("WATCH_ADOPT_CURRENT_MANIFEST", "0") == "1",
+        help=(
+            "archive stale watchdog state and adopt the exact JobID mapping in "
+            "the current submission manifest; required when a new generation "
+            "overwrites the manifest outside the running watchdog transaction"
+        ),
+    )
     parser.add_argument(
         "--adopt-dispatcher-failure",
         action="store_true",
