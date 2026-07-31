@@ -394,11 +394,17 @@ def style_axis(ax: plt.Axes, *, xgrid: bool = True) -> None:
     ax.set_axisbelow(True)
 
 
-def add_family_bands(ax: plt.Axes) -> None:
+def add_family_bands(
+    ax: plt.Axes,
+    *,
+    show_reference_labels: bool = True,
+) -> None:
     # y runs top-to-bottom after inversion: the first three rows are surface.
     ax.axhspan(-0.5, 2.5, color=SURFACE_BAND, zorder=0)
     ax.axhspan(2.5, 6.5, color=PRESSURE_BAND, zorder=0)
     ax.axhline(2.5, color=LIGHT, linewidth=0.7, zorder=1)
+    if not show_reference_labels:
+        return
     ax.text(
         0.99,
         0.975,
@@ -427,6 +433,7 @@ def rmse_ratio_panel(
     scope: str,
     label: str,
     show_y: bool,
+    show_reference_labels: bool = True,
 ) -> None:
     panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
     title(ax, f"RMSE · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
@@ -504,7 +511,7 @@ def rmse_ratio_panel(
         fontweight="bold",
         color=SOURCE_DARK_COLORS["pangu"],
     )
-    add_family_bands(ax)
+    add_family_bands(ax, show_reference_labels=show_reference_labels)
     style_axis(ax)
 
 
@@ -514,6 +521,7 @@ def bias_panel(
     scope: str,
     label: str,
     show_y: bool,
+    show_reference_labels: bool = True,
 ) -> None:
     panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
     title(ax, f"Systematic bias · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
@@ -597,7 +605,7 @@ def bias_panel(
         fontsize=6.2,
         color=MID,
     )
-    add_family_bands(ax)
+    add_family_bands(ax, show_reference_labels=show_reference_labels)
     style_axis(ax)
 
 
@@ -612,9 +620,23 @@ def make_composite(source: pd.DataFrame) -> plt.Figure:
         hspace=0.44,
     )
     rmse_ratio_panel(axes[0, 0], source, SCOPES[0], "a", True)
-    rmse_ratio_panel(axes[0, 1], source, SCOPES[1], "b", False)
+    rmse_ratio_panel(
+        axes[0, 1],
+        source,
+        SCOPES[1],
+        "b",
+        False,
+        show_reference_labels=False,
+    )
     bias_panel(axes[1, 0], source, SCOPES[0], "c", True)
-    bias_panel(axes[1, 1], source, SCOPES[1], "d", False)
+    bias_panel(
+        axes[1, 1],
+        source,
+        SCOPES[1],
+        "d",
+        False,
+        show_reference_labels=False,
+    )
     fig.legend(
         handles=[
             Line2D(
