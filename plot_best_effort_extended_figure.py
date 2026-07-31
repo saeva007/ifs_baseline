@@ -69,9 +69,6 @@ GAIN_METRICS = (
     ("low_vis_precision", "Precision", "higher"),
     ("low_vis_recall", "Recall", "higher"),
     ("low_vis_csi", "CSI", "higher"),
-    ("low_vis_brier", "Brier score", "lower"),
-    ("ece_low_vis", "Calibration error", "lower"),
-    ("low_vis_fpr", "False-positive rate", "lower"),
 )
 
 
@@ -344,7 +341,7 @@ def draw_gain(ax: plt.Axes, metrics: pd.DataFrame, label: str = "b") -> pd.DataF
     ax.set_yticks(y, source["metric_label"])
     ax.set_xlim(-1.27 * max_abs, 1.27 * max_abs)
     ax.set_ylim(-0.55, len(source) - 0.45)
-    ax.set_xlabel("Relative change (%)  ·  positive favours best effort")
+    ax.set_xlabel("Relative improvement over best member (%)")
     style_axis(ax, xgrid=True)
     return source.iloc[::-1].reset_index(drop=True)
 
