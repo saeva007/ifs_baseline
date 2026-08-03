@@ -20,6 +20,7 @@ OUT_DIR="${OUT_DIR:-${RUN_DIR}}"
 PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
 ANALYZE_SCRIPT="${ANALYZE_SCRIPT:-${BASELINE_DIR}/analyze_best_effort_extended.py}"
 PLOT_SCRIPT="${PLOT_SCRIPT:-${BASELINE_DIR}/plot_best_effort_extended_figure.py}"
+OPERATIONAL_PLOT_SCRIPT="${OPERATIONAL_PLOT_SCRIPT:-${BASELINE_DIR}/plot_operational_source_ensembles.py}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
@@ -56,3 +57,15 @@ PLOT_CMD=(
 )
 echo "Best-effort extended figure: ${PLOT_CMD[*]}"
 "${PLOT_CMD[@]}"
+
+if [[ -s "${RUN_DIR}/operational_ensemble_recipe_weights.csv" ]]; then
+  OPERATIONAL_PLOT_CMD=(
+    "${PYTHON_BIN}" "${OPERATIONAL_PLOT_SCRIPT}"
+    --analysis-dir "${RUN_DIR}"
+    --out-dir "${OUT_DIR}"
+    --formats "svg,pdf,png,tiff"
+    --dpi 600
+  )
+  echo "Operational source-ensemble figure: ${OPERATIONAL_PLOT_CMD[*]}"
+  "${OPERATIONAL_PLOT_CMD[@]}"
+fi

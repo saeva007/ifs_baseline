@@ -18,6 +18,9 @@ case "${SCENARIO}" in
     figure1|figure1_all_sources|all_sources)
         submit_scenario "figure1_all_sources"
         ;;
+    operational_ensembles|figure_operational_ensembles|tianji_pangu_all4)
+        submit_scenario "operational_ensembles"
+        ;;
     figure2_pangu|figure2_pangu_ifs_empirical|pangu_ifs_empirical|pangu2025)
         submit_scenario "figure2_pangu_ifs_empirical"
         ;;
@@ -30,7 +33,7 @@ case "${SCENARIO}" in
         ;;
     *)
         echo "ERROR: unknown scenario: ${SCENARIO}" >&2
-        echo "Usage: bash submit_static_rnn_source_full_argmax_eval.sh [figure1_all_sources|figure2_pangu_ifs_empirical|figure2_merge|both]" >&2
+        echo "Usage: bash submit_static_rnn_source_full_argmax_eval.sh [figure1_all_sources|operational_ensembles|figure2_pangu_ifs_empirical|figure2_merge|both]" >&2
         exit 2
         ;;
 esac

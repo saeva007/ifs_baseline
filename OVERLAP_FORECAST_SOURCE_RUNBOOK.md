@@ -159,6 +159,24 @@ cd /public/home/putianshu/vis_mlp/ifs_baseline
 bash submit_static_rnn_source_full_argmax_eval.sh figure1_all_sources
 ```
 
+The operational-ensemble sensitivity analysis is a smaller inference-only
+scenario that excludes ERA5 and evaluates four predeclared recipes on the same
+Tianji/T2ND/IFS/Pangu station--time intersection: the current three-member
+anchor, Tianji+Pangu, all four with equal member weights, and an all-four
+source-family-balanced mean.  It writes compact performance, recipe-weight,
+Pangu rescue/harm, and four-member hit-pattern tables, plus the full composite
+and every individual panel in SVG/PDF/PNG/TIFF:
+
+```bash
+cd /public/home/putianshu/vis_mlp/ifs_baseline
+bash submit_static_rnn_source_full_argmax_eval.sh operational_ensembles
+```
+
+For formal use, override `PANGU2025_DATA_DIR` and `PANGU2025_CKPT` with the
+corrected tagged source-full artifacts rather than relying on the untagged
+historical defaults.  The IFS entry is the IFS-trained probabilistic model; the
+native deterministic IFS diagnostic VIS is not an ensemble member.
+
 To redraw from an older completed directory, use the plot-only job. It reuses
 compact tables when present, otherwise it derives them from the existing
 `per_sample_*.csv` files:

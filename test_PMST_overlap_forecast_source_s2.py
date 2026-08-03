@@ -437,6 +437,21 @@ def parse_args() -> argparse.Namespace:
             "Use this for the formal source-full paper figure so an incomplete panel is never written silently."
         ),
     )
+    ap.add_argument(
+        "--skip_operational_ensemble_analysis",
+        "--skip-operational-ensemble-analysis",
+        action="store_true",
+        help="Skip Tianji/Pangu and four-source operational probability-fusion diagnostics.",
+    )
+    ap.add_argument(
+        "--require_operational_ensemble_analysis",
+        "--require-operational-ensemble-analysis",
+        action="store_true",
+        help=(
+            "Fail unless Tianji, Tianji-T2ND, IFS-trained and Pangu source-full outputs "
+            "can be aligned and the predeclared operational ensemble bundle is written."
+        ),
+    )
     ap.add_argument("--feature_importance_csv", default="", help="Optional feature-importance table used to choose replacement variables.")
     ap.add_argument("--feature_swap_top_k", type=int, default=0, help="Replace top-K dynamic variables from --feature_importance_csv; 0 disables unless --feature_swap_features is set.")
     ap.add_argument(
@@ -2889,6 +2904,10 @@ def write_independent_source_outputs(
         "status": "not_run",
         "reason": "best_effort_ensemble_not_available",
     }
+    operational_ensemble_info: Dict[str, object] = {
+        "status": "not_run",
+        "reason": "operational_ensemble_analysis_not_requested_or_members_missing",
+    }
     for source, eval_obj in evals.items():
         test_metrics = compute_metrics(
             eval_obj.test_targets,
@@ -3173,6 +3192,76 @@ def write_independent_source_outputs(
                 flush=True,
             )
 
+    if not args.skip_operational_ensemble_analysis:
+        try:
+            from analyze_operational_source_ensembles import (
+                MEMBERS as OPERATIONAL_ENSEMBLE_MEMBERS,
+                write_analysis_bundle as write_operational_ensemble_bundle,
+            )
+
+            missing_operational = [
+                source for source in OPERATIONAL_ENSEMBLE_MEMBERS if source not in evals
+            ]
+            if missing_operational:
+                raise RuntimeError(
+                    "missing operational source-full member(s): "
+                    + ",".join(missing_operational)
+                )
+            # Use the exact four-source intersection even when --strict_meta is
+            # enabled for the historical three-member anchor.  Label and raw-
+            # visibility equality are still validated row by row by the aligner.
+            operational_idx, _ = align_sources_to_reference(
+                evals,
+                OPERATIONAL_ENSEMBLE_MEMBERS,
+                strict_meta=False,
+            )
+            operational_ref = OPERATIONAL_ENSEMBLE_MEMBERS[0]
+            operational_ref_idx = operational_idx[operational_ref]
+            operational_targets = evals[operational_ref].test_targets[operational_ref_idx]
+            operational_raw = evals[operational_ref].test_raw_vis[operational_ref_idx]
+            operational_payloads: Dict[str, Dict[str, object]] = {}
+            for source in OPERATIONAL_ENSEMBLE_MEMBERS:
+                member_eval = evals[source]
+                member_idx = operational_idx[source]
+                operational_payloads[source] = {
+                    "label": SOURCE_LABELS.get(source, source),
+                    "probs": member_eval.test_probs[member_idx],
+                    "preds": member_eval.test_preds[member_idx],
+                    "targets": operational_targets,
+                    "raw_visibility_m": operational_raw,
+                }
+            operational_ensemble_info = write_operational_ensemble_bundle(
+                operational_payloads,
+                out_dir,
+            )
+            if not args.no_figures:
+                from plot_operational_source_ensembles import plot_bundle as plot_operational_bundle
+
+                figure_report = plot_operational_bundle(
+                    out_dir,
+                    out_dir,
+                    stem="fig_operational_source_ensembles",
+                    formats=("svg", "pdf", "png", "tiff"),
+                    dpi=600,
+                )
+                operational_ensemble_info = {
+                    **operational_ensemble_info,
+                    "figure_manifest": figure_report["manifest"],
+                }
+            print(
+                "[operational-ensemble] wrote four-source paired analysis: "
+                f"rows={len(operational_targets)}",
+                flush=True,
+            )
+        except Exception as exc:
+            operational_ensemble_info = {"status": "failed", "error": str(exc)}
+            if args.require_operational_ensemble_analysis:
+                raise
+            print(
+                f"[WARN] operational source-ensemble analysis/figure skipped: {exc}",
+                flush=True,
+            )
+
     run_config = {
         "args": vars(args),
         "specs": {k: vars(v) for k, v in specs.items()},
@@ -3193,6 +3282,7 @@ def write_independent_source_outputs(
         "ifs_diagnostic": ifs_diagnostic_info,
         "best_effort_mean_softmax_ensemble": ensemble_info,
         "best_effort_extended_analysis": best_effort_extended_info,
+        "operational_source_ensemble_analysis": operational_ensemble_info,
         "class_definition": {
             "0": "0 <= visibility < 500 m",
             "1": "500 <= visibility < 1000 m",

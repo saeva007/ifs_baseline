@@ -69,6 +69,8 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 EVAL_SCENARIO="${EVAL_SCENARIO:-figure1_all_sources}"
 MERGE_ONLY=0
 REQUIRE_BEST_EFFORT_ENSEMBLE="${REQUIRE_BEST_EFFORT_ENSEMBLE:-}"
+REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS="${REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS:-}"
+SKIP_OPERATIONAL_ENSEMBLE_ANALYSIS="${SKIP_OPERATIONAL_ENSEMBLE_ANALYSIS:-0}"
 DRAW_IFS_OPERATOR_COMPARISON=0
 
 T2ND_SPEC="T2ND_rh2m_source_full=${T2ND_DATA_DIR}|${T2ND_CKPT}|AUTO|T2ND RH2M source-full"
@@ -84,6 +86,14 @@ case "${EVAL_SCENARIO}" in
         REQUIRE_BEST_EFFORT_ENSEMBLE="${REQUIRE_BEST_EFFORT_ENSEMBLE:-1}"
         DRAW_IFS_OPERATOR_COMPARISON=1
         ;;
+    operational_ensembles|figure_operational_ensembles|tianji_pangu_all4)
+        SOURCE_SUBSET="${SOURCE_SUBSET:-tianji,ifs,T2ND_rh2m_source_full,pangu2025_source_full}"
+        EXTRA_SOURCES="${EXTRA_SOURCES:-${T2ND_SPEC}; ${PANGU2025_SPEC}}"
+        OUT_DIR="${OUT_DIR:-${OUT_ROOT}/operational_ensembles_argmax}"
+        SKIP_IFS_FORECAST_BASELINE="${SKIP_IFS_FORECAST_BASELINE:-1}"
+        REQUIRE_BEST_EFFORT_ENSEMBLE="${REQUIRE_BEST_EFFORT_ENSEMBLE:-1}"
+        REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS="${REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS:-1}"
+        ;;
     figure2_pangu|figure2_pangu_ifs_empirical|pangu_ifs_empirical|pangu2025)
         SOURCE_SUBSET="${SOURCE_SUBSET:-pangu2025_source_full}"
         EXTRA_SOURCES="${EXTRA_SOURCES:-${PANGU2025_SPEC}}"
@@ -97,7 +107,7 @@ case "${EVAL_SCENARIO}" in
         ;;
     *)
         echo "ERROR: unknown EVAL_SCENARIO=${EVAL_SCENARIO}" >&2
-        echo "Use figure1_all_sources, figure2_pangu_ifs_empirical, or figure2_merge." >&2
+        echo "Use figure1_all_sources, operational_ensembles, figure2_pangu_ifs_empirical, or figure2_merge." >&2
         exit 2
         ;;
 esac
@@ -151,6 +161,12 @@ if [[ "${NO_FIGURES}" == "1" || "${NO_FIGURES}" == "true" ]]; then
 fi
 if [[ "${REQUIRE_BEST_EFFORT_ENSEMBLE}" == "1" || "${REQUIRE_BEST_EFFORT_ENSEMBLE}" == "true" ]]; then
     CMD+=(--require-best-effort-ensemble)
+fi
+if [[ "${REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS}" == "1" || "${REQUIRE_OPERATIONAL_ENSEMBLE_ANALYSIS}" == "true" ]]; then
+    CMD+=(--require-operational-ensemble-analysis)
+fi
+if [[ "${SKIP_OPERATIONAL_ENSEMBLE_ANALYSIS}" == "1" || "${SKIP_OPERATIONAL_ENSEMBLE_ANALYSIS}" == "true" ]]; then
+    CMD+=(--skip-operational-ensemble-analysis)
 fi
 if [[ "${ALLOW_LEGACY_TIME_ALIGNMENT}" == "1" || "${ALLOW_LEGACY_TIME_ALIGNMENT}" == "true" ]]; then
     CMD+=(--allow_legacy_time_alignment)
