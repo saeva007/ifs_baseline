@@ -325,11 +325,23 @@ def quarantine_artifacts(checkpoint_dir: Path, run_tag: str, logical: str, attem
         return []
     target = checkpoint_dir / "watchdog_quarantine" / run_tag / logical.replace(":", "_") / f"attempt_{attempt}"
     target.mkdir(parents=True, exist_ok=True)
+    destination_root = target
+    if any((target / source.name).exists() for source in candidates):
+        # A controller may stop after Slurm cancellation but before its state
+        # transaction is committed.  Re-entering the same logical attempt must
+        # preserve both the earlier forensic files and the newly produced
+        # artifacts instead of raising FileExistsError after the job is gone.
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        base_name = f"collision_{stamp}_pid{os.getpid()}"
+        destination_root = target / base_name
+        suffix = 0
+        while destination_root.exists():
+            suffix += 1
+            destination_root = target / f"{base_name}_{suffix}"
+        destination_root.mkdir(parents=False, exist_ok=False)
     moved: list[str] = []
     for source in candidates:
-        destination = target / source.name
-        if destination.exists():
-            raise FileExistsError(destination)
+        destination = destination_root / source.name
         shutil.move(str(source), str(destination))
         moved.append(str(destination))
     return moved

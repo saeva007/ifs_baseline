@@ -403,6 +403,19 @@ class MHTPWWatchdogTest(unittest.TestCase):
             self.assertFalse(mod.artifact_complete(ckpt, run_id, "s2"))
             self.assertTrue(all(Path(path).is_file() for path in moved))
 
+            for path in files:
+                path.write_bytes(b"new")
+            moved_again = mod.quarantine_artifacts(
+                ckpt, "demo", "s2:42:00000", 1
+            )
+            self.assertEqual(len(moved_again), 3)
+            self.assertTrue(
+                all(Path(path).parent.name.startswith("collision_") for path in moved_again)
+            )
+            self.assertTrue(all(Path(path).read_bytes() == b"new" for path in moved_again))
+            self.assertTrue(all(Path(path).read_bytes() == b"x" for path in moved))
+            self.assertFalse(mod.artifact_complete(ckpt, run_id, "s2"))
+
     def test_confirmed_s2_stall_cancels_only_that_job(self) -> None:
         watch = object.__new__(mod.ChainWatch)
         watch.args = SimpleNamespace(
