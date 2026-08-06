@@ -1691,7 +1691,7 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("WATCH_ADOPT_RUNTIME_FAILURE", "0") == "1",
         help=(
             "adopt only FAILED/OOM training jobs whose own Slurm log contains "
-            "a prespecified HIP-unavailable or cgroup-OOM infrastructure signature"
+            "a prespecified activation, HIP-unavailable, or retired-probe signature"
         ),
     )
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("WATCH_POLL_SECONDS", "180")))
