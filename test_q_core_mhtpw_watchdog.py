@@ -285,6 +285,32 @@ class MHTPWWatchdogTest(unittest.TestCase):
         ):
             watch.reconcile_manifest_generation()
 
+    def test_failed_resume_is_adopted_only_without_active_training(self) -> None:
+        watch = object.__new__(mod.ChainWatch)
+        watch.args = SimpleNamespace(adopt_failed_resume=True)
+        watch.expected = ("s2:2025:00100",)
+        watch.manifest = {"artifact_audit_job": "700"}
+        watch.state = {
+            "generation": 2,
+            "resume_intent": {
+                "old_artifact_job": "700",
+                "missing": ["s2:2025:00100"],
+            },
+            "blocked": {"resume_transaction": "old"},
+            "needs_resume": False,
+        }
+        watch.log_action = lambda *args, **kwargs: None
+        watch.save = lambda: None
+        with patch.object(mod, "active_jobs_named", return_value={}):
+            watch.reconcile_inflight()
+        self.assertNotIn("resume_intent", watch.state)
+        self.assertTrue(watch.state["needs_resume"])
+        self.assertNotIn("resume_transaction", watch.state["blocked"])
+        self.assertEqual(
+            watch.state["adopted_failed_resume_transactions"][-1]["missing"],
+            ["s2:2025:00100"],
+        )
+
     def test_explicit_manifest_adoption_archives_stale_state(self) -> None:
         with workspace_temp_dir() as tmp:
             watch = object.__new__(mod.ChainWatch)

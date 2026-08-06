@@ -515,6 +515,44 @@ class ChainWatch:
                 self.state.pop("resume_intent", None)
                 shutil.copy2(self.manifest_path, self.resolved_manifest)
                 changed = True
+            elif self.args.adopt_failed_resume:
+                missing = [
+                    str(item)
+                    for item in resume_intent.get("missing", [])
+                    if str(item) in self.expected
+                ]
+                active = active_jobs_named(
+                    job_name_for_logical(logical) for logical in missing
+                )
+                if active:
+                    self.state.setdefault("blocked", {})[
+                        "resume_transaction"
+                    ] = (
+                        "failed resume still has active training jobs; refusing "
+                        "adoption: " + json.dumps(active, sort_keys=True)
+                    )
+                else:
+                    self.state.pop("resume_intent", None)
+                    self.state.setdefault("blocked", {}).pop(
+                        "resume_transaction", None
+                    )
+                    self.state["needs_resume"] = True
+                    self.state.setdefault(
+                        "adopted_failed_resume_transactions", []
+                    ).append(
+                        {
+                            "at": now_iso(),
+                            "old_artifact_job": old_artifact,
+                            "missing": missing,
+                        }
+                    )
+                    self.log_action(
+                        "chain",
+                        "ADOPT_FAILED_RESUME_WITHOUT_TRAINING",
+                        "",
+                        f"missing={len(missing)} old_artifact={old_artifact}",
+                    )
+                changed = True
             else:
                 self.state.setdefault("blocked", {})["resume_transaction"] = (
                     "resume was interrupted before a new complete submission manifest was recorded; "
@@ -690,6 +728,7 @@ class ChainWatch:
             "adopt_current_manifest": bool(
                 self.args.adopt_current_manifest
             ),
+            "adopt_failed_resume": bool(self.args.adopt_failed_resume),
             "force_end_current_generation": bool(
                 self.args.force_end_current_generation
             ),
@@ -1537,6 +1576,15 @@ def parse_args() -> argparse.Namespace:
             "archive stale watchdog state and adopt the exact JobID mapping in "
             "the current submission manifest; required when a new generation "
             "overwrites the manifest outside the running watchdog transaction"
+        ),
+    )
+    parser.add_argument(
+        "--adopt-failed-resume",
+        action="store_true",
+        default=os.environ.get("WATCH_ADOPT_FAILED_RESUME", "0") == "1",
+        help=(
+            "clear an interrupted resume transaction only after verifying that "
+            "none of its intended MHTPW training job names is active"
         ),
     )
     parser.add_argument(
