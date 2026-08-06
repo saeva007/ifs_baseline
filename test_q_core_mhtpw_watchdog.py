@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import unittest
@@ -184,6 +185,49 @@ class MHTPWWatchdogTest(unittest.TestCase):
                 ),
                 "",
             )
+
+    def test_probe_oom_retry_reset_is_exact_guarded_and_backed_up(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "779.err").write_text(
+                "probe_mhtpw_dcu_runtime.py FAILED\n",
+                encoding="utf-8",
+            )
+            watch = object.__new__(mod.ChainWatch)
+            watch.run_tag = "demo"
+            watch.baseline_dir = tmp
+            watch.checkpoint_dir = tmp / "checkpoints"
+            watch.checkpoint_dir.mkdir()
+            watch.watch_dir = tmp / "watchdog"
+            watch.watch_dir.mkdir()
+            watch.state_path = watch.watch_dir / "mhtpw_watchdog_state.json"
+            watch.state = {
+                "jobs": {"s2:2025:00100": "779"},
+                "retries": {"s2:2025:00100": 6},
+                "blocked": {"s2:2025:00100": "old"},
+                "progress": {"s2:2025:00100": {"token": "old"}},
+                "retry_causes": {},
+                "needs_resume": False,
+            }
+            watch.state_path.write_text(
+                json.dumps(watch.state), encoding="utf-8"
+            )
+            watch.log_action = lambda *args, **kwargs: None
+            with patch.object(
+                mod,
+                "query_job",
+                return_value=mod.JobStatus(
+                    "779", "mhtpw_00100_s2025", "FAILED", "n1", "sacct"
+                ),
+            ):
+                result = watch.reset_probe_oom_retry("779")
+            self.assertEqual(result["logical"], "s2:2025:00100")
+            self.assertEqual(result["previous_retries"], 6)
+            self.assertEqual(watch.state["retries"]["s2:2025:00100"], 0)
+            self.assertTrue(watch.state["needs_resume"])
+            self.assertNotIn("s2:2025:00100", watch.state["blocked"])
+            self.assertTrue(Path(result["backup"]).is_file())
 
     def test_runtime_gate_failure_adopts_dependency_cancelled_matrix(self) -> None:
         with workspace_temp_dir() as tmp:

@@ -477,6 +477,66 @@ class ChainWatch:
         self.state["updated_at"] = now_iso()
         atomic_json(self.state_path, self.state)
 
+    def reset_probe_oom_retry(self, job_id: str) -> Dict[str, object]:
+        """Reset one exhausted retry budget after the retired DCU probe OOM."""
+        matches = [
+            logical
+            for logical, tracked_job_id in self.state.get("jobs", {}).items()
+            if str(tracked_job_id) == str(job_id)
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"expected exactly one tracked logical row for job {job_id}, found {matches}"
+            )
+        logical = matches[0]
+        status = query_job(str(job_id))
+        if status.state in ACTIVE_STATES:
+            raise RuntimeError(
+                f"refusing retry reset while job {job_id} is {status.state}"
+            )
+        signature = matching_job_log_signature(
+            self.baseline_dir,
+            str(job_id),
+            status.name,
+            ("probe_mhtpw_dcu_runtime.py FAILED",),
+        )
+        if not signature:
+            raise RuntimeError(
+                f"job {job_id} does not contain the retired DCU probe failure signature"
+            )
+        run_id, stage = run_id_for_logical(self.run_tag, logical)
+        if artifact_complete(self.checkpoint_dir, run_id, stage):
+            raise RuntimeError(
+                f"refusing retry reset because {logical} already has a complete {stage} artifact triplet"
+            )
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = self.watch_dir / f"mhtpw_watchdog_state_before_probe_reset_{stamp}.json"
+        shutil.copy2(self.state_path, backup)
+        previous = int(self.state.setdefault("retries", {}).get(logical, 0))
+        self.state["retries"][logical] = 0
+        self.state.setdefault("blocked", {}).pop(logical, None)
+        self.state.setdefault("progress", {}).pop(logical, None)
+        self.state.setdefault("retry_causes", {})[logical] = (
+            f"retired_probe_oom:{job_id}"
+        )
+        self.state["needs_resume"] = True
+        self.log_action(
+            logical,
+            "RESET_RETIRED_PROBE_OOM_RETRY",
+            str(job_id),
+            f"previous_retries={previous} backup={backup}",
+        )
+        self.save()
+        return {
+            "status": "reset",
+            "logical": logical,
+            "job_id": str(job_id),
+            "job_state": status.state,
+            "previous_retries": previous,
+            "new_retries": 0,
+            "backup": str(backup),
+        }
+
     def reconcile_inflight(self) -> None:
         """Recover conservatively if the controller stopped mid-transaction."""
         changed = False
@@ -1565,6 +1625,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-root", default=os.environ.get("EVAL_ROOT", ""))
     parser.add_argument("--checkpoint-dir", default=os.environ.get("CKPT_DIR", ""))
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument(
+        "--reset-probe-oom-retry-job-id",
+        default=os.environ.get("WATCH_RESET_PROBE_OOM_RETRY_JOB_ID", ""),
+        help="reset only the tracked terminal row whose log proves the retired DCU probe OOM",
+    )
+    parser.add_argument(
+        "--confirm-reset-probe-oom-retry",
+        action="store_true",
+        default=os.environ.get("WATCH_CONFIRM_RESET_PROBE_OOM_RETRY", "0") == "1",
+    )
     parser.add_argument("--once", action="store_true", default=os.environ.get("WATCH_ONCE", "0") == "1")
     parser.add_argument("--auto-retry", action="store_true", default=os.environ.get("WATCH_AUTO_RETRY", "0") == "1")
     parser.add_argument("--adopt-missing", action="store_true", default=os.environ.get("WATCH_ADOPT_MISSING", "0") == "1")
@@ -1675,6 +1745,19 @@ def main() -> int:
     try:
         if args.preflight:
             print(json.dumps(watch.preflight(), ensure_ascii=False, indent=2))
+            return 0
+        if args.reset_probe_oom_retry_job_id:
+            if not args.confirm_reset_probe_oom_retry:
+                raise RuntimeError(
+                    "retry reset requires --confirm-reset-probe-oom-retry"
+                )
+            print(
+                json.dumps(
+                    watch.reset_probe_oom_retry(args.reset_probe_oom_retry_job_id),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
             return 0
         print(f"[watchdog] started {now_iso()} run_tag={args.run_tag}", flush=True)
         print(f"[watchdog] state={watch.state_path}", flush=True)
