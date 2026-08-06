@@ -12,11 +12,16 @@ DTK_HYHAL_LIB="${MHTPW_DTK_HYHAL_LIB:-/public/home/xichen/ncydata/dtk/dtk-24.04.
 OPENSSL_COMPAT_LIB="${MHTPW_OPENSSL_LIB:-/public/home/xichen/.conda/envs/py310_ppy/openssl/lib}"
 HIPNN_COMPAT_LIB="${MHTPW_HIPNN_LIB:-/public/home/xichen/ncydata/panpy_test_liud/hipnn/lib/release}"
 export TORCH_ENV="${TORCH_ENV:-/public/home/jarvis226/miniconda3/envs/torch}"
-MHTPW_SCRIPT_REF="${BASH_SOURCE[0]:-$0}"
-MHTPW_RUNTIME_DIR="$(
-    cd "$(dirname "${MHTPW_SCRIPT_REF}")" >/dev/null 2>&1
-    pwd
-)"
+# Slurm executes a copied batch script from its spool directory.  On this
+# cluster BASH_SOURCE may be unavailable while a file is sourced, so falling
+# back to $0 incorrectly resolves the runtime beside the spool copy.  The
+# submitters already pass BASELINE_DIR; keep the activation path explicit and
+# deterministic instead of deriving it from the batch-script location.
+MHTPW_RUNTIME_DIR="${MHTPW_RUNTIME_DIR:-${BASELINE_DIR:-/public/home/putianshu/vis_mlp/ifs_baseline}}"
+[[ -f "${MHTPW_RUNTIME_DIR}/activate_torch_runtime.sh" ]] || {
+    echo "ERROR: base Torch activation script missing: ${MHTPW_RUNTIME_DIR}/activate_torch_runtime.sh" >&2
+    return 2 2>/dev/null || exit 2
+}
 
 for path in "${DTK_HYHAL_LIB}" "${OPENSSL_COMPAT_LIB}" "${HIPNN_COMPAT_LIB}"; do
     [ -d "${path}" ] || { echo "ERROR: MHTPW runtime directory missing: ${path}" >&2; return 2 2>/dev/null || exit 2; }

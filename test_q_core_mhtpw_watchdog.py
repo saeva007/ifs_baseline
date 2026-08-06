@@ -50,7 +50,11 @@ class MHTPWWatchdogTest(unittest.TestCase):
         runtime_activation = (
             repo / "activate_mhtpw_dcu_runtime.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn('${BASH_SOURCE[0]:-$0}', runtime_activation)
+        self.assertIn(
+            'MHTPW_RUNTIME_DIR="${MHTPW_RUNTIME_DIR:-${BASELINE_DIR:-/public/home/putianshu/vis_mlp/ifs_baseline}}"',
+            runtime_activation,
+        )
+        self.assertNotIn('${BASH_SOURCE[0]:-$0}', runtime_activation)
         gate = (repo / "sub_q_core_mhtpw_runtime_gate.slurm").read_text(
             encoding="utf-8"
         )
@@ -120,6 +124,26 @@ class MHTPWWatchdogTest(unittest.TestCase):
                     mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
                 ),
                 "RuntimeError: No HIP GPUs are available",
+            )
+
+    def test_slurm_spool_activation_path_failure_is_adoptable(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            (logs / "778.err").write_text(
+                "/opt/gridview/slurm/spool_slurmd/job778/slurm_script: line 33: "
+                "/opt/gridview/slurm/spool_slurmd/job778/activate_torch_runtime.sh: "
+                "No such file or directory\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                mod.matching_job_log_signature(
+                    tmp,
+                    "778",
+                    "mhtpw_00100_s2025",
+                    mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
+                ),
+                "activate_torch_runtime.sh: No such file or directory",
             )
 
     def test_runtime_gate_failure_adopts_dependency_cancelled_matrix(self) -> None:

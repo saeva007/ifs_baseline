@@ -42,6 +42,7 @@ STRICT_LOCAL_CACHE_FAILURE = "[Local-Cache-Preflight] ERROR:"
 KNOWN_RUNTIME_FAILURE_SIGNATURES = (
     "[DCU-Runtime-Preflight] ERROR:",
     "RuntimeError: No HIP GPUs are available",
+    "activate_torch_runtime.sh: No such file or directory",
     "oom-kill event(s)",
     "Out Of Memory",
 )
