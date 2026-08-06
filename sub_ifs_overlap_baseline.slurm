@@ -40,6 +40,7 @@ export LOWVIS_RNN_LOCAL_CACHE_DIR="${LOWVIS_RNN_LOCAL_CACHE_DIR:-/tmp}"
 export LOWVIS_RNN_CLEAN_LOCAL_CACHE="${LOWVIS_RNN_CLEAN_LOCAL_CACHE:-0}"
 export LOWVIS_RNN_REQUIRE_LOCAL_CACHE="${LOWVIS_RNN_REQUIRE_LOCAL_CACHE:-0}"
 export LOWVIS_RNN_DCU_PREFLIGHT="${LOWVIS_RNN_DCU_PREFLIGHT:-0}"
+export LOWVIS_RNN_STAGGER_STARTUP="${LOWVIS_RNN_STAGGER_STARTUP:-${LOWVIS_RNN_DCU_PREFLIGHT}}"
 
 USER_LOWVIS_RNN_S2_A_STEPS="${LOWVIS_RNN_S2_A_STEPS:-}"
 USER_LOWVIS_RNN_S2_B_STEPS="${LOWVIS_RNN_S2_B_STEPS:-}"
@@ -594,6 +595,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ]; then
     echo "CLEAN_LOCAL_CACHE: ${LOWVIS_RNN_CLEAN_LOCAL_CACHE}"
     echo "REQUIRE_LOCAL_CACHE: ${LOWVIS_RNN_REQUIRE_LOCAL_CACHE}"
     echo "DCU_PREFLIGHT   : ${LOWVIS_RNN_DCU_PREFLIGHT}"
+    echo "STAGGER_STARTUP : ${LOWVIS_RNN_STAGGER_STARTUP}"
 fi
 
 # ==========================================
@@ -653,7 +655,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_DCU_PREFLIGHT}" = "1" ]
          --nodes=${SLURM_NNODES} \
          --ntasks=${SLURM_NNODES} \
          --ntasks-per-node=1 \
-         --cpus-per-task=4 \
+         --cpus-per-task="${SLURM_CPUS_PER_TASK:-32}" \
          --gres=dcu:4 \
          --kill-on-bad-exit=1 \
          /bin/bash -c "
@@ -666,7 +668,7 @@ if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_DCU_PREFLIGHT}" = "1" ]
 fi
 
 TRAIN_ENTRYPOINT_TOKENS=("${TRAIN_SCRIPT}")
-if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_DCU_PREFLIGHT}" = "1" ]; then
+if [ "${MODEL_ARCH}" = "static_rnn" ] && [ "${LOWVIS_RNN_STAGGER_STARTUP}" = "1" ]; then
     STAGGER_ENTRYPOINT="${BASELINE_DIR}/stagger_mhtpw_torch_entrypoint.py"
     [ -s "${STAGGER_ENTRYPOINT}" ] || {
         echo "ERROR: staggered Torch entrypoint missing: ${STAGGER_ENTRYPOINT}" >&2

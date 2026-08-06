@@ -43,8 +43,7 @@ KNOWN_RUNTIME_FAILURE_SIGNATURES = (
     "[DCU-Runtime-Preflight] ERROR:",
     "RuntimeError: No HIP GPUs are available",
     "activate_torch_runtime.sh: No such file or directory",
-    "oom-kill event(s)",
-    "Out Of Memory",
+    "probe_mhtpw_dcu_runtime.py FAILED",
 )
 STATE_ALIASES = {
     "PD": "PENDING",

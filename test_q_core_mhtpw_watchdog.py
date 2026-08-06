@@ -47,6 +47,11 @@ class MHTPWWatchdogTest(unittest.TestCase):
         )
         self.assertIn("probe_mhtpw_dcu_runtime.py", training)
         self.assertIn("stagger_mhtpw_torch_entrypoint.py", training)
+        self.assertIn(
+            'LOWVIS_RNN_STAGGER_STARTUP="${LOWVIS_RNN_STAGGER_STARTUP:-${LOWVIS_RNN_DCU_PREFLIGHT}}"',
+            training,
+        )
+        self.assertIn('--cpus-per-task="${SLURM_CPUS_PER_TASK:-32}"', training)
         runtime_activation = (
             repo / "activate_mhtpw_dcu_runtime.sh"
         ).read_text(encoding="utf-8")
@@ -144,6 +149,40 @@ class MHTPWWatchdogTest(unittest.TestCase):
                     mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
                 ),
                 "activate_torch_runtime.sh: No such file or directory",
+            )
+
+    def test_probe_oom_is_adoptable_but_generic_training_oom_is_not(self) -> None:
+        with workspace_temp_dir() as tmp:
+            logs = tmp / "logs"
+            logs.mkdir()
+            log_path = logs / "779.err"
+            log_path.write_text(
+                "probe_mhtpw_dcu_runtime.py FAILED\n"
+                "slurmstepd: error: Detected 2 oom-kill event(s)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                mod.matching_job_log_signature(
+                    tmp,
+                    "779",
+                    "mhtpw_00100_s2025",
+                    mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
+                ),
+                "probe_mhtpw_dcu_runtime.py FAILED",
+            )
+            log_path.write_text(
+                "training step 1200\n"
+                "slurmstepd: error: Detected 2 oom-kill event(s)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                mod.matching_job_log_signature(
+                    tmp,
+                    "779",
+                    "mhtpw_00100_s2025",
+                    mod.KNOWN_RUNTIME_FAILURE_SIGNATURES,
+                ),
+                "",
             )
 
     def test_runtime_gate_failure_adopts_dependency_cancelled_matrix(self) -> None:

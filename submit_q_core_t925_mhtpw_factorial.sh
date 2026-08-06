@@ -238,7 +238,7 @@ for seed_raw in "${seed_array[@]}"; do
     s1_jobs[${seed}]=""
     echo "[RESUME] S1 ${seed}"
   else
-    s1_args=(--job-name="mhtpw_s1_s${seed}" --export="ALL,EXPERIMENT=s1_q_core_t925_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=1")
+    s1_args=(--job-name="mhtpw_s1_s${seed}" --export="ALL,EXPERIMENT=s1_q_core_t925_no_rh2m,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${s1_run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S1_DATA_DIR=${S1_DATA_DIR},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_s1_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=0,LOWVIS_RNN_STAGGER_STARTUP=1")
     [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s1_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${base_dep}" ]] || s1_args+=("${base_dep}")
     s1_jobs[${seed}]="$(submit "s1_seed${seed}" "${s1_args[@]}" sub_ifs_overlap_baseline.slurm)"
@@ -262,7 +262,7 @@ for seed_raw in "${seed_array[@]}"; do
     deps="$(append_dep "${deps}" "${runtime_gate_job}")"
     deps="$(append_dep "${deps}" "${s1_jobs[${seed}]}")"
     dep="$(dep_arg "${deps}")"
-    s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=1")
+    s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=0,LOWVIS_RNN_STAGGER_STARTUP=1")
     [[ -z "${TRAIN_EXCLUDE_NODES}" ]] || s2_args+=(--exclude="${TRAIN_EXCLUDE_NODES}")
     [[ -z "${dep}" ]] || s2_args+=("${dep}")
     s2_jobs[${seed}_${mask}]="$(submit "s2_${mask}_seed${seed}" "${s2_args[@]}" sub_ifs_overlap_baseline.slurm)"
