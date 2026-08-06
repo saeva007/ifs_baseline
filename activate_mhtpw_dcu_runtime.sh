@@ -12,8 +12,9 @@ DTK_HYHAL_LIB="${MHTPW_DTK_HYHAL_LIB:-/public/home/xichen/ncydata/dtk/dtk-24.04.
 OPENSSL_COMPAT_LIB="${MHTPW_OPENSSL_LIB:-/public/home/xichen/.conda/envs/py310_ppy/openssl/lib}"
 HIPNN_COMPAT_LIB="${MHTPW_HIPNN_LIB:-/public/home/xichen/ncydata/panpy_test_liud/hipnn/lib/release}"
 export TORCH_ENV="${TORCH_ENV:-/public/home/jarvis226/miniconda3/envs/torch}"
+MHTPW_SCRIPT_REF="${BASH_SOURCE[0]:-$0}"
 MHTPW_RUNTIME_DIR="$(
-    cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1
+    cd "$(dirname "${MHTPW_SCRIPT_REF}")" >/dev/null 2>&1
     pwd
 )"
 

@@ -47,6 +47,22 @@ class MHTPWWatchdogTest(unittest.TestCase):
         )
         self.assertIn("probe_mhtpw_dcu_runtime.py", training)
         self.assertIn("stagger_mhtpw_torch_entrypoint.py", training)
+        runtime_activation = (
+            repo / "activate_mhtpw_dcu_runtime.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('${BASH_SOURCE[0]:-$0}', runtime_activation)
+        gate = (repo / "sub_q_core_mhtpw_runtime_gate.slurm").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("#SBATCH --cpus-per-task=32", gate)
+        watcher = (repo / "watch_q_core_mhtpw_chain.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '"HYBRID_DATA_ROOT": self.manifest["hybrid_data_root"]',
+            watcher,
+        )
+        self.assertIn('"REUSE_COMPLETED_AUDITS": "1"', watcher)
 
     def test_dispatcher_registers_mhtpw_experiment_alias(self) -> None:
         repo = Path(__file__).resolve().parent

@@ -516,6 +516,101 @@ class ArtifactAndAleTest(unittest.TestCase):
         self.assertNotIn("IFS_DATA_DIR", output)
         self.assertNotIn("sub_ifs_data.slurm", output)
 
+    @unittest.skipUnless(BASH_EXE, "bash is required for launcher dry-run regression")
+    def test_mhtpw_resume_reuses_completed_audits_and_submits_one_missing_s2(self) -> None:
+        repo = Path(__file__).resolve().parent
+        with workspace_temp_dir() as root:
+            source = root / "source"
+            hybrid = root / "hybrid"
+            ckpt = root / "checkpoints"
+            eval_root = root / "eval"
+            ckpt.mkdir()
+
+            def write_required_dataset(path: Path, splits) -> None:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "dataset_build_config.json").write_text(
+                    "{}\n", encoding="utf-8"
+                )
+                for split in splits:
+                    for stem, suffix in (
+                        ("X", "npy"), ("y", "npy"), ("meta", "csv")
+                    ):
+                        (path / f"{stem}_{split}.{suffix}").write_bytes(b"x")
+
+            write_required_dataset(source / "s1", ("train", "val"))
+            write_required_dataset(
+                source / "tianji", ("train", "val", "test")
+            )
+            write_required_dataset(
+                source / "pangu2025", ("train", "val", "test")
+            )
+            for mask in (f"{value:05b}" for value in range(32)):
+                write_required_dataset(
+                    hybrid / f"mhtpw_{mask}", ("train", "val", "test")
+                )
+
+            run_tag = "unit_test_mhtpw_resume"
+            missing = ("2025", "00100")
+            for seed in ("42", "2025", "20260702"):
+                s1_run = (
+                    f"exp_qcore_hybrid_{run_tag}_s1_seed{seed}_pm10_pm25"
+                )
+                for name in (
+                    f"{s1_run}_S1_best_score.pt",
+                    f"{s1_run}_static_rnn_config.json",
+                    f"robust_scaler_{s1_run}_s1_w12_dyn18_pm.pkl",
+                ):
+                    (ckpt / name).write_bytes(b"x")
+                for mask in (f"{value:05b}" for value in range(32)):
+                    if (seed, mask) == missing:
+                        continue
+                    run_id = (
+                        f"exp_qcore_hybrid_{run_tag}_mhtpw{mask}_"
+                        f"seed{seed}_pm10_pm25"
+                    )
+                    for name in (
+                        f"{run_id}_S2_PhaseB_best_score.pt",
+                        f"{run_id}_static_rnn_config.json",
+                        f"robust_scaler_{run_id}_s2_w12_dyn18_pm.pkl",
+                    ):
+                        (ckpt / name).write_bytes(b"x")
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUN_TAG": run_tag,
+                    "DRY_RUN": "1",
+                    "RESUME_EXISTING_RUN": "1",
+                    "REUSE_COMPLETED_AUDITS": "1",
+                    "SOURCE_DATA_ROOT": str(source),
+                    "HYBRID_DATA_ROOT": str(hybrid),
+                    "CKPT_DIR": str(ckpt),
+                    "EVAL_ROOT": str(eval_root),
+                    "BASELINE_DIR": str(root),
+                    "BASE": str(root),
+                }
+            )
+            result = subprocess.run(
+                [
+                    str(BASH_EXE),
+                    str(repo / "submit_q_core_t925_mhtpw_factorial.sh"),
+                ],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            output = result.stdout + result.stderr
+            self.assertEqual(output.count("EXPERIMENT=s2_q_core_t925_mhtpw"), 1)
+            self.assertIn("mhtpw_00100_s2025", output)
+            self.assertNotIn("sub_q_core_fair_data_audit.slurm", output)
+            self.assertNotIn("sub_q_core_mhtpw_runtime_gate.slurm", output)
+            self.assertNotIn("MODE=audit", output)
+            self.assertIn(
+                "Reusing previously completed base-data audit", output
+            )
+            self.assertIn("Reusing previously completed hybrid audit", output)
+
     def test_centered_ale_has_weighted_zero_mean(self) -> None:
         curve = centered_curve(np.asarray([0.1, -0.02, 0.04]), np.asarray([10, 20, 30]))
         self.assertAlmostEqual(float(np.average(curve, weights=[10, 20, 30])), 0.0, places=12)

@@ -1183,8 +1183,14 @@ class ChainWatch:
             {
                 "RUN_TAG": self.run_tag,
                 "SOURCE_DATA_ROOT": self.manifest["source_data_root"],
+                "HYBRID_DATA_ROOT": self.manifest["hybrid_data_root"],
+                "EVAL_ROOT": str(self.eval_root),
+                "ANALYSIS_DIR": self.manifest.get(
+                    "analysis_dir", str(self.eval_root / "analysis")
+                ),
                 "SEEDS": self.manifest["seeds"],
                 "RESUME_EXISTING_RUN": "1",
+                "REUSE_COMPLETED_AUDITS": "1",
                 "DRY_RUN": "0",
                 "RUN_IMPORTANCE": self.manifest.get("run_importance", os.environ.get("WATCH_RUN_IMPORTANCE", "1")),
                 "BOOTSTRAP_ITERS": self.manifest.get("bootstrap_iters", os.environ.get("WATCH_BOOTSTRAP_ITERS", "1000")),

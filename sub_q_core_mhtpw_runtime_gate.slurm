@@ -3,7 +3,7 @@
 #SBATCH -p kshdexclu01
 #SBATCH -N 5
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=dcu:4
 #SBATCH --mem=0
 #SBATCH -t 01:00:00
@@ -29,7 +29,7 @@ srun --export=ALL \
      --nodes=${SLURM_NNODES} \
      --ntasks=${SLURM_NNODES} \
      --ntasks-per-node=1 \
-     --cpus-per-task=4 \
+     --cpus-per-task=32 \
      --gres=dcu:4 \
      --kill-on-bad-exit=1 \
      /bin/bash -c "

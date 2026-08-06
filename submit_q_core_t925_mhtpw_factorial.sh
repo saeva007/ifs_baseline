@@ -25,6 +25,7 @@ MASKS="00000:00001:00010:00011:00100:00101:00110:00111:01000:01001:01010:01011:0
 SEEDS="${SEEDS:-42:2025:20260702}"
 DRY_RUN="${DRY_RUN:-0}"
 RESUME_EXISTING_RUN="${RESUME_EXISTING_RUN:-0}"
+REUSE_COMPLETED_AUDITS="${REUSE_COMPLETED_AUDITS:-0}"
 RUN_IMPORTANCE="${RUN_IMPORTANCE:-1}"
 TRAIN_EXCLUDE_NODES="${TRAIN_EXCLUDE_NODES:-}"
 LIMIT_ROWS="${LIMIT_ROWS:-0}"
@@ -58,10 +59,14 @@ ANALYSIS_DIR="${ANALYSIS_DIR:-${EVAL_ROOT}/analysis}"
 case "${RUN_TAG}" in
   *[!A-Za-z0-9_.-]*|"") echo "ERROR: invalid RUN_TAG=${RUN_TAG}" >&2; exit 2 ;;
 esac
-for flag in DRY_RUN RESUME_EXISTING_RUN RUN_IMPORTANCE; do
+for flag in DRY_RUN RESUME_EXISTING_RUN REUSE_COMPLETED_AUDITS RUN_IMPORTANCE; do
   value="${!flag}"
   [[ "${value}" == "0" || "${value}" == "1" ]] || { echo "ERROR: ${flag} must be 0 or 1" >&2; exit 2; }
 done
+if [[ "${REUSE_COMPLETED_AUDITS}" == "1" && "${RESUME_EXISTING_RUN}" != "1" ]]; then
+  echo "ERROR: REUSE_COMPLETED_AUDITS=1 requires RESUME_EXISTING_RUN=1" >&2
+  exit 2
+fi
 
 mkdir -p "${BASELINE_DIR}/logs"
 cd "${BASELINE_DIR}"
@@ -178,16 +183,32 @@ else
   data_jobs="${s1_data_job}:${tianji_data_job}:${pangu_data_job}"
 fi
 
-data_dep="$(dep_arg "${data_jobs}")"
-audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},AUDIT_PROFILE=qcore_t925,SOURCES=tianji=${TIANJI_DATA_DIR};pangu2025=${PANGU_DATA_DIR},S1_DATA_DIR=${S1_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit,EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}")
-[[ -z "${data_dep}" ]] || audit_args+=("${data_dep}")
-base_audit_job="$(submit base_data_audit "${audit_args[@]}" sub_q_core_fair_data_audit.slurm)"
-runtime_gate_job="$(submit runtime_gate --export="ALL,BASELINE_DIR=${BASELINE_DIR}" sub_q_core_mhtpw_runtime_gate.slurm)"
+# A resume must prove that every immutable hybrid dataset exists before it
+# submits any Slurm job.  Previously this check happened after base/runtime
+# jobs were submitted, leaving orphaned audits when HYBRID_DATA_ROOT was wrong.
+if [[ "${RESUME_EXISTING_RUN}" == "1" ]]; then
+  for mask in "${mask_array[@]}"; do
+    require_dataset "hybrid_${mask}" "${HYBRID_DATA_ROOT}/mhtpw_${mask}" train val test
+  done
+fi
 
-base_deps="${base_audit_job}:${runtime_gate_job}"
+data_dep="$(dep_arg "${data_jobs}")"
+if [[ "${REUSE_COMPLETED_AUDITS}" == "1" ]]; then
+  base_audit_job=""
+  runtime_gate_job=""
+  echo "[RESUME] Reusing previously completed base-data audit and shared runtime gate."
+else
+  audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},AUDIT_PROFILE=qcore_t925,SOURCES=tianji=${TIANJI_DATA_DIR};pangu2025=${PANGU_DATA_DIR},S1_DATA_DIR=${S1_DATA_DIR},AUDIT_OUT_DIR=${EVAL_ROOT}/base_data_audit,EXPECTED_PANGU_LEAD_MIN_HOURS=${EXPECTED_PANGU_LEAD_MIN_HOURS},EXPECTED_PANGU_LEAD_MAX_HOURS=${EXPECTED_PANGU_LEAD_MAX_HOURS}")
+  [[ -z "${data_dep}" ]] || audit_args+=("${data_dep}")
+  base_audit_job="$(submit base_data_audit "${audit_args[@]}" sub_q_core_fair_data_audit.slurm)"
+  runtime_gate_job="$(submit runtime_gate --export="ALL,BASELINE_DIR=${BASELINE_DIR}" sub_q_core_mhtpw_runtime_gate.slurm)"
+fi
+
+base_deps=""
+base_deps="$(append_dep "${base_deps}" "${base_audit_job}")"
+base_deps="$(append_dep "${base_deps}" "${runtime_gate_job}")"
 base_dep="$(dep_arg "${base_deps}")"
 if [[ "${RESUME_EXISTING_RUN}" == "1" ]]; then
-  for mask in "${mask_array[@]}"; do require_dataset "hybrid_${mask}" "${HYBRID_DATA_ROOT}/mhtpw_${mask}" train val test; done
   hybrid_build_job=""
 else
   build_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=build,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},GROUP_PROFILE=mhtpw,HYBRID_DATASET_PREFIX=mhtpw,MASKS=${MASKS},LIMIT_ROWS=${LIMIT_ROWS}")
@@ -195,12 +216,18 @@ else
   hybrid_build_job="$(submit hybrid_build "${build_args[@]}" sub_q_core_hybrid_factorial_data.slurm)"
 fi
 
-hybrid_deps="${base_audit_job}"
+hybrid_deps=""
+hybrid_deps="$(append_dep "${hybrid_deps}" "${base_audit_job}")"
 hybrid_deps="$(append_dep "${hybrid_deps}" "${hybrid_build_job}")"
 hybrid_dep="$(dep_arg "${hybrid_deps}")"
-hybrid_audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=audit,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},GROUP_PROFILE=mhtpw,HYBRID_DATASET_PREFIX=mhtpw,MASKS=${MASKS}")
-[[ -z "${hybrid_dep}" ]] || hybrid_audit_args+=("${hybrid_dep}")
-hybrid_audit_job="$(submit hybrid_audit "${hybrid_audit_args[@]}" sub_q_core_hybrid_factorial_data.slurm)"
+if [[ "${REUSE_COMPLETED_AUDITS}" == "1" ]]; then
+  hybrid_audit_job=""
+  echo "[RESUME] Reusing previously completed hybrid audit."
+else
+  hybrid_audit_args=(--export="ALL,RUN_TAG=${RUN_TAG},MODE=audit,PANGU_DATA_DIR=${PANGU_DATA_DIR},TIANJI_DATA_DIR=${TIANJI_DATA_DIR},HYBRID_DATA_ROOT=${HYBRID_DATA_ROOT},GROUP_PROFILE=mhtpw,HYBRID_DATASET_PREFIX=mhtpw,MASKS=${MASKS}")
+  [[ -z "${hybrid_dep}" ]] || hybrid_audit_args+=("${hybrid_dep}")
+  hybrid_audit_job="$(submit hybrid_audit "${hybrid_audit_args[@]}" sub_q_core_hybrid_factorial_data.slurm)"
+fi
 
 declare -A s1_jobs s2_jobs importance_jobs eval_jobs
 scheduled_training=""
@@ -230,7 +257,9 @@ for seed_raw in "${seed_array[@]}"; do
       echo "[RESUME] S2 seed=${seed} mask=${mask}"
       continue
     fi
-    deps="${hybrid_audit_job}:${runtime_gate_job}"
+    deps=""
+    deps="$(append_dep "${deps}" "${hybrid_audit_job}")"
+    deps="$(append_dep "${deps}" "${runtime_gate_job}")"
     deps="$(append_dep "${deps}" "${s1_jobs[${seed}]}")"
     dep="$(dep_arg "${deps}")"
     s2_args=(--job-name="mhtpw_${mask}_s${seed}" --export="ALL,EXPERIMENT=s2_q_core_t925_mhtpw,MODEL_ARCH=static_rnn,LOWVIS_RNN_RUN_ID=${run_id},LOWVIS_RNN_SEED=${seed},OVERLAP_S2_DATA_DIR=${HYBRID_DATA_ROOT}/mhtpw_${mask},OVERLAP_STATIC_RNN_PRETRAINED_CKPT=${s1_ckpt},LOWVIS_RNN_LOCAL_CACHE_ID=${RUN_TAG}_mhtpw${mask}_seed${seed},LOWVIS_RNN_CLEAN_LOCAL_CACHE=1,LOWVIS_RNN_REQUIRE_LOCAL_CACHE=1,LOWVIS_RNN_DCU_PREFLIGHT=1")
@@ -307,6 +336,7 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     echo "factorial_analysis_job=${analysis_job}"
     echo "analysis_dir=${ANALYSIS_DIR}"
     echo "run_importance=${RUN_IMPORTANCE}"
+    echo "reuse_completed_audits=${REUSE_COMPLETED_AUDITS}"
     echo "bootstrap_iters=${BOOTSTRAP_ITERS}"
     echo "bootstrap_max_rows=${BOOTSTRAP_MAX_ROWS}"
     echo "limit_samples=${LIMIT_SAMPLES}"
