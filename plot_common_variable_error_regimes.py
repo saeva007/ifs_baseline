@@ -183,18 +183,34 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
         "tianji_ci_low",
         "tianji_ci_high",
         "pangu_bias",
-        "pangu_bias_ci_low",
-        "pangu_bias_ci_high",
         "tianji_bias",
-        "tianji_bias_ci_low",
-        "tianji_bias_ci_high",
-        "tianji_to_pangu_ratio",
-        "tianji_to_pangu_ratio_ci_low",
-        "tianji_to_pangu_ratio_ci_high",
         "n",
         "represented_utc_dates",
     ]
     require_columns(frame, required, "pressure-level quality")
+    has_bias_ci = {
+        "pangu_bias_ci_low",
+        "pangu_bias_ci_high",
+        "tianji_bias_ci_low",
+        "tianji_bias_ci_high",
+    }.issubset(frame.columns)
+    has_ratio_ci = {
+        "tianji_to_pangu_ratio",
+        "tianji_to_pangu_ratio_ci_low",
+        "tianji_to_pangu_ratio_ci_high",
+    }.issubset(frame.columns)
+    if not has_bias_ci:
+        print(
+            "[WARN] pressure-level bias confidence intervals are absent from the source table; "
+            "pressure-level bias will be plotted as point estimates only.",
+            flush=True,
+        )
+    if not has_ratio_ci:
+        print(
+            "[WARN] pressure-level RMSE-ratio confidence intervals are absent from the source table; "
+            "pressure-level RMSE ratios will be plotted as point estimates only.",
+            flush=True,
+        )
     rows = []
     for feature in FEATURE_ORDER:
         if FEATURE_FAMILY[feature] != "pressure":
@@ -204,6 +220,24 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
             if len(part) != 1:
                 raise ValueError(f"Expected one pressure row for {feature}/{scope}")
             row = part.iloc[0]
+            denominator = float(row["pangu"])
+            if not np.isfinite(denominator) or denominator <= 0:
+                raise ValueError(f"Invalid Pangu RMSE for {feature}/{scope}: {denominator}")
+            ratio_value = (
+                float(row["tianji_to_pangu_ratio"])
+                if has_ratio_ci
+                else float(row["tianji"]) / denominator
+            )
+            ratio_ci_low = (
+                float(row["tianji_to_pangu_ratio_ci_low"])
+                if has_ratio_ci
+                else np.nan
+            )
+            ratio_ci_high = (
+                float(row["tianji_to_pangu_ratio_ci_high"])
+                if has_ratio_ci
+                else np.nan
+            )
             for source in ("pangu", "tianji"):
                 rows.append(
                     {
@@ -220,20 +254,33 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
                         "rmse_ci_low": float(row[f"{source}_ci_low"]),
                         "rmse_ci_high": float(row[f"{source}_ci_high"]),
                         "bias": float(row[f"{source}_bias"]),
-                        "bias_ci_low": float(row[f"{source}_bias_ci_low"]),
-                        "bias_ci_high": float(row[f"{source}_bias_ci_high"]),
-                        "rmse_ratio_tianji_over_pangu": float(
-                            row["tianji_to_pangu_ratio"]
+                        "bias_ci_low": (
+                            float(row[f"{source}_bias_ci_low"])
+                            if has_bias_ci
+                            else np.nan
                         ),
-                        "rmse_ratio_ci_low": float(
-                            row["tianji_to_pangu_ratio_ci_low"]
+                        "bias_ci_high": (
+                            float(row[f"{source}_bias_ci_high"])
+                            if has_bias_ci
+                            else np.nan
                         ),
-                        "rmse_ratio_ci_high": float(
-                            row["tianji_to_pangu_ratio_ci_high"]
+                        "bias_ci_available": has_bias_ci,
+                        "bias_ci_method": (
+                            "paired UTC-date bootstrap"
+                            if has_bias_ci
+                            else "unavailable in source table"
                         ),
+                        "rmse_ratio_tianji_over_pangu": ratio_value,
+                        "rmse_ratio_ci_low": ratio_ci_low,
+                        "rmse_ratio_ci_high": ratio_ci_high,
+                        "rmse_ratio_ci_available": has_ratio_ci,
                         "n": int(row["n"]),
                         "represented_utc_dates": int(row["represented_utc_dates"]),
-                        "rmse_ratio_ci_method": "paired UTC-date bootstrap",
+                        "rmse_ratio_ci_method": (
+                            "paired UTC-date bootstrap"
+                            if has_ratio_ci
+                            else "unavailable in source table"
+                        ),
                     }
                 )
     return pd.DataFrame(rows)
@@ -251,13 +298,18 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             "ci_low",
             "ci_high",
             "bias",
-            "bias_ci_low",
-            "bias_ci_high",
             "n",
             "represented_utc_dates",
         ],
         "surface observation quality",
     )
+    has_bias_ci = {"bias_ci_low", "bias_ci_high"}.issubset(surface.columns)
+    if not has_bias_ci:
+        print(
+            "[WARN] surface bias confidence intervals are absent from the source table; "
+            "surface bias will be plotted as point estimates only.",
+            flush=True,
+        )
     require_columns(
         pairs,
         [
@@ -265,12 +317,20 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             "scope",
             "left_source",
             "right_source",
-            "ratio_right_over_left",
-            "ratio_right_over_left_ci_low",
-            "ratio_right_over_left_ci_high",
         ],
         "surface pairwise quality",
     )
+    has_ratio_ci = {
+        "ratio_right_over_left",
+        "ratio_right_over_left_ci_low",
+        "ratio_right_over_left_ci_high",
+    }.issubset(pairs.columns)
+    if not has_ratio_ci:
+        print(
+            "[WARN] surface RMSE-ratio confidence intervals are absent from the source table; "
+            "surface RMSE ratios will be plotted as point estimates only.",
+            flush=True,
+        )
     rows = []
     for feature in FEATURE_ORDER:
         if FEATURE_FAMILY[feature] != "surface":
@@ -285,6 +345,31 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             if len(ratio) != 1:
                 raise ValueError(f"Expected one Pangu/Tianji pair for {feature}/{scope}")
             ratio_row = ratio.iloc[0]
+            if has_ratio_ci:
+                ratio_value = float(ratio_row["ratio_right_over_left"])
+                ratio_ci_low = float(ratio_row["ratio_right_over_left_ci_low"])
+                ratio_ci_high = float(ratio_row["ratio_right_over_left_ci_high"])
+            else:
+                pangu_rmse = surface[
+                    (surface["feature"] == feature)
+                    & (surface["scope"] == scope)
+                    & (surface["source"] == "pangu")
+                ]
+                tianji_rmse = surface[
+                    (surface["feature"] == feature)
+                    & (surface["scope"] == scope)
+                    & (surface["source"] == "tianji")
+                ]
+                if len(pangu_rmse) != 1 or len(tianji_rmse) != 1:
+                    raise ValueError(
+                        f"Expected one surface RMSE row per source for {feature}/{scope}"
+                    )
+                denominator = float(pangu_rmse.iloc[0]["rmse"])
+                if not np.isfinite(denominator) or denominator <= 0:
+                    raise ValueError(f"Invalid Pangu RMSE for {feature}/{scope}: {denominator}")
+                ratio_value = float(tianji_rmse.iloc[0]["rmse"]) / denominator
+                ratio_ci_low = np.nan
+                ratio_ci_high = np.nan
             for source in ("pangu", "tianji"):
                 part = surface[
                     (surface["feature"] == feature)
@@ -309,20 +394,25 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
                         "rmse_ci_low": float(row["ci_low"]),
                         "rmse_ci_high": float(row["ci_high"]),
                         "bias": float(row["bias"]),
-                        "bias_ci_low": float(row["bias_ci_low"]),
-                        "bias_ci_high": float(row["bias_ci_high"]),
-                        "rmse_ratio_tianji_over_pangu": float(
-                            ratio_row["ratio_right_over_left"]
+                        "bias_ci_low": float(row["bias_ci_low"]) if has_bias_ci else np.nan,
+                        "bias_ci_high": float(row["bias_ci_high"]) if has_bias_ci else np.nan,
+                        "bias_ci_available": has_bias_ci,
+                        "bias_ci_method": (
+                            "paired UTC-date bootstrap"
+                            if has_bias_ci
+                            else "unavailable in source table"
                         ),
-                        "rmse_ratio_ci_low": float(
-                            ratio_row["ratio_right_over_left_ci_low"]
-                        ),
-                        "rmse_ratio_ci_high": float(
-                            ratio_row["ratio_right_over_left_ci_high"]
-                        ),
+                        "rmse_ratio_tianji_over_pangu": ratio_value,
+                        "rmse_ratio_ci_low": ratio_ci_low,
+                        "rmse_ratio_ci_high": ratio_ci_high,
+                        "rmse_ratio_ci_available": has_ratio_ci,
                         "n": int(row["n"]),
                         "represented_utc_dates": int(row["represented_utc_dates"]),
-                        "rmse_ratio_ci_method": "paired UTC-date bootstrap",
+                        "rmse_ratio_ci_method": (
+                            "paired UTC-date bootstrap"
+                            if has_ratio_ci
+                            else "unavailable in source table"
+                        ),
                     }
                 )
     return pd.DataFrame(rows)
@@ -446,15 +536,19 @@ def rmse_ratio_panel(
     y = np.arange(len(part), dtype=float)
     for yi, row in zip(y, part.itertuples(index=False)):
         estimate = float(row.rmse_ratio_tianji_over_pangu)
-        low = min(float(row.rmse_ratio_ci_low), estimate)
-        high = max(float(row.rmse_ratio_ci_high), estimate)
-        if low <= 1.0 <= high:
+        ci_low = float(row.rmse_ratio_ci_low)
+        ci_high = float(row.rmse_ratio_ci_high)
+        has_ci = np.isfinite(ci_low) and np.isfinite(ci_high)
+        low = min(ci_low, estimate) if has_ci else estimate
+        high = max(ci_high, estimate) if has_ci else estimate
+        if has_ci and low <= 1.0 <= high:
             color = MID
         elif estimate < 1.0:
             color = SOURCE_COLORS["tianji"]
         else:
             color = SOURCE_DARK_COLORS["pangu"]
-        ax.plot([low, high], [yi, yi], color=color, linewidth=1.8, solid_capstyle="round")
+        if has_ci:
+            ax.plot([low, high], [yi, yi], color=color, linewidth=1.8, solid_capstyle="round")
         ax.scatter(
             estimate,
             yi,
@@ -466,12 +560,17 @@ def rmse_ratio_panel(
         )
     ax.axvline(1.0, color=INK, linewidth=0.85)
     positive = part[
-        ["rmse_ratio_ci_low", "rmse_ratio_ci_high"]
-    ].to_numpy(dtype=float)
-    if np.any(positive <= 0):
-        raise ValueError("RMSE-ratio confidence intervals must be positive")
-    lo = float(np.log2(positive[:, 0].min()))
-    hi = float(np.log2(positive[:, 1].max()))
+        [
+            "rmse_ratio_tianji_over_pangu",
+            "rmse_ratio_ci_low",
+            "rmse_ratio_ci_high",
+        ]
+    ].to_numpy(dtype=float).ravel()
+    positive = positive[np.isfinite(positive)]
+    if positive.size == 0 or np.any(positive <= 0):
+        raise ValueError("RMSE-ratio estimates and available confidence intervals must be positive")
+    lo = float(np.log2(positive.min()))
+    hi = float(np.log2(positive.max()))
     span = max(hi - lo, 0.5)
     ax.set_xscale("log", base=2)
     ax.set_xlim(2 ** (lo - 0.12 * span), 2 ** (hi + 0.12 * span))
@@ -539,17 +638,20 @@ def bias_panel(
         )
         for row in rows.itertuples(index=False):
             estimate = float(row.normalized_bias)
-            low = min(float(row.normalized_bias_ci_low), estimate)
-            high = max(float(row.normalized_bias_ci_high), estimate)
             yi = y_base[str(row.feature)] + offsets[source_key]
-            ax.plot(
-                [low, high],
-                [yi, yi],
-                color=SOURCE_COLORS[source_key],
-                linewidth=1.25,
-                solid_capstyle="round",
-                alpha=0.92,
-            )
+            ci_low = float(row.normalized_bias_ci_low)
+            ci_high = float(row.normalized_bias_ci_high)
+            if np.isfinite(ci_low) and np.isfinite(ci_high):
+                low = min(ci_low, estimate)
+                high = max(ci_high, estimate)
+                ax.plot(
+                    [low, high],
+                    [yi, yi],
+                    color=SOURCE_COLORS[source_key],
+                    linewidth=1.25,
+                    solid_capstyle="round",
+                    alpha=0.92,
+                )
             ax.scatter(
                 estimate,
                 yi,
