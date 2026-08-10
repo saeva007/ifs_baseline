@@ -17,13 +17,15 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
 from paper_source_palette import SOURCE_COLORS, SOURCE_DARK_COLORS
+import plot_common_variable_error_regimes as quality_plot
 
 
-FIGURE_WIDTH = 7.205
+FIGURE_WIDTH = 7.60
 TIANJI = SOURCE_COLORS["tianji"]
 PANGU = SOURCE_COLORS["pangu"]
 TIANJI_DARK = SOURCE_DARK_COLORS["tianji"]
@@ -66,6 +68,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory containing upper_air_disagreement_bias_source_data.csv; auto-resolved when omitted.",
+    )
+    p.add_argument(
+        "--paired-quality-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing the pressure-level and surface paired-quality CSV files "
+            "used by the four-panel variable-quality analysis."
+        ),
     )
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument("--figure-stem", default="fig_tianji_pangu_main_composite")
@@ -125,6 +136,36 @@ def resolve_upper_air_dir(analysis_dir: Path, requested: Path | None) -> Path:
             return matches[0].parent
     raise FileNotFoundError(
         "Could not locate upper_air_disagreement_bias_source_data.csv; pass --upper-air-dir."
+    )
+
+
+def resolve_paired_quality_dir(
+    analysis_dir: Path,
+    endpoint_dir: Path,
+    requested: Path | None,
+) -> Path:
+    required = (
+        "pressure_level_paired_rmse_utc_date_bootstrap_ci.csv",
+        "surface_observation_three_source_rmse_utc_date_bootstrap_ci.csv",
+        "surface_observation_pairwise_rmse_delta_utc_date_bootstrap_ci.csv",
+    )
+    candidates = []
+    if requested is not None:
+        candidates.append(requested.expanduser().resolve())
+    candidates.extend(
+        [
+            analysis_dir,
+            analysis_dir.parent,
+            endpoint_dir,
+            endpoint_dir.parent,
+        ]
+    )
+    for candidate in candidates:
+        for resolved in (candidate, candidate / "analysis"):
+            if all((resolved / name).is_file() for name in required):
+                return resolved
+    raise FileNotFoundError(
+        "Could not locate the paired variable-quality CSV files; pass --paired-quality-dir."
     )
 
 
@@ -342,28 +383,102 @@ def main() -> None:
     analysis_dir = args.analysis_dir.expanduser().resolve()
     endpoint_dir = args.endpoint_dir.expanduser().resolve()
     upper_air_dir = resolve_upper_air_dir(analysis_dir, args.upper_air_dir)
+    paired_quality_dir = resolve_paired_quality_dir(
+        analysis_dir,
+        endpoint_dir,
+        args.paired_quality_dir,
+    )
     out_dir = args.out_dir.expanduser().resolve() if args.out_dir else analysis_dir / "manuscript_figures"
     tables = load_inputs(analysis_dir, endpoint_dir, upper_air_dir)
+    quality_source = quality_plot.prepare_source(paired_quality_dir)
 
-    fig, axes = plt.subplots(4, 2, figsize=(FIGURE_WIDTH, 9.35))
-    fig.subplots_adjust(left=0.105, right=0.985, top=0.975, bottom=0.055, wspace=0.38, hspace=0.72)
+    fig = plt.figure(figsize=(FIGURE_WIDTH, 10.20))
+    outer = fig.add_gridspec(
+        4,
+        1,
+        height_ratios=[1.0, 1.06, 1.18, 1.18],
+        left=0.205,
+        right=0.985,
+        top=0.93,
+        bottom=0.055,
+        hspace=0.67,
+    )
+    endpoint_grid = outer[0].subgridspec(1, 2, wspace=0.40)
+    mechanism_grid = outer[1].subgridspec(1, 2, wspace=0.38)
+    quality_top_grid = outer[2].subgridspec(1, 2, wspace=0.19)
+    quality_bottom_grid = outer[3].subgridspec(1, 2, wspace=0.19)
+    endpoint_axes = [fig.add_subplot(endpoint_grid[0, index]) for index in range(2)]
+    mechanism_axes = [fig.add_subplot(mechanism_grid[0, index]) for index in range(2)]
+    quality_top_axes = [fig.add_subplot(quality_top_grid[0, index]) for index in range(2)]
+    quality_bottom_axes = [fig.add_subplot(quality_bottom_grid[0, index]) for index in range(2)]
+
     source_frames = []
-    source_frames.append(draw_endpoint(axes[0, 0], tables["metrics"], tables["gap"], "low_vis_ap", "Low-vis average precision", "Average precision"))
-    source_frames.append(draw_endpoint(axes[0, 1], tables["metrics"], tables["gap"], "low_vis_recall_matched_fpr", "Recall at matched FPR", "Low-vis recall"))
-    source_frames.append(draw_shapley(axes[1, 0], tables["shapley"]).assign(panel_metric="shapley_low_vis_ap"))
-    source_frames.append(draw_hits(axes[1, 1], tables["bias"]).assign(panel_metric="exclusive_hits"))
+    source_frames.append(draw_endpoint(endpoint_axes[0], tables["metrics"], tables["gap"], "low_vis_ap", "Low-vis average precision", "Average precision"))
+    source_frames.append(draw_endpoint(endpoint_axes[1], tables["metrics"], tables["gap"], "low_vis_recall_matched_fpr", "Recall at matched FPR", "Low-vis recall"))
+    source_frames.append(draw_shapley(mechanism_axes[0], tables["shapley"]).assign(panel_metric="shapley_low_vis_ap"))
+    source_frames.append(draw_hits(mechanism_axes[1], tables["bias"]).assign(panel_metric="exclusive_hits"))
 
-    feature_specs = [
-        ("T_925", "925-hPa temperature", "K"),
-        ("Q_1000", "1000-hPa specific humidity", "g kg$^{-1}$"),
-        ("Q_925", "925-hPa specific humidity", "g kg$^{-1}$"),
-        ("WSPD925", "925-hPa wind speed", "m s$^{-1}$"),
-    ]
-    for index, (ax, spec) in enumerate(zip(axes[2:, :].flat, feature_specs)):
-        source_frames.append(draw_bias(ax, tables["bias"], *spec, add_legend=index == 0).assign(panel_metric=f"bias_{spec[0]}"))
+    quality_plot.rmse_ratio_panel(
+        quality_top_axes[0], quality_source, quality_plot.SCOPES[0], "e", True
+    )
+    quality_plot.rmse_ratio_panel(
+        quality_top_axes[1],
+        quality_source,
+        quality_plot.SCOPES[1],
+        "f",
+        False,
+        show_reference_labels=False,
+    )
+    quality_plot.bias_panel(
+        quality_bottom_axes[0], quality_source, quality_plot.SCOPES[0], "g", True
+    )
+    quality_plot.bias_panel(
+        quality_bottom_axes[1],
+        quality_source,
+        quality_plot.SCOPES[1],
+        "h",
+        False,
+        show_reference_labels=False,
+    )
+    for scope, panel_kind in (
+        (quality_plot.SCOPES[0], "rmse_all_paired"),
+        (quality_plot.SCOPES[1], "rmse_observed_lowvis"),
+        (quality_plot.SCOPES[0], "bias_all_paired"),
+        (quality_plot.SCOPES[1], "bias_observed_lowvis"),
+    ):
+        source_frames.append(
+            quality_source[quality_source["scope"] == scope].assign(panel_metric=panel_kind)
+        )
 
-    for letter, ax in zip("abcdefgh", axes.flat):
+    for letter, ax in zip("abcd", [*endpoint_axes, *mechanism_axes]):
         panel_label(ax, letter)
+    fig.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color=PANGU,
+                markerfacecolor=PANGU,
+                linestyle="none",
+                label="Pangu (AI)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color=TIANJI,
+                markerfacecolor=TIANJI,
+                linestyle="none",
+                label="Tianji (physics)",
+            ),
+        ],
+        loc="upper center",
+        bbox_to_anchor=(0.60, 0.992),
+        ncol=2,
+        handletextpad=0.4,
+        columnspacing=1.2,
+    )
 
     export(fig, out_dir, args.figure_stem, args.dpi)
     plt.close(fig)
@@ -374,6 +489,7 @@ def main() -> None:
         "analysis_dir": str(analysis_dir),
         "endpoint_dir": str(endpoint_dir),
         "upper_air_dir": str(upper_air_dir),
+        "paired_quality_dir": str(paired_quality_dir),
         "figure": str(out_dir / f"{args.figure_stem}.pdf"),
         "rendering": "all panels redrawn from source tables on one canvas",
     }
