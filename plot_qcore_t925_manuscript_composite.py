@@ -217,7 +217,7 @@ def draw_endpoint(
     metric: str,
     title: str,
     ylabel: str,
-    show_caps: bool = True,
+    show_seed_range: bool = True,
 ) -> pd.DataFrame:
     endpoints, width = endpoint_rows(metrics)
     pangu_mask, tianji_mask = "0" * width, "1" * width
@@ -256,20 +256,21 @@ def draw_endpoint(
         alpha=0.92,
         zorder=2,
     )
-    for position, mean, low, high, color in zip(
-        positions, means, lows, highs, (PANGU_DARK, TIANJI_DARK)
-    ):
-        ax.errorbar(
-            position,
-            mean,
-            yerr=[[mean - low], [high - mean]],
-            fmt="none",
-            ecolor=color,
-            elinewidth=1.15,
-            capsize=6.0 if show_caps else 0.0,
-            capthick=1.0,
-            zorder=3,
-        )
+    if show_seed_range:
+        for position, mean, low, high, color in zip(
+            positions, means, lows, highs, (PANGU_DARK, TIANJI_DARK)
+        ):
+            ax.errorbar(
+                position,
+                mean,
+                yerr=[[mean - low], [high - mean]],
+                fmt="none",
+                ecolor=color,
+                elinewidth=1.15,
+                capsize=6.0,
+                capthick=1.0,
+                zorder=3,
+            )
     draws = pd.to_numeric(gap.loc[gap["metric"].astype(str) == metric, "delta_all1_minus_all0"], errors="coerce").dropna()
     delta = tianji_mean - pangu_mean
     if not draws.empty:
@@ -459,7 +460,7 @@ def main() -> None:
                 "low_vis_ap",
                 "Low-vis average precision",
                 "Average precision",
-                show_caps=bias_layout == "offset_ci",
+                show_seed_range=bias_layout == "offset_ci",
             ).assign(panel_metric="low_vis_ap"),
             draw_endpoint(
                 endpoint_axes[1],
@@ -468,7 +469,7 @@ def main() -> None:
                 "low_vis_recall_matched_fpr",
                 "Recall at matched FPR",
                 "Low-vis recall",
-                show_caps=bias_layout == "offset_ci",
+                show_seed_range=bias_layout == "offset_ci",
             ).assign(panel_metric="low_vis_recall_matched_fpr"),
         ]
         for letter, ax in zip("ab", endpoint_axes):
