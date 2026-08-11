@@ -565,14 +565,47 @@ def bias_panel(
     label: str,
     show_y: bool,
     show_reference_labels: bool = True,
+    layout: str = "offset_ci",
 ) -> None:
+    if layout not in {"offset_ci", "paired_connector"}:
+        raise ValueError(f"Unknown systematic-bias layout: {layout}")
     panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
     title(ax, f"Systematic bias · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
     part = source[source["scope"] == scope].copy()
     y_base = {
         feature: float(index) for index, feature in enumerate(FEATURE_ORDER)
     }
-    offsets = {"pangu": -0.11, "tianji": 0.11}
+    offsets = (
+        {"pangu": -0.11, "tianji": 0.11}
+        if layout == "offset_ci"
+        else {"pangu": 0.0, "tianji": 0.0}
+    )
+
+    if layout == "paired_connector":
+        estimates = part.pivot(
+            index="feature",
+            columns="source",
+            values="normalized_bias",
+        ).reindex(FEATURE_ORDER)
+        if estimates[["pangu", "tianji"]].isna().any().any():
+            missing = estimates[
+                estimates[["pangu", "tianji"]].isna().any(axis=1)
+            ].index.tolist()
+            raise ValueError(f"Missing paired systematic-bias estimates for {missing}")
+        for feature in FEATURE_ORDER:
+            yi = y_base[feature]
+            ax.plot(
+                [
+                    float(estimates.loc[feature, "pangu"]),
+                    float(estimates.loc[feature, "tianji"]),
+                ],
+                [yi, yi],
+                color=LIGHT,
+                linewidth=1.25,
+                solid_capstyle="round",
+                zorder=1,
+            )
+
     for source_key in ("pangu", "tianji"):
         rows = (
             part[part["source"] == source_key]
@@ -600,7 +633,7 @@ def bias_panel(
                     markeredgewidth=0.6,
                     ecolor=SOURCE_COLORS[source_key],
                     elinewidth=1.0,
-                    capsize=2.5,
+                    capsize=2.5 if layout == "offset_ci" else 0.0,
                     capthick=0.85,
                     alpha=0.92,
                     zorder=3,

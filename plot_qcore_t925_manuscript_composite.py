@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Redraw the Tianji--Pangu manuscript figure from source tables.
+"""Redraw the Tianji--Pangu endpoint and variable-quality manuscript figure.
 
 This script never pastes pre-rendered panels.  Every axis is drawn from the
-factorial-analysis and upper-air diagnostic tables on one shared canvas so
-panel geometry, typography, and margins remain consistent.
+endpoint-comparison and paired variable-quality tables on one shared canvas so
+panel geometry, typography, and margins remain consistent.  Two systematic-
+bias layouts are exported for direct visual comparison.
 """
 
 from __future__ import annotations
@@ -170,38 +171,20 @@ def resolve_paired_quality_dir(
     )
 
 
-def load_inputs(analysis_dir: Path, endpoint_dir: Path, upper_air_dir: Path) -> Dict[str, pd.DataFrame]:
+def load_inputs(endpoint_dir: Path) -> Dict[str, pd.DataFrame]:
     paths = {
         "metrics": endpoint_dir / "qcore_t925_metrics_by_seed.csv",
-        "shapley": analysis_dir / "hybrid_exact_shapley_effects.csv",
         "gap": endpoint_dir / "qcore_t925_bootstrap_gap_draws.csv",
-        "bias": upper_air_dir / "upper_air_disagreement_bias_source_data.csv",
     }
     for path in paths.values():
         if not path.is_file():
             raise FileNotFoundError(path)
     tables = {
         "metrics": pd.read_csv(paths["metrics"], dtype={"mask": str}),
-        "shapley": pd.read_csv(paths["shapley"]),
         "gap": pd.read_csv(paths["gap"]),
-        "bias": pd.read_csv(paths["bias"]),
     }
     require_columns(tables["metrics"], ["mask", "seed", "low_vis_ap", "low_vis_recall_matched_fpr"], paths["metrics"])
-    require_columns(tables["shapley"], ["metric", "group", "group_label", "shapley_mean", "ci_low", "ci_high"], paths["shapley"])
     require_columns(tables["gap"], ["metric", "delta_all1_minus_all0"], paths["gap"])
-    require_columns(
-        tables["bias"],
-        [
-            "feature",
-            "case_category",
-            "source_role",
-            "bias_forecast_minus_reference",
-            "bias_ci_low",
-            "bias_ci_high",
-            "n_complete_paired",
-        ],
-        paths["bias"],
-    )
     return tables
 
 
@@ -421,108 +404,148 @@ def main() -> None:
     setup_style()
     analysis_dir = args.analysis_dir.expanduser().resolve()
     endpoint_dir = args.endpoint_dir.expanduser().resolve()
-    upper_air_dir = resolve_upper_air_dir(analysis_dir, args.upper_air_dir)
     paired_quality_dir = resolve_paired_quality_dir(
         analysis_dir,
         endpoint_dir,
         args.paired_quality_dir,
     )
     out_dir = args.out_dir.expanduser().resolve() if args.out_dir else analysis_dir / "manuscript_figures"
-    tables = load_inputs(analysis_dir, endpoint_dir, upper_air_dir)
+    tables = load_inputs(endpoint_dir)
     quality_source = quality_plot.prepare_source(paired_quality_dir)
 
-    fig = plt.figure(figsize=(FIGURE_WIDTH, 8.35))
-    outer = fig.add_gridspec(
-        3,
-        1,
-        height_ratios=[1.0, 1.05, 1.62],
-        left=0.205,
-        right=0.985,
-        top=0.93,
-        bottom=0.070,
-        hspace=0.70,
+    variants = (
+        ("offset_ci", "offset_ci"),
+        ("paired_connector", "paired_connector"),
     )
-    endpoint_grid = outer[0].subgridspec(1, 2, wspace=0.40)
-    mechanism_grid = outer[1].subgridspec(1, 2, wspace=0.38)
-    quality_grid = outer[2].subgridspec(1, 2, wspace=0.19)
-    endpoint_axes = [fig.add_subplot(endpoint_grid[0, index]) for index in range(2)]
-    mechanism_axes = [fig.add_subplot(mechanism_grid[0, index]) for index in range(2)]
-    quality_axes = [fig.add_subplot(quality_grid[0, index]) for index in range(2)]
+    rendered = []
+    for suffix, bias_layout in variants:
+        fig = plt.figure(figsize=(FIGURE_WIDTH, 8.75))
+        outer = fig.add_gridspec(
+            3,
+            1,
+            height_ratios=[0.92, 1.22, 1.22],
+            left=0.205,
+            right=0.985,
+            top=0.93,
+            bottom=0.065,
+            hspace=0.66,
+        )
+        endpoint_grid = outer[0].subgridspec(1, 2, wspace=0.40)
+        quality_all_grid = outer[1].subgridspec(1, 2, wspace=0.19)
+        quality_low_grid = outer[2].subgridspec(1, 2, wspace=0.19)
+        endpoint_axes = [
+            fig.add_subplot(endpoint_grid[0, index]) for index in range(2)
+        ]
+        quality_all_axes = [
+            fig.add_subplot(quality_all_grid[0, index]) for index in range(2)
+        ]
+        quality_low_axes = [
+            fig.add_subplot(quality_low_grid[0, index]) for index in range(2)
+        ]
 
-    source_frames = []
-    source_frames.append(draw_endpoint(endpoint_axes[0], tables["metrics"], tables["gap"], "low_vis_ap", "Low-vis average precision", "Average precision"))
-    source_frames.append(draw_endpoint(endpoint_axes[1], tables["metrics"], tables["gap"], "low_vis_recall_matched_fpr", "Recall at matched FPR", "Low-vis recall"))
-    source_frames.append(draw_shapley(mechanism_axes[0], tables["shapley"]).assign(panel_metric="shapley_low_vis_ap"))
-    source_frames.append(draw_hits(mechanism_axes[1], tables["bias"]).assign(panel_metric="exclusive_hits"))
+        source_frames = [
+            draw_endpoint(
+                endpoint_axes[0],
+                tables["metrics"],
+                tables["gap"],
+                "low_vis_ap",
+                "Low-vis average precision",
+                "Average precision",
+            ).assign(panel_metric="low_vis_ap"),
+            draw_endpoint(
+                endpoint_axes[1],
+                tables["metrics"],
+                tables["gap"],
+                "low_vis_recall_matched_fpr",
+                "Recall at matched FPR",
+                "Low-vis recall",
+            ).assign(panel_metric="low_vis_recall_matched_fpr"),
+        ]
+        for letter, ax in zip("ab", endpoint_axes):
+            panel_label(ax, letter)
 
-    quality_plot.rmse_ratio_panel(
-        quality_axes[0],
-        quality_source,
-        quality_plot.SCOPES[1],
-        "e",
-        True,
-    )
-    quality_plot.bias_panel(
-        quality_axes[1],
-        quality_source,
-        quality_plot.SCOPES[1],
-        "f",
-        False,
-        show_reference_labels=False,
-    )
-    for scope, panel_kind in (
-        (quality_plot.SCOPES[1], "rmse_observed_lowvis"),
-        (quality_plot.SCOPES[1], "bias_observed_lowvis"),
-    ):
-        source_frames.append(
-            quality_source[quality_source["scope"] == scope].assign(panel_metric=panel_kind)
+        for axes, scope, letters in (
+            (quality_all_axes, quality_plot.SCOPES[0], ("c", "d")),
+            (quality_low_axes, quality_plot.SCOPES[1], ("e", "f")),
+        ):
+            quality_plot.rmse_ratio_panel(
+                axes[0],
+                quality_source,
+                scope,
+                letters[0],
+                True,
+            )
+            quality_plot.bias_panel(
+                axes[1],
+                quality_source,
+                scope,
+                letters[1],
+                False,
+                show_reference_labels=False,
+                layout=bias_layout,
+            )
+            source_frames.extend(
+                [
+                    quality_source[quality_source["scope"] == scope].assign(
+                        panel_metric=f"rmse_{scope}",
+                        bias_layout=bias_layout,
+                    ),
+                    quality_source[quality_source["scope"] == scope].assign(
+                        panel_metric=f"bias_{scope}",
+                        bias_layout=bias_layout,
+                    ),
+                ]
+            )
+
+        fig.legend(
+            handles=[
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color=PANGU,
+                    markerfacecolor=PANGU,
+                    linestyle="none",
+                    label="Pangu (AI)",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="s",
+                    color=TIANJI,
+                    markerfacecolor=TIANJI,
+                    linestyle="none",
+                    label="Tianji (physics)",
+                ),
+            ],
+            loc="upper center",
+            bbox_to_anchor=(0.60, 0.992),
+            ncol=2,
+            handletextpad=0.4,
+            columnspacing=1.2,
         )
 
-    for letter, ax in zip("abcd", [*endpoint_axes, *mechanism_axes]):
-        panel_label(ax, letter)
-    fig.legend(
-        handles=[
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color=PANGU,
-                markerfacecolor=PANGU,
-                linestyle="none",
-                label="Pangu (AI)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color=TIANJI,
-                markerfacecolor=TIANJI,
-                linestyle="none",
-                label="Tianji (physics)",
-            ),
-        ],
-        loc="upper center",
-        bbox_to_anchor=(0.60, 0.992),
-        ncol=2,
-        handletextpad=0.4,
-        columnspacing=1.2,
-    )
+        stem = f"{args.figure_stem}_{suffix}"
+        export(fig, out_dir, stem, args.dpi)
+        plt.close(fig)
+        pd.concat(source_frames, ignore_index=True, sort=False).to_csv(
+            out_dir / f"{stem}_source_data.csv",
+            index=False,
+            float_format="%.8f",
+        )
+        rendered.append(str(out_dir / f"{stem}.pdf"))
 
-    export(fig, out_dir, args.figure_stem, args.dpi)
-    plt.close(fig)
-    pd.concat(source_frames, ignore_index=True, sort=False).to_csv(
-        out_dir / f"{args.figure_stem}_source_data.csv", index=False, float_format="%.8f"
-    )
     manifest = {
         "analysis_dir": str(analysis_dir),
         "endpoint_dir": str(endpoint_dir),
-        "upper_air_dir": str(upper_air_dir),
         "paired_quality_dir": str(paired_quality_dir),
-        "figure": str(out_dir / f"{args.figure_stem}.pdf"),
+        "figures": rendered,
+        "bias_layouts": [item[1] for item in variants],
         "rendering": "all panels redrawn from source tables on one canvas",
     }
     (out_dir / f"{args.figure_stem}_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(out_dir / f"{args.figure_stem}.png")
+    for figure in rendered:
+        print(figure)
 
 
 if __name__ == "__main__":
