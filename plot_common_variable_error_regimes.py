@@ -618,7 +618,18 @@ def bias_panel(
             yi = y_base[str(row.feature)] + offsets[source_key]
             ci_low = float(row.normalized_bias_ci_low)
             ci_high = float(row.normalized_bias_ci_high)
-            if np.isfinite(ci_low) and np.isfinite(ci_high):
+            if layout == "paired_connector":
+                ax.scatter(
+                    estimate,
+                    yi,
+                    s=38,
+                    marker=SOURCE_MARKERS[source_key],
+                    facecolor=SOURCE_COLORS[source_key],
+                    edgecolor=WHITE,
+                    linewidth=0.7,
+                    zorder=3,
+                )
+            elif np.isfinite(ci_low) and np.isfinite(ci_high):
                 low = min(ci_low, estimate)
                 high = max(ci_high, estimate)
                 ax.errorbar(
@@ -633,7 +644,7 @@ def bias_panel(
                     markeredgewidth=0.6,
                     ecolor=SOURCE_COLORS[source_key],
                     elinewidth=1.0,
-                    capsize=2.5 if layout == "offset_ci" else 0.0,
+                    capsize=2.5,
                     capthick=0.85,
                     alpha=0.92,
                     zorder=3,
@@ -650,18 +661,17 @@ def bias_panel(
                     zorder=3,
                 )
     ax.axvline(0.0, color=INK, linewidth=0.85)
+    extent_columns = (
+        ["normalized_bias"]
+        if layout == "paired_connector"
+        else [
+            "normalized_bias",
+            "normalized_bias_ci_low",
+            "normalized_bias_ci_high",
+        ]
+    )
     extent = float(
-        np.nanmax(
-            np.abs(
-                part[
-                    [
-                        "normalized_bias",
-                        "normalized_bias_ci_low",
-                        "normalized_bias_ci_high",
-                    ]
-                ].to_numpy(dtype=float)
-            )
-        )
+        np.nanmax(np.abs(part[extent_columns].to_numpy(dtype=float)))
     )
     extent = max(0.25, 1.12 * extent)
     ax.set_xlim(-extent, extent)

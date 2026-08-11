@@ -210,7 +210,15 @@ def endpoint_rows(metrics: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return keep, width
 
 
-def draw_endpoint(ax, metrics: pd.DataFrame, gap: pd.DataFrame, metric: str, title: str, ylabel: str) -> pd.DataFrame:
+def draw_endpoint(
+    ax,
+    metrics: pd.DataFrame,
+    gap: pd.DataFrame,
+    metric: str,
+    title: str,
+    ylabel: str,
+    show_caps: bool = True,
+) -> pd.DataFrame:
     endpoints, width = endpoint_rows(metrics)
     pangu_mask, tianji_mask = "0" * width, "1" * width
     seeds = sorted(set(endpoints["seed"].astype(int)))
@@ -258,7 +266,7 @@ def draw_endpoint(ax, metrics: pd.DataFrame, gap: pd.DataFrame, metric: str, tit
             fmt="none",
             ecolor=color,
             elinewidth=1.15,
-            capsize=6.0,
+            capsize=6.0 if show_caps else 0.0,
             capthick=1.0,
             zorder=3,
         )
@@ -431,16 +439,16 @@ def main() -> None:
             hspace=0.66,
         )
         endpoint_grid = outer[0].subgridspec(1, 2, wspace=0.40)
-        quality_all_grid = outer[1].subgridspec(1, 2, wspace=0.19)
-        quality_low_grid = outer[2].subgridspec(1, 2, wspace=0.19)
+        rmse_grid = outer[1].subgridspec(1, 2, wspace=0.19)
+        bias_grid = outer[2].subgridspec(1, 2, wspace=0.19)
         endpoint_axes = [
             fig.add_subplot(endpoint_grid[0, index]) for index in range(2)
         ]
-        quality_all_axes = [
-            fig.add_subplot(quality_all_grid[0, index]) for index in range(2)
+        rmse_axes = [
+            fig.add_subplot(rmse_grid[0, index]) for index in range(2)
         ]
-        quality_low_axes = [
-            fig.add_subplot(quality_low_grid[0, index]) for index in range(2)
+        bias_axes = [
+            fig.add_subplot(bias_grid[0, index]) for index in range(2)
         ]
 
         source_frames = [
@@ -451,6 +459,7 @@ def main() -> None:
                 "low_vis_ap",
                 "Low-vis average precision",
                 "Average precision",
+                show_caps=bias_layout == "offset_ci",
             ).assign(panel_metric="low_vis_ap"),
             draw_endpoint(
                 endpoint_axes[1],
@@ -459,42 +468,49 @@ def main() -> None:
                 "low_vis_recall_matched_fpr",
                 "Recall at matched FPR",
                 "Low-vis recall",
+                show_caps=bias_layout == "offset_ci",
             ).assign(panel_metric="low_vis_recall_matched_fpr"),
         ]
         for letter, ax in zip("ab", endpoint_axes):
             panel_label(ax, letter)
 
-        for axes, scope, letters in (
-            (quality_all_axes, quality_plot.SCOPES[0], ("c", "d")),
-            (quality_low_axes, quality_plot.SCOPES[1], ("e", "f")),
+        for axis, scope, letter, show_y in (
+            (rmse_axes[0], quality_plot.SCOPES[0], "c", True),
+            (rmse_axes[1], quality_plot.SCOPES[1], "d", False),
         ):
             quality_plot.rmse_ratio_panel(
-                axes[0],
+                axis,
                 quality_source,
                 scope,
-                letters[0],
-                True,
+                letter,
+                show_y,
+                show_reference_labels=show_y,
             )
+            source_frames.append(
+                quality_source[quality_source["scope"] == scope].assign(
+                    panel_metric=f"rmse_{scope}",
+                    bias_layout=bias_layout,
+                )
+            )
+
+        for axis, scope, letter, show_y in (
+            (bias_axes[0], quality_plot.SCOPES[0], "e", True),
+            (bias_axes[1], quality_plot.SCOPES[1], "f", False),
+        ):
             quality_plot.bias_panel(
-                axes[1],
+                axis,
                 quality_source,
                 scope,
-                letters[1],
-                False,
-                show_reference_labels=False,
+                letter,
+                show_y,
+                show_reference_labels=show_y,
                 layout=bias_layout,
             )
-            source_frames.extend(
-                [
-                    quality_source[quality_source["scope"] == scope].assign(
-                        panel_metric=f"rmse_{scope}",
-                        bias_layout=bias_layout,
-                    ),
-                    quality_source[quality_source["scope"] == scope].assign(
-                        panel_metric=f"bias_{scope}",
-                        bias_layout=bias_layout,
-                    ),
-                ]
+            source_frames.append(
+                quality_source[quality_source["scope"] == scope].assign(
+                    panel_metric=f"bias_{scope}",
+                    bias_layout=bias_layout,
+                )
             )
 
         fig.legend(
