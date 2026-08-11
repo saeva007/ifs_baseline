@@ -176,10 +176,7 @@ def style_axis(
     for side in ("left", "bottom"):
         ax.spines[side].set_color(INK)
         ax.spines[side].set_linewidth(0.75)
-    if xgrid:
-        ax.xaxis.grid(True, color=GRID, linewidth=0.55, linestyle=(0, (2, 2)))
-    if ygrid:
-        ax.yaxis.grid(True, color=GRID, linewidth=0.55, linestyle=(0, (2, 2)))
+    ax.grid(False)
     ax.set_axisbelow(True)
 
 

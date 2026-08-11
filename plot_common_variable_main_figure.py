@@ -348,13 +348,7 @@ def style_axis(ax: plt.Axes, xgrid: bool = False) -> None:
     for side in ("left", "bottom"):
         ax.spines[side].set_color(INK)
         ax.spines[side].set_linewidth(0.75)
-    if xgrid:
-        ax.xaxis.grid(
-            True,
-            color=GRID,
-            linewidth=0.55,
-            linestyle=(0, (2.0, 2.0)),
-        )
+    ax.grid(False)
     ax.set_axisbelow(True)
 
 

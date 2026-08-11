@@ -101,6 +101,7 @@ def setup_style() -> None:
             "axes.linewidth": 0.8,
             "axes.spines.top": True,
             "axes.spines.right": True,
+            "axes.grid": False,
             "legend.frameon": False,
             "figure.facecolor": "white",
             "savefig.facecolor": "white",
@@ -209,8 +210,7 @@ def panel_label(ax, letter: str) -> None:
 
 
 def style_axis(ax, xgrid: bool = False, ygrid: bool = True) -> None:
-    ax.grid(axis="x", color=GRID, linewidth=0.6, zorder=0) if xgrid else None
-    ax.grid(axis="y", color=GRID, linewidth=0.6, zorder=0) if ygrid else None
+    ax.grid(False)
     for spine in ax.spines.values():
         spine.set_color("#31363B")
         spine.set_linewidth(0.75)
@@ -232,37 +232,62 @@ def draw_endpoint(ax, metrics: pd.DataFrame, gap: pd.DataFrame, metric: str, tit
     pangu_mask, tianji_mask = "0" * width, "1" * width
     seeds = sorted(set(endpoints["seed"].astype(int)))
     source_rows = []
+    pangu_values = []
+    tianji_values = []
     for seed in seeds:
         part = endpoints[endpoints["seed"].astype(int) == seed].set_index("mask")
         if pangu_mask not in part.index or tianji_mask not in part.index:
             raise ValueError(f"Missing endpoint for seed {seed}")
         y0 = float(part.loc[pangu_mask, metric])
         y1 = float(part.loc[tianji_mask, metric])
-        ax.plot([0, 1], [y0, y1], color="#D7DBDE", linewidth=1.05, zorder=1)
-        ax.scatter(0, y0, s=26, color=PANGU, edgecolor="white", linewidth=0.55, alpha=0.72, zorder=2)
-        ax.scatter(1, y1, s=26, marker="s", color=TIANJI, edgecolor="white", linewidth=0.55, alpha=0.72, zorder=2)
+        pangu_values.append(y0)
+        tianji_values.append(y1)
         source_rows.extend(
             [
                 {"panel_metric": metric, "seed": seed, "source": "Pangu", "value": y0},
                 {"panel_metric": metric, "seed": seed, "source": "Tianji", "value": y1},
             ]
         )
-    pangu_mean = float(endpoints[endpoints["mask"] == pangu_mask][metric].mean())
-    tianji_mean = float(endpoints[endpoints["mask"] == tianji_mask][metric].mean())
-    ax.scatter(0, pangu_mean, s=58, color=PANGU, edgecolor="white", linewidth=0.8, zorder=4)
-    ax.scatter(1, tianji_mean, s=58, marker="s", color=TIANJI, edgecolor="white", linewidth=0.8, zorder=4)
-    ax.text(0.06, pangu_mean, f"{pangu_mean:.3f}", color=PANGU_DARK, ha="left", va="center", fontweight="bold")
-    ax.text(0.94, tianji_mean, f"{tianji_mean:.3f}", color=TIANJI_DARK, ha="right", va="center", fontweight="bold")
+    distributions = [np.asarray(pangu_values, dtype=float), np.asarray(tianji_values, dtype=float)]
+    pangu_mean = float(np.mean(distributions[0]))
+    tianji_mean = float(np.mean(distributions[1]))
+    means = np.asarray([pangu_mean, tianji_mean], dtype=float)
+    lows = np.asarray([np.min(values) for values in distributions], dtype=float)
+    highs = np.asarray([np.max(values) for values in distributions], dtype=float)
+    positions = np.asarray([0, 1], dtype=float)
+    bars = ax.bar(
+        positions,
+        means,
+        width=0.56,
+        color=[PANGU, TIANJI],
+        edgecolor=[PANGU_DARK, TIANJI_DARK],
+        linewidth=0.9,
+        alpha=0.92,
+        zorder=2,
+    )
+    for position, mean, low, high, color in zip(
+        positions, means, lows, highs, (PANGU_DARK, TIANJI_DARK)
+    ):
+        ax.errorbar(
+            position,
+            mean,
+            yerr=[[mean - low], [high - mean]],
+            fmt="none",
+            ecolor=color,
+            elinewidth=1.15,
+            capsize=6.0,
+            capthick=1.0,
+            zorder=3,
+        )
     draws = pd.to_numeric(gap.loc[gap["metric"].astype(str) == metric, "delta_all1_minus_all0"], errors="coerce").dropna()
     delta = tianji_mean - pangu_mean
     if not draws.empty:
         lo, hi = np.percentile(draws.to_numpy(dtype=float), [2.5, 97.5])
         ax.text(0.5, 1.01, f"Δ {delta:+.3f} [{lo:+.3f}, {hi:+.3f}]", transform=ax.transAxes, ha="center", va="bottom", color=TIANJI_DARK, fontweight="bold", fontsize=7.5)
     ax.set_xticks([0, 1], ["Pangu", "Tianji"])
-    ax.set_xlim(-0.18, 1.18)
-    values = endpoints[metric].astype(float).to_numpy()
-    span = max(float(np.nanmax(values) - np.nanmin(values)), 0.03)
-    ax.set_ylim(float(np.nanmin(values)) - 0.25 * span, float(np.nanmax(values)) + 0.42 * span)
+    ax.set_xlim(-0.55, 1.55)
+    upper = min(1.0, max(0.10, float(highs.max()) * 1.13))
+    ax.set_ylim(0.0, upper)
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", fontweight="bold", pad=12)
     style_axis(ax)
@@ -275,8 +300,22 @@ def draw_shapley(ax, shapley: pd.DataFrame) -> pd.DataFrame:
     y = np.arange(len(source))
     for yi, row in enumerate(source.itertuples(index=False)):
         color = PACKAGE_COLORS.get(str(row.group), "#6B7280")
-        ax.plot([row.ci_low, row.ci_high], [yi, yi], color=color, linewidth=2.0, solid_capstyle="round")
-        ax.scatter(row.shapley_mean, yi, s=40, color=color, edgecolor="white", linewidth=0.6, zorder=3)
+        ax.errorbar(
+            row.shapley_mean,
+            yi,
+            xerr=[[row.shapley_mean - row.ci_low], [row.ci_high - row.shapley_mean]],
+            fmt="o",
+            markersize=5.3,
+            color=color,
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markeredgewidth=0.6,
+            ecolor=color,
+            elinewidth=1.35,
+            capsize=3.0,
+            capthick=1.0,
+            zorder=3,
+        )
     ax.axvline(0.0, color=INK, linewidth=0.75)
     wrapped_labels = {
         "Near-surface moisture": "Near-surface\nmoisture",
@@ -392,25 +431,23 @@ def main() -> None:
     tables = load_inputs(analysis_dir, endpoint_dir, upper_air_dir)
     quality_source = quality_plot.prepare_source(paired_quality_dir)
 
-    fig = plt.figure(figsize=(FIGURE_WIDTH, 10.20))
+    fig = plt.figure(figsize=(FIGURE_WIDTH, 8.35))
     outer = fig.add_gridspec(
-        4,
+        3,
         1,
-        height_ratios=[1.0, 1.06, 1.18, 1.18],
+        height_ratios=[1.0, 1.05, 1.62],
         left=0.205,
         right=0.985,
         top=0.93,
-        bottom=0.055,
-        hspace=0.67,
+        bottom=0.070,
+        hspace=0.70,
     )
     endpoint_grid = outer[0].subgridspec(1, 2, wspace=0.40)
     mechanism_grid = outer[1].subgridspec(1, 2, wspace=0.38)
-    quality_top_grid = outer[2].subgridspec(1, 2, wspace=0.19)
-    quality_bottom_grid = outer[3].subgridspec(1, 2, wspace=0.19)
+    quality_grid = outer[2].subgridspec(1, 2, wspace=0.19)
     endpoint_axes = [fig.add_subplot(endpoint_grid[0, index]) for index in range(2)]
     mechanism_axes = [fig.add_subplot(mechanism_grid[0, index]) for index in range(2)]
-    quality_top_axes = [fig.add_subplot(quality_top_grid[0, index]) for index in range(2)]
-    quality_bottom_axes = [fig.add_subplot(quality_bottom_grid[0, index]) for index in range(2)]
+    quality_axes = [fig.add_subplot(quality_grid[0, index]) for index in range(2)]
 
     source_frames = []
     source_frames.append(draw_endpoint(endpoint_axes[0], tables["metrics"], tables["gap"], "low_vis_ap", "Low-vis average precision", "Average precision"))
@@ -419,31 +456,22 @@ def main() -> None:
     source_frames.append(draw_hits(mechanism_axes[1], tables["bias"]).assign(panel_metric="exclusive_hits"))
 
     quality_plot.rmse_ratio_panel(
-        quality_top_axes[0], quality_source, quality_plot.SCOPES[0], "e", True
+        quality_axes[0],
+        quality_source,
+        quality_plot.SCOPES[1],
+        "e",
+        True,
     )
-    quality_plot.rmse_ratio_panel(
-        quality_top_axes[1],
+    quality_plot.bias_panel(
+        quality_axes[1],
         quality_source,
         quality_plot.SCOPES[1],
         "f",
         False,
         show_reference_labels=False,
     )
-    quality_plot.bias_panel(
-        quality_bottom_axes[0], quality_source, quality_plot.SCOPES[0], "g", True
-    )
-    quality_plot.bias_panel(
-        quality_bottom_axes[1],
-        quality_source,
-        quality_plot.SCOPES[1],
-        "h",
-        False,
-        show_reference_labels=False,
-    )
     for scope, panel_kind in (
-        (quality_plot.SCOPES[0], "rmse_all_paired"),
         (quality_plot.SCOPES[1], "rmse_observed_lowvis"),
-        (quality_plot.SCOPES[0], "bias_all_paired"),
         (quality_plot.SCOPES[1], "bias_observed_lowvis"),
     ):
         source_frames.append(
