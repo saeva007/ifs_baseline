@@ -493,6 +493,18 @@ def main() -> None:
                     bias_layout=bias_layout,
                 )
             )
+        rmse_xlim = (
+            min(axis.get_xlim()[0] for axis in rmse_axes),
+            max(axis.get_xlim()[1] for axis in rmse_axes),
+        )
+        rmse_tick_candidates = np.asarray([0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0])
+        rmse_ticks = rmse_tick_candidates[
+            (rmse_tick_candidates >= rmse_xlim[0])
+            & (rmse_tick_candidates <= rmse_xlim[1])
+        ]
+        for axis in rmse_axes:
+            axis.set_xlim(*rmse_xlim)
+            axis.set_xticks(rmse_ticks, [f"{value:g}" for value in rmse_ticks])
 
         for axis, scope, letter, show_y in (
             (bias_axes[0], quality_plot.SCOPES[0], "e", True),
@@ -513,6 +525,13 @@ def main() -> None:
                     bias_layout=bias_layout,
                 )
             )
+        bias_extent = max(
+            abs(limit)
+            for axis in bias_axes
+            for limit in axis.get_xlim()
+        )
+        for axis in bias_axes:
+            axis.set_xlim(-bias_extent, bias_extent)
 
         fig.legend(
             handles=[
