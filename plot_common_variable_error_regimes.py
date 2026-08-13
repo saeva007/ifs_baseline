@@ -157,6 +157,13 @@ def require_columns(frame: pd.DataFrame, columns: Iterable[str], name: str) -> N
         raise ValueError(f"{name}: missing required columns {missing}")
 
 
+def optional_float(row: pd.Series, name: str) -> float:
+    """Read an optional numeric field without inventing a missing interval."""
+    if name not in row.index:
+        return float("nan")
+    return float(pd.to_numeric(pd.Series([row[name]]), errors="coerce").iloc[0])
+
+
 def resolve_quality_dir(path: Path) -> Path:
     required = (
         "pressure_level_paired_rmse_utc_date_bootstrap_ci.csv",
@@ -179,19 +186,8 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
         "unit",
         "pangu",
         "tianji",
-        "pangu_ci_low",
-        "pangu_ci_high",
-        "tianji_ci_low",
-        "tianji_ci_high",
         "pangu_bias",
         "tianji_bias",
-        "pangu_bias_ci_low",
-        "pangu_bias_ci_high",
-        "tianji_bias_ci_low",
-        "tianji_bias_ci_high",
-        "tianji_to_pangu_ratio",
-        "tianji_to_pangu_ratio_ci_low",
-        "tianji_to_pangu_ratio_ci_high",
         "n",
         "represented_utc_dates",
     ]
@@ -208,10 +204,16 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
             denominator = float(row["pangu"])
             if not np.isfinite(denominator) or denominator <= 0:
                 raise ValueError(f"Invalid Pangu RMSE for {feature}/{scope}: {denominator}")
-            ratio_value = float(row["tianji_to_pangu_ratio"])
-            ratio_ci_low = float(row["tianji_to_pangu_ratio_ci_low"])
-            ratio_ci_high = float(row["tianji_to_pangu_ratio_ci_high"])
+            ratio_value = optional_float(row, "tianji_to_pangu_ratio")
+            if not np.isfinite(ratio_value):
+                ratio_value = float(row["tianji"]) / denominator
+            ratio_ci_low = optional_float(row, "tianji_to_pangu_ratio_ci_low")
+            ratio_ci_high = optional_float(row, "tianji_to_pangu_ratio_ci_high")
+            ratio_ci_available = np.isfinite(ratio_ci_low) and np.isfinite(ratio_ci_high)
             for source in ("pangu", "tianji"):
+                bias_ci_low = optional_float(row, f"{source}_bias_ci_low")
+                bias_ci_high = optional_float(row, f"{source}_bias_ci_high")
+                bias_ci_available = np.isfinite(bias_ci_low) and np.isfinite(bias_ci_high)
                 rows.append(
                     {
                         "feature": feature,
@@ -224,20 +226,20 @@ def pressure_rows(frame: pd.DataFrame) -> pd.DataFrame:
                         "scope_label": SCOPE_LABELS[scope],
                         "source": source,
                         "rmse": float(row[source]),
-                        "rmse_ci_low": float(row[f"{source}_ci_low"]),
-                        "rmse_ci_high": float(row[f"{source}_ci_high"]),
+                        "rmse_ci_low": optional_float(row, f"{source}_ci_low"),
+                        "rmse_ci_high": optional_float(row, f"{source}_ci_high"),
                         "bias": float(row[f"{source}_bias"]),
-                        "bias_ci_low": float(row[f"{source}_bias_ci_low"]),
-                        "bias_ci_high": float(row[f"{source}_bias_ci_high"]),
-                        "bias_ci_available": True,
-                        "bias_ci_method": "paired UTC-date bootstrap",
+                        "bias_ci_low": bias_ci_low,
+                        "bias_ci_high": bias_ci_high,
+                        "bias_ci_available": bias_ci_available,
+                        "bias_ci_method": "paired UTC-date bootstrap" if bias_ci_available else "not available",
                         "rmse_ratio_tianji_over_pangu": ratio_value,
                         "rmse_ratio_ci_low": ratio_ci_low,
                         "rmse_ratio_ci_high": ratio_ci_high,
-                        "rmse_ratio_ci_available": True,
+                        "rmse_ratio_ci_available": ratio_ci_available,
                         "n": int(row["n"]),
                         "represented_utc_dates": int(row["represented_utc_dates"]),
-                        "rmse_ratio_ci_method": "paired UTC-date bootstrap",
+                        "rmse_ratio_ci_method": "paired UTC-date bootstrap" if ratio_ci_available else "not available",
                     }
                 )
     return pd.DataFrame(rows)
@@ -255,8 +257,6 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             "ci_low",
             "ci_high",
             "bias",
-            "bias_ci_low",
-            "bias_ci_high",
             "n",
             "represented_utc_dates",
         ],
@@ -269,9 +269,6 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             "scope",
             "left_source",
             "right_source",
-            "ratio_right_over_left",
-            "ratio_right_over_left_ci_low",
-            "ratio_right_over_left_ci_high",
         ],
         "surface pairwise quality",
     )
@@ -289,9 +286,22 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
             if len(ratio) != 1:
                 raise ValueError(f"Expected one Pangu/Tianji pair for {feature}/{scope}")
             ratio_row = ratio.iloc[0]
-            ratio_value = float(ratio_row["ratio_right_over_left"])
-            ratio_ci_low = float(ratio_row["ratio_right_over_left_ci_low"])
-            ratio_ci_high = float(ratio_row["ratio_right_over_left_ci_high"])
+            source_scope = surface[
+                (surface["feature"] == feature)
+                & (surface["scope"] == scope)
+                & (surface["source"].isin(["pangu", "tianji"]))
+            ].set_index("source")
+            if not {"pangu", "tianji"}.issubset(source_scope.index):
+                raise ValueError(f"Missing surface Pangu/Tianji rows for {feature}/{scope}")
+            denominator = float(source_scope.loc["pangu", "rmse"])
+            if not np.isfinite(denominator) or denominator <= 0:
+                raise ValueError(f"Invalid surface Pangu RMSE for {feature}/{scope}: {denominator}")
+            ratio_value = optional_float(ratio_row, "ratio_right_over_left")
+            if not np.isfinite(ratio_value):
+                ratio_value = float(source_scope.loc["tianji", "rmse"]) / denominator
+            ratio_ci_low = optional_float(ratio_row, "ratio_right_over_left_ci_low")
+            ratio_ci_high = optional_float(ratio_row, "ratio_right_over_left_ci_high")
+            ratio_ci_available = np.isfinite(ratio_ci_low) and np.isfinite(ratio_ci_high)
             for source in ("pangu", "tianji"):
                 part = surface[
                     (surface["feature"] == feature)
@@ -301,6 +311,9 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
                 if len(part) != 1:
                     raise ValueError(f"Expected one surface row for {feature}/{scope}/{source}")
                 row = part.iloc[0]
+                bias_ci_low = optional_float(row, "bias_ci_low")
+                bias_ci_high = optional_float(row, "bias_ci_high")
+                bias_ci_available = np.isfinite(bias_ci_low) and np.isfinite(bias_ci_high)
                 rows.append(
                     {
                         "feature": feature,
@@ -316,17 +329,17 @@ def surface_rows(surface: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
                         "rmse_ci_low": float(row["ci_low"]),
                         "rmse_ci_high": float(row["ci_high"]),
                         "bias": float(row["bias"]),
-                        "bias_ci_low": float(row["bias_ci_low"]),
-                        "bias_ci_high": float(row["bias_ci_high"]),
-                        "bias_ci_available": True,
-                        "bias_ci_method": "paired UTC-date bootstrap",
+                        "bias_ci_low": bias_ci_low,
+                        "bias_ci_high": bias_ci_high,
+                        "bias_ci_available": bias_ci_available,
+                        "bias_ci_method": "paired UTC-date bootstrap" if bias_ci_available else "not available",
                         "rmse_ratio_tianji_over_pangu": ratio_value,
                         "rmse_ratio_ci_low": ratio_ci_low,
                         "rmse_ratio_ci_high": ratio_ci_high,
-                        "rmse_ratio_ci_available": True,
+                        "rmse_ratio_ci_available": ratio_ci_available,
                         "n": int(row["n"]),
                         "represented_utc_dates": int(row["represented_utc_dates"]),
-                        "rmse_ratio_ci_method": "paired UTC-date bootstrap",
+                        "rmse_ratio_ci_method": "paired UTC-date bootstrap" if ratio_ci_available else "not available",
                     }
                 )
     return pd.DataFrame(rows)
@@ -353,20 +366,14 @@ def prepare_source(directory: Path) -> pd.DataFrame:
     source["normalized_bias"] = source["bias"] / source["rmse"]
     source["normalized_bias_ci_low"] = source["bias_ci_low"] / source["rmse"]
     source["normalized_bias_ci_high"] = source["bias_ci_high"] / source["rmse"]
-    interval_columns = [
-        "rmse_ratio_tianji_over_pangu",
-        "rmse_ratio_ci_low",
-        "rmse_ratio_ci_high",
-        "normalized_bias",
-        "normalized_bias_ci_low",
-        "normalized_bias_ci_high",
-    ]
-    finite = np.isfinite(source[interval_columns].to_numpy(dtype=float)).all(axis=1)
-    if not bool(np.all(finite)):
-        bad = source.loc[~finite, ["feature", "scope", "source"]].to_dict("records")
+    finite_ratio = np.isfinite(
+        source[["rmse_ratio_tianji_over_pangu"]].to_numpy(dtype=float)
+    ).all(axis=1)
+    if not bool(np.all(finite_ratio)):
+        bad = source.loc[~finite_ratio, ["feature", "scope", "source"]].to_dict("records")
         raise ValueError(
-            "Paired variable-quality confidence intervals are required for the "
-            f"manuscript figure; incomplete rows: {bad}"
+            "Paired RMSE-ratio estimates are required for the manuscript figure; "
+            f"incomplete rows: {bad}"
         )
     return source.sort_values(
         ["feature_order", "scope", "source"], kind="stable"
@@ -566,6 +573,8 @@ def bias_panel(
     show_y: bool,
     show_reference_labels: bool = True,
     layout: str = "offset_ci",
+    marker_overrides: Mapping[str, str] | None = None,
+    show_direction_labels: bool = True,
 ) -> None:
     if layout not in {"offset_ci", "paired_connector"}:
         raise ValueError(f"Unknown systematic-bias layout: {layout}")
@@ -587,12 +596,10 @@ def bias_panel(
             columns="source",
             values="normalized_bias",
         ).reindex(FEATURE_ORDER)
-        if estimates[["pangu", "tianji"]].isna().any().any():
-            missing = estimates[
-                estimates[["pangu", "tianji"]].isna().any(axis=1)
-            ].index.tolist()
-            raise ValueError(f"Missing paired systematic-bias estimates for {missing}")
         for feature in FEATURE_ORDER:
+            pair = estimates.loc[feature, ["pangu", "tianji"]]
+            if not np.isfinite(pair.to_numpy(dtype=float)).all():
+                continue
             yi = y_base[feature]
             ax.plot(
                 [
@@ -606,6 +613,10 @@ def bias_panel(
                 zorder=1,
             )
 
+    markers = dict(SOURCE_MARKERS)
+    if marker_overrides:
+        markers.update(marker_overrides)
+
     for source_key in ("pangu", "tianji"):
         rows = (
             part[part["source"] == source_key]
@@ -615,6 +626,8 @@ def bias_panel(
         )
         for row in rows.itertuples(index=False):
             estimate = float(row.normalized_bias)
+            if not np.isfinite(estimate):
+                continue
             yi = y_base[str(row.feature)] + offsets[source_key]
             ci_low = float(row.normalized_bias_ci_low)
             ci_high = float(row.normalized_bias_ci_high)
@@ -623,7 +636,7 @@ def bias_panel(
                     estimate,
                     yi,
                     s=38,
-                    marker=SOURCE_MARKERS[source_key],
+                    marker=markers[source_key],
                     facecolor=SOURCE_COLORS[source_key],
                     edgecolor=WHITE,
                     linewidth=0.7,
@@ -636,7 +649,7 @@ def bias_panel(
                     estimate,
                     yi,
                     xerr=[[estimate - low], [high - estimate]],
-                    fmt=SOURCE_MARKERS[source_key],
+                    fmt=markers[source_key],
                     markersize=4.8,
                     color=SOURCE_COLORS[source_key],
                     markerfacecolor=SOURCE_COLORS[source_key],
@@ -654,7 +667,7 @@ def bias_panel(
                     estimate,
                     yi,
                     s=30,
-                    marker=SOURCE_MARKERS[source_key],
+                    marker=markers[source_key],
                     facecolor=SOURCE_COLORS[source_key],
                     edgecolor=WHITE,
                     linewidth=0.6,
@@ -684,26 +697,27 @@ def bias_panel(
         ax.spines["left"].set_visible(False)
         ax.tick_params(axis="y", length=0)
     ax.set_xlabel("Signed bias / RMSE")
-    ax.text(
-        0.01,
-        1.01,
-        "negative",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=6.2,
-        color=MID,
-    )
-    ax.text(
-        0.99,
-        1.01,
-        "positive",
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=6.2,
-        color=MID,
-    )
+    if show_direction_labels:
+        ax.text(
+            0.01,
+            1.01,
+            "negative",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=6.2,
+            color=MID,
+        )
+        ax.text(
+            0.99,
+            1.01,
+            "positive",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=6.2,
+            color=MID,
+        )
     add_family_bands(ax, show_reference_labels=show_reference_labels)
     style_axis(ax)
 
