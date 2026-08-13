@@ -568,6 +568,7 @@ def main() -> None:
     variants = (
         ("offset_ci", "offset_ci"),
         ("paired_connector", "paired_connector"),
+        ("points_only", "points_only"),
     )
     rendered = []
     for suffix, bias_layout in variants:

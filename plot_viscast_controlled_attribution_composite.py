@@ -214,9 +214,10 @@ def draw_delta_panel(ax: plt.Axes, metrics: pd.DataFrame, gap: pd.DataFrame) -> 
         lo, hi = bootstrap_interval(gap, key)
         rows.append({"metric": key, "label": label, "delta": delta, "ci_low": lo, "ci_high": hi})
     source = pd.DataFrame(rows)
-    y = np.arange(len(source), dtype=float)
+    # Keep the two related contrasts visually grouped near the panel centre.
+    y = np.asarray([0.62, 0.38], dtype=float)
     ax.axvline(0.0, color=INK, linewidth=0.85, zorder=0)
-    for yi, row in source.iterrows():
+    for yi, (_, row) in zip(y, source.iterrows()):
         ax.errorbar(
             row.delta,
             yi,
@@ -239,7 +240,7 @@ def draw_delta_panel(ax: plt.Axes, metrics: pd.DataFrame, gap: pd.DataFrame) -> 
     ]
     ax.set_yticks(y, display_labels)
     ax.tick_params(axis="y", labelsize=6.9, pad=2.0)
-    ax.invert_yaxis()
+    ax.set_ylim(0.22, 0.78)
     extent = max(abs(float(source["ci_low"].min())), abs(float(source["ci_high"].max())))
     ax.set_xlim(min(-0.01, -0.18 * extent), 1.12 * extent)
     ax.set_xlabel("Difference (Tianji − Pangu)")
@@ -334,8 +335,9 @@ def main() -> None:
             draw_delta_panel(lower_axes[2], metrics, gap),
         ]
     )
-    panel_label(operator_axes[0], "a", x=-0.24)
-    for letter, axis in zip("bcd", lower_axes):
+    for letter, axis in zip("abc", operator_axes):
+        panel_label(axis, letter, x=-0.24)
+    for letter, axis in zip("def", lower_axes):
         panel_label(axis, letter, x=-0.24)
     outputs = export(fig, out_dir, args.figure_stem, args.dpi)
     plt.close(fig)

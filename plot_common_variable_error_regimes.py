@@ -576,7 +576,7 @@ def bias_panel(
     marker_overrides: Mapping[str, str] | None = None,
     show_direction_labels: bool = True,
 ) -> None:
-    if layout not in {"offset_ci", "paired_connector"}:
+    if layout not in {"offset_ci", "paired_connector", "points_only"}:
         raise ValueError(f"Unknown systematic-bias layout: {layout}")
     panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
     title(ax, f"Systematic bias · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
@@ -586,7 +586,7 @@ def bias_panel(
     }
     offsets = (
         {"pangu": -0.11, "tianji": 0.11}
-        if layout == "offset_ci"
+        if layout in {"offset_ci", "points_only"}
         else {"pangu": 0.0, "tianji": 0.0}
     )
 
@@ -631,7 +631,7 @@ def bias_panel(
             yi = y_base[str(row.feature)] + offsets[source_key]
             ci_low = float(row.normalized_bias_ci_low)
             ci_high = float(row.normalized_bias_ci_high)
-            if layout == "paired_connector":
+            if layout in {"paired_connector", "points_only"}:
                 ax.scatter(
                     estimate,
                     yi,
@@ -676,7 +676,7 @@ def bias_panel(
     ax.axvline(0.0, color=INK, linewidth=0.85)
     extent_columns = (
         ["normalized_bias"]
-        if layout == "paired_connector"
+        if layout in {"paired_connector", "points_only"}
         else [
             "normalized_bias",
             "normalized_bias_ci_low",
