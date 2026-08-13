@@ -23,6 +23,14 @@ import numpy as np
 import pandas as pd
 
 from paper_source_palette import SOURCE_COLORS, SOURCE_DARK_COLORS
+from paper_figure_geometry import (
+    ENDPOINT_BAR_WIDTH,
+    HORIZONTAL_BAR_HEIGHT,
+    INTERVAL_CAPSIZE,
+    INTERVAL_CAPTHICK,
+    INTERVAL_LINEWIDTH,
+    INTERVAL_MARKERSIZE,
+)
 import plot_common_variable_error_regimes as quality_plot
 
 
@@ -302,7 +310,7 @@ def draw_endpoint(
     bars = ax.bar(
         positions,
         means,
-        width=0.56,
+        width=ENDPOINT_BAR_WIDTH,
         color=[PANGU, TIANJI],
         edgecolor=[PANGU_DARK, TIANJI_DARK],
         linewidth=0.9,
@@ -319,9 +327,9 @@ def draw_endpoint(
                 yerr=[[mean - low], [high - mean]],
                 fmt="none",
                 ecolor=color,
-                elinewidth=1.15,
-                capsize=6.0,
-                capthick=1.0,
+                elinewidth=INTERVAL_LINEWIDTH,
+                capsize=INTERVAL_CAPSIZE,
+                capthick=INTERVAL_CAPTHICK,
                 zorder=3,
             )
     draws = pd.to_numeric(gap.loc[gap["metric"].astype(str) == metric, "delta_all1_minus_all0"], errors="coerce").dropna()
@@ -350,15 +358,15 @@ def draw_shapley(ax, shapley: pd.DataFrame) -> pd.DataFrame:
             yi,
             xerr=[[row.shapley_mean - row.ci_low], [row.ci_high - row.shapley_mean]],
             fmt="o",
-            markersize=5.3,
+            markersize=INTERVAL_MARKERSIZE,
             color=color,
             markerfacecolor=color,
             markeredgecolor="white",
             markeredgewidth=0.6,
             ecolor=color,
-            elinewidth=1.35,
-            capsize=3.0,
-            capthick=1.0,
+            elinewidth=INTERVAL_LINEWIDTH,
+            capsize=INTERVAL_CAPSIZE,
+            capthick=INTERVAL_CAPTHICK,
             zorder=3,
         )
     ax.axvline(0.0, color=INK, linewidth=0.75)
@@ -396,7 +404,12 @@ def draw_hits(ax, bias: pd.DataFrame) -> pd.DataFrame:
     if not np.isfinite(values).all():
         raise ValueError("Event summary is missing source-exclusive hit counts")
     y = np.arange(2)[::-1]
-    bars = ax.barh(y, values, color=[item[2] for item in mapping], height=0.42)
+    bars = ax.barh(
+        y,
+        values,
+        color=[item[2] for item in mapping],
+        height=HORIZONTAL_BAR_HEIGHT,
+    )
     for bar, value, (_, _, color) in zip(bars, values, mapping):
         ax.text(value + max(values) * 0.025, bar.get_y() + bar.get_height() / 2, f"{int(value):,}", va="center", ha="left", color=color, fontweight="bold")
     ax.set_yticks(y, [item[1] for item in mapping])
@@ -457,15 +470,15 @@ def draw_joint_scope(
             yi,
             xerr=[[value - lo], [hi - value]],
             fmt="o",
-            markersize=4.8,
+            markersize=INTERVAL_MARKERSIZE,
             color=color,
             markerfacecolor=color,
             markeredgecolor="white",
             markeredgewidth=0.55,
             ecolor=color,
-            elinewidth=1.70,
-            capsize=4.0,
-            capthick=0.95,
+            elinewidth=INTERVAL_LINEWIDTH,
+            capsize=INTERVAL_CAPSIZE,
+            capthick=INTERVAL_CAPTHICK,
             zorder=3,
         )
     ax.set_yticks(y, [labels[str(value)] for value in source["metric"].astype(str)] if show_y else [])
@@ -476,16 +489,6 @@ def draw_joint_scope(
     ax.set_xlim(-0.04, 0.11)
     ax.set_xlabel("Difference (Tianji − Pangu)")
     ax.set_title(title, loc="left", fontweight="bold", pad=8)
-    ax.text(
-        0.0,
-        1.015,
-        f"{int(counts[0]):,} reference joint-tail cases",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=6.3,
-        color=INK,
-    )
     style_axis(ax)
     return source.assign(reference_joint_tail_n=int(counts[0]))
 
@@ -511,14 +514,15 @@ def draw_bias(ax, bias: pd.DataFrame, feature: str, title: str, unit: str, add_l
             estimate,
             yerr=np.vstack([estimate - np.minimum(lo, estimate), np.maximum(hi, estimate) - estimate]),
             fmt=marker,
-            markersize=4.8,
+            markersize=INTERVAL_MARKERSIZE,
             color=color,
             markerfacecolor=color,
             markeredgecolor="white",
             markeredgewidth=0.55,
             ecolor=color,
-            elinewidth=1.15,
-            capsize=2.5,
+            elinewidth=INTERVAL_LINEWIDTH,
+            capsize=INTERVAL_CAPSIZE,
+            capthick=INTERVAL_CAPTHICK,
             label=label if add_legend else None,
             zorder=3,
         )

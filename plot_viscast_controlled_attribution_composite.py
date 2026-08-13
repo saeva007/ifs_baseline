@@ -16,6 +16,14 @@ import numpy as np
 import pandas as pd
 
 from paper_source_palette import SOURCE_COLORS, SOURCE_DARK_COLORS
+from paper_figure_geometry import (
+    ENDPOINT_BAR_WIDTH,
+    INTERVAL_CAPSIZE,
+    INTERVAL_CAPTHICK,
+    INTERVAL_LINEWIDTH,
+    INTERVAL_MARKERSIZE,
+    TWO_SOURCE_BAR_WIDTH,
+)
 
 
 FIGURE_WIDTH = 7.60
@@ -135,7 +143,7 @@ def draw_operator_panel(
     model = indexed.loc["ifs"]
     diagnostic = indexed.loc["ifs_diagnostic"]
     x = np.arange(len(specs), dtype=float)
-    width = 0.34
+    width = TWO_SOURCE_BAR_WIDTH
     model_values = np.asarray([float(model[key]) for key, _ in specs])
     diagnostic_values = np.asarray([float(diagnostic[key]) for key, _ in specs])
     ax.bar(x - width / 2, diagnostic_values, width, color=IFS, label="IFS diagnostic VIS")
@@ -172,7 +180,7 @@ def draw_endpoint_panel(
     ax.bar(
         [0, 1],
         values,
-        width=0.56,
+        width=ENDPOINT_BAR_WIDTH,
         color=[PANGU, TIANJI],
         edgecolor=[SOURCE_DARK_COLORS["pangu"], TIANJI_DARK],
         linewidth=0.8,
@@ -223,15 +231,15 @@ def draw_delta_panel(ax: plt.Axes, metrics: pd.DataFrame, gap: pd.DataFrame) -> 
             yi,
             xerr=[[row.delta - row.ci_low], [row.ci_high - row.delta]],
             fmt="o",
-            markersize=5.2,
+            markersize=INTERVAL_MARKERSIZE,
             color=TIANJI_DARK,
             markerfacecolor=TIANJI,
             markeredgecolor="white",
             markeredgewidth=0.6,
             ecolor=TIANJI_DARK,
-            elinewidth=1.7,
-            capsize=4.2,
-            capthick=1.0,
+            elinewidth=INTERVAL_LINEWIDTH,
+            capsize=INTERVAL_CAPSIZE,
+            capthick=INTERVAL_CAPTHICK,
             zorder=3,
         )
     display_labels = [

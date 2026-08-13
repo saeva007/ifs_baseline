@@ -34,6 +34,12 @@ from paper_source_palette import (
     SOURCE_LIGHT_COLORS,
     SOURCE_MARKERS,
 )
+from paper_figure_geometry import (
+    INTERVAL_CAPSIZE,
+    INTERVAL_CAPTHICK,
+    INTERVAL_LINEWIDTH,
+    INTERVAL_MARKERSIZE,
+)
 
 
 FIGURE_SIZE = (7.205, 5.25)
@@ -422,7 +428,7 @@ def style_axis(ax: plt.Axes, *, xgrid: bool = True) -> None:
 def add_family_bands(
     ax: plt.Axes,
     *,
-    show_reference_labels: bool = True,
+    show_reference_labels: bool = False,
 ) -> None:
     # y runs top-to-bottom after inversion: the first three rows are surface.
     ax.axhspan(-0.5, 2.5, color=SURFACE_BAND, zorder=0)
@@ -458,7 +464,7 @@ def rmse_ratio_panel(
     scope: str,
     label: str,
     show_y: bool,
-    show_reference_labels: bool = True,
+    show_reference_labels: bool = False,
 ) -> None:
     panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
     title(ax, f"RMSE · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
@@ -488,15 +494,15 @@ def rmse_ratio_panel(
                 yi,
                 xerr=[[estimate - low], [high - estimate]],
                 fmt="o",
-                markersize=5.0,
+                markersize=INTERVAL_MARKERSIZE,
                 color=color,
                 markerfacecolor=color,
                 markeredgecolor=WHITE,
                 markeredgewidth=0.65,
                 ecolor=color,
-                elinewidth=1.15,
-                capsize=2.8,
-                capthick=0.9,
+                elinewidth=INTERVAL_LINEWIDTH,
+                capsize=INTERVAL_CAPSIZE,
+                capthick=INTERVAL_CAPTHICK,
                 zorder=3,
             )
         else:
@@ -571,7 +577,7 @@ def bias_panel(
     scope: str,
     label: str,
     show_y: bool,
-    show_reference_labels: bool = True,
+    show_reference_labels: bool = False,
     layout: str = "offset_ci",
     marker_overrides: Mapping[str, str] | None = None,
     show_direction_labels: bool = True,
@@ -650,15 +656,15 @@ def bias_panel(
                     yi,
                     xerr=[[estimate - low], [high - estimate]],
                     fmt=markers[source_key],
-                    markersize=4.8,
+                    markersize=INTERVAL_MARKERSIZE,
                     color=SOURCE_COLORS[source_key],
                     markerfacecolor=SOURCE_COLORS[source_key],
                     markeredgecolor=WHITE,
                     markeredgewidth=0.6,
                     ecolor=SOURCE_COLORS[source_key],
-                    elinewidth=1.0,
-                    capsize=2.5,
-                    capthick=0.85,
+                    elinewidth=INTERVAL_LINEWIDTH,
+                    capsize=INTERVAL_CAPSIZE,
+                    capthick=INTERVAL_CAPTHICK,
                     alpha=0.92,
                     zorder=3,
                 )
