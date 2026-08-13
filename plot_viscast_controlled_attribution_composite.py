@@ -312,15 +312,15 @@ def main() -> None:
     lower_axes = [fig.add_subplot(grid[1, index]) for index in range(3)]
     operator_panels = [
         (
-            "Ultra-low (<500 m)",
+            "Ultra-low",
             [("fog_csi", "CSI"), ("fog_pod", "Recall"), ("fog_precision", "Precision")],
         ),
         (
-            "Moderate-low (500–1000 m)",
+            "Moderate-low",
             [("mist_csi", "CSI"), ("mist_pod", "Recall"), ("mist_precision", "Precision")],
         ),
         (
-            "Low-vis event (<1000 m)",
+            "Low-vis event",
             [("low_vis_csi", "CSI"), ("low_vis_recall", "Recall"), ("low_vis_precision", "Precision")],
         ),
     ]
