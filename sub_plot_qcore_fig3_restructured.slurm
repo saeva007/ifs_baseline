@@ -63,7 +63,7 @@ for path in \
     "${PAIRED_QUALITY_DIR}/pressure_level_paired_rmse_utc_date_bootstrap_ci.csv" \
     "${PAIRED_QUALITY_DIR}/surface_observation_three_source_rmse_utc_date_bootstrap_ci.csv" \
     "${PAIRED_QUALITY_DIR}/surface_observation_pairwise_rmse_delta_utc_date_bootstrap_ci.csv" \
-    "${TAIL_ANALYSIS_DIR}/event_conditioned_distribution_shift.csv" \
+    "${TAIL_ANALYSIS_DIR}/reference_tail_placement_metrics.csv" \
     "${TAIL_ANALYSIS_DIR}/joint_tail_feature_definitions.csv" \
     "${TAIL_ANALYSIS_DIR}/reference_tail_placement_utc_date_bootstrap_ci.csv" \
     "${TAIL_ANALYSIS_DIR}/joint_tail_placement_utc_date_bootstrap_ci.csv" \

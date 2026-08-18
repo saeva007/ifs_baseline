@@ -569,10 +569,10 @@ def main() -> None:
     endpoint_tables = load_inputs(endpoint_dir)
     joint_ci, joint_metrics = load_tail_inputs(tail_analysis_dir)
     quality_source = quality_plot.prepare_source(paired_quality_dir)
-    shifts = tail_plot.load_table(
+    placement_metrics = tail_plot.load_table(
         tail_analysis_dir,
-        "event_conditioned_distribution_shift.csv",
-        ["feature", "task_tail_direction"],
+        "reference_tail_placement_metrics.csv",
+        ["feature", "tail", "task_relevant_tail"],
     )
     definitions = tail_plot.load_table(
         tail_analysis_dir,
@@ -593,7 +593,33 @@ def main() -> None:
             "delta_tianji_minus_pangu_ci_high",
         ],
     )
-    directions, direction_mismatches = tail_plot.direction_map(definitions, shifts)
+    relevant = placement_metrics[
+        placement_metrics["task_relevant_tail"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ].copy()
+    directions = {
+        str(row.feature): str(row.task_tail_direction)
+        for row in definitions.itertuples(index=False)
+    }
+    for feature in tail_plot.FEATURE_ORDER:
+        if feature in directions:
+            continue
+        tails = sorted(
+            set(
+                relevant.loc[
+                    relevant["feature"].astype(str) == feature,
+                    "tail",
+                ].astype(str)
+            )
+        )
+        if len(tails) != 1:
+            raise ValueError(
+                f"{feature}: expected one task-relevant tail in reference_tail_placement_metrics.csv, found {tails}"
+            )
+        directions[feature] = tails[0]
     placement = tail_plot.select_placement_rows(placement_ci, directions)
 
     fig = plt.figure(figsize=(FIGURE_WIDTH, 9.45))
@@ -737,7 +763,6 @@ def main() -> None:
             "g-h": "joint-tail recovery for all and observed Low-vis samples",
         },
         "task_tail_directions": directions,
-        "direction_mismatches": direction_mismatches,
         "rendering": "all panels redrawn from source tables on one canvas",
     }
     (out_dir / f"{args.figure_stem}_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
