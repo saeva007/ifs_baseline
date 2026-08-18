@@ -28,8 +28,8 @@ if [ -z "${PAIRED_QUALITY_DIR}" ]; then
         find "${BASE}" -maxdepth 8 -type f \
             -name pressure_level_paired_rmse_utc_date_bootstrap_ci.csv \
             -printf '%T@ %p\n' 2>/dev/null \
-            | sort -nr \
-            | head -n 1 \
+            | sort -n \
+            | tail -n 1 \
             | cut -d' ' -f2-
     )"
     test -n "${paired_quality_file}" || {
