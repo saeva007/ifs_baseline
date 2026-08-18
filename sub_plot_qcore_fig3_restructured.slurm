@@ -23,6 +23,22 @@ FIGURE_STEM="${FIGURE_STEM:-fig3_forecast_source_tail_constraints}"
 PLOT_ENV="${PLOT_ENV:-/public/home/jarvis226/miniconda3/envs/torch}"
 PLOT_PYTHON="${PLOT_PYTHON:-${PLOT_ENV}/bin/python}"
 
+if [ -z "${PAIRED_QUALITY_DIR}" ]; then
+    paired_quality_file="$(
+        find "${BASE}" -maxdepth 8 -type f \
+            -name pressure_level_paired_rmse_utc_date_bootstrap_ci.csv \
+            -printf '%T@ %p\n' 2>/dev/null \
+            | sort -nr \
+            | head -n 1 \
+            | cut -d' ' -f2-
+    )"
+    test -n "${paired_quality_file}" || {
+        echo "ERROR: could not locate paired variable-quality inputs" >&2
+        exit 2
+    }
+    PAIRED_QUALITY_DIR="$(dirname "${paired_quality_file}")"
+fi
+
 if [ ! -x "${PLOT_PYTHON}" ]; then
     echo "ERROR: plotting Python is missing: ${PLOT_PYTHON}" >&2
     exit 2
@@ -44,6 +60,9 @@ for path in \
     "${REPO_ROOT}/plot_q_core_task_tail_fidelity_preview.py" \
     "${ENDPOINT_DIR}/qcore_t925_metrics_by_seed.csv" \
     "${ENDPOINT_DIR}/qcore_t925_bootstrap_gap_draws.csv" \
+    "${PAIRED_QUALITY_DIR}/pressure_level_paired_rmse_utc_date_bootstrap_ci.csv" \
+    "${PAIRED_QUALITY_DIR}/surface_observation_three_source_rmse_utc_date_bootstrap_ci.csv" \
+    "${PAIRED_QUALITY_DIR}/surface_observation_pairwise_rmse_delta_utc_date_bootstrap_ci.csv" \
     "${TAIL_ANALYSIS_DIR}/event_conditioned_distribution_shift.csv" \
     "${TAIL_ANALYSIS_DIR}/joint_tail_feature_definitions.csv" \
     "${TAIL_ANALYSIS_DIR}/reference_tail_placement_utc_date_bootstrap_ci.csv" \
@@ -57,13 +76,11 @@ CMD=(
     --analysis-dir "${ANALYSIS_DIR}"
     --endpoint-dir "${ENDPOINT_DIR}"
     --tail-analysis-dir "${TAIL_ANALYSIS_DIR}"
+    --paired-quality-dir "${PAIRED_QUALITY_DIR}"
     --out-dir "${OUT_DIR}"
     --figure-stem "${FIGURE_STEM}"
     --dpi 600
 )
-if [ -n "${PAIRED_QUALITY_DIR}" ]; then
-    CMD+=(--paired-quality-dir "${PAIRED_QUALITY_DIR}")
-fi
 
 echo "[preflight] plotting imports"
 "${PLOT_PYTHON}" -c "import matplotlib, numpy, pandas; print('plotting imports=OK')"
