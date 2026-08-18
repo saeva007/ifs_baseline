@@ -32,6 +32,8 @@ from paper_figure_geometry import (
     INTERVAL_MARKERSIZE,
 )
 import plot_common_variable_error_regimes as quality_plot
+import plot_q_core_task_tail_fidelity_preview as tail_plot
+import plot_viscast_controlled_attribution_composite as controlled_plot
 
 
 FIGURE_WIDTH = 7.60
@@ -558,122 +560,114 @@ def main() -> None:
         endpoint_dir,
         args.paired_quality_dir,
     )
-    upper_air_dir = resolve_upper_air_dir(analysis_dir, args.upper_air_dir)
     tail_analysis_dir = (
         args.tail_analysis_dir.expanduser().resolve()
         if args.tail_analysis_dir is not None
         else analysis_dir
     )
     out_dir = args.out_dir.expanduser().resolve() if args.out_dir else analysis_dir / "manuscript_figures"
-    shapley, bias = load_mechanism_inputs(analysis_dir, upper_air_dir)
+    endpoint_tables = load_inputs(endpoint_dir)
     joint_ci, joint_metrics = load_tail_inputs(tail_analysis_dir)
     quality_source = quality_plot.prepare_source(paired_quality_dir)
-
-    variants = (
-        ("offset_ci", "offset_ci"),
-        ("paired_connector", "paired_connector"),
-        ("points_only", "points_only"),
+    shifts = tail_plot.load_table(
+        tail_analysis_dir,
+        "event_conditioned_distribution_shift.csv",
+        ["feature", "task_tail_direction"],
     )
-    rendered = []
-    for suffix, bias_layout in variants:
-        fig = plt.figure(figsize=(FIGURE_WIDTH, 11.40))
-        outer = fig.add_gridspec(
-            4,
-            1,
-            height_ratios=[0.82, 1.12, 1.12, 0.90],
-            left=0.205,
-            right=0.985,
-            top=0.925,
-            bottom=0.055,
-            hspace=0.62,
+    definitions = tail_plot.load_table(
+        tail_analysis_dir,
+        "joint_tail_feature_definitions.csv",
+        ["feature", "task_tail_direction"],
+    )
+    placement_ci = tail_plot.load_table(
+        tail_analysis_dir,
+        "reference_tail_placement_utc_date_bootstrap_ci.csv",
+        [
+            "feature",
+            "scope",
+            "tail",
+            "threshold_mode",
+            "metric",
+            "delta_tianji_minus_pangu",
+            "delta_tianji_minus_pangu_ci_low",
+            "delta_tianji_minus_pangu_ci_high",
+        ],
+    )
+    directions, direction_mismatches = tail_plot.direction_map(definitions, shifts)
+    placement = tail_plot.select_placement_rows(placement_ci, directions)
+
+    fig = plt.figure(figsize=(FIGURE_WIDTH, 9.45))
+    outer = fig.add_gridspec(
+        3,
+        1,
+        height_ratios=[0.86, 1.16, 1.18],
+        left=0.185,
+        right=0.985,
+        top=0.955,
+        bottom=0.065,
+        hspace=0.59,
+    )
+    skill_grid = outer[0].subgridspec(1, 3, wspace=0.48)
+    rmse_grid = outer[1].subgridspec(1, 2, wspace=0.19)
+    tail_grid = outer[2].subgridspec(1, 3, width_ratios=[1.18, 1.0, 1.0], wspace=0.45)
+    skill_axes = [fig.add_subplot(skill_grid[0, index]) for index in range(3)]
+    rmse_axes = [fig.add_subplot(rmse_grid[0, index]) for index in range(2)]
+    tail_axes = [fig.add_subplot(tail_grid[0, index]) for index in range(3)]
+
+    metrics = endpoint_tables["metrics"]
+    gap = endpoint_tables["gap"]
+    source_frames = [
+        controlled_plot.draw_endpoint_panel(
+            skill_axes[0], metrics, "low_vis_ap", "Low-vis average precision", "Average precision"
+        ),
+        controlled_plot.draw_endpoint_panel(
+            skill_axes[1], metrics, "low_vis_recall_matched_fpr", "Recall at matched FPR", "Low-vis recall"
+        ),
+        controlled_plot.draw_delta_panel(skill_axes[2], metrics, gap),
+    ]
+    for letter, axis in zip("abc", skill_axes):
+        controlled_plot.panel_label(axis, letter, x=-0.24)
+
+    for axis, scope, letter, show_y in (
+        (rmse_axes[0], quality_plot.SCOPES[0], "d", True),
+        (rmse_axes[1], quality_plot.SCOPES[1], "e", False),
+    ):
+        quality_plot.rmse_ratio_panel(
+            axis,
+            quality_source,
+            scope,
+            letter,
+            show_y,
+            show_reference_labels=False,
         )
-        mechanism_grid = outer[0].subgridspec(1, 2, wspace=0.40)
-        rmse_grid = outer[1].subgridspec(1, 2, wspace=0.19)
-        bias_grid = outer[2].subgridspec(1, 2, wspace=0.19)
-        joint_grid = outer[3].subgridspec(1, 2, wspace=0.28)
-        mechanism_axes = [
-            fig.add_subplot(mechanism_grid[0, index]) for index in range(2)
-        ]
-        rmse_axes = [
-            fig.add_subplot(rmse_grid[0, index]) for index in range(2)
-        ]
-        bias_axes = [
-            fig.add_subplot(bias_grid[0, index]) for index in range(2)
-        ]
-        joint_axes = [
-            fig.add_subplot(joint_grid[0, index]) for index in range(2)
-        ]
-
-        source_frames = [
-            draw_shapley(mechanism_axes[0], shapley).assign(panel_metric="shapley_low_vis_ap"),
-            draw_hits(mechanism_axes[1], bias).assign(panel_metric="source_exclusive_hits"),
-        ]
-        for letter, ax in zip("ab", mechanism_axes):
-            panel_label(ax, letter)
-
-        for axis, scope, letter, show_y in (
-            (rmse_axes[0], quality_plot.SCOPES[0], "c", True),
-            (rmse_axes[1], quality_plot.SCOPES[1], "d", False),
-        ):
-            quality_plot.rmse_ratio_panel(
-                axis,
-                quality_source,
-                scope,
-                letter,
-                show_y,
-                show_reference_labels=False,
+        source_frames.append(
+            quality_source[quality_source["scope"] == scope].assign(
+                panel_metric=f"rmse_{scope}"
             )
-            source_frames.append(
-                quality_source[quality_source["scope"] == scope].assign(
-                    panel_metric=f"rmse_{scope}",
-                    bias_layout=bias_layout,
-                )
-            )
-        rmse_xlim = (
-            min(axis.get_xlim()[0] for axis in rmse_axes),
-            max(axis.get_xlim()[1] for axis in rmse_axes),
         )
-        rmse_tick_candidates = np.asarray([0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0])
-        rmse_ticks = rmse_tick_candidates[
-            (rmse_tick_candidates >= rmse_xlim[0])
-            & (rmse_tick_candidates <= rmse_xlim[1])
-        ]
-        for axis in rmse_axes:
-            axis.set_xlim(*rmse_xlim)
-            axis.set_xticks(rmse_ticks, [f"{value:g}" for value in rmse_ticks])
+    rmse_xlim = (
+        min(axis.get_xlim()[0] for axis in rmse_axes),
+        max(axis.get_xlim()[1] for axis in rmse_axes),
+    )
+    rmse_tick_candidates = np.asarray([0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0])
+    rmse_ticks = rmse_tick_candidates[
+        (rmse_tick_candidates >= rmse_xlim[0])
+        & (rmse_tick_candidates <= rmse_xlim[1])
+    ]
+    for axis in rmse_axes:
+        axis.set_xlim(*rmse_xlim)
+        axis.set_xticks(rmse_ticks, [f"{value:g}" for value in rmse_ticks])
 
-        for axis, scope, letter, show_y in (
-            (bias_axes[0], quality_plot.SCOPES[0], "e", True),
-            (bias_axes[1], quality_plot.SCOPES[1], "f", False),
-        ):
-            quality_plot.bias_panel(
-                axis,
-                quality_source,
-                scope,
-                letter,
-                show_y,
-                show_reference_labels=False,
-                layout=bias_layout,
-                marker_overrides={"pangu": "D"},
-                show_direction_labels=False,
-            )
-            source_frames.append(
-                quality_source[quality_source["scope"] == scope].assign(
-                    panel_metric=f"bias_{scope}",
-                    bias_layout=bias_layout,
-                )
-            )
-        bias_extent = max(
-            abs(limit)
-            for axis in bias_axes
-            for limit in axis.get_xlim()
+    source_frames.append(
+        tail_plot.draw_tail_placement_panel(tail_axes[0], placement).assign(
+            panel_metric="task_tail_placement"
         )
-        for axis in bias_axes:
-            axis.set_xlim(-bias_extent, bias_extent)
-
-        joint_frames = [
+    )
+    panel_label(tail_axes[0], "f")
+    source_frames.extend(
+        [
             draw_joint_scope(
-                joint_axes[0],
+                tail_axes[1],
                 joint_ci,
                 joint_metrics,
                 "all_paired",
@@ -681,7 +675,7 @@ def main() -> None:
                 True,
             ).assign(panel_metric="joint_tail_all_paired"),
             draw_joint_scope(
-                joint_axes[1],
+                tail_axes[2],
                 joint_ci,
                 joint_metrics,
                 "true_low_visibility",
@@ -689,56 +683,61 @@ def main() -> None:
                 False,
             ).assign(panel_metric="joint_tail_low_visibility"),
         ]
-        source_frames.extend(joint_frames)
-        for letter, ax in zip("gh", joint_axes):
-            panel_label(ax, letter)
+    )
+    for letter, axis in zip("gh", tail_axes[1:]):
+        panel_label(axis, letter)
 
-        fig.legend(
-            handles=[
-                Line2D(
-                    [0],
-                    [0],
-                    marker="D",
-                    color=PANGU,
-                    markerfacecolor=PANGU,
-                    linestyle="none",
-                    label="Pangu (AI)",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    marker="s",
-                    color=TIANJI,
-                    markerfacecolor=TIANJI,
-                    linestyle="none",
-                    label="Tianji (physics)",
-                ),
-            ],
-            loc="upper center",
-            bbox_to_anchor=(0.60, 0.988),
-            ncol=2,
-            handletextpad=0.4,
-            columnspacing=1.2,
-        )
+    fig.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="D",
+                color=PANGU,
+                markerfacecolor=PANGU,
+                linestyle="none",
+                label="Pangu (AI)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color=TIANJI,
+                markerfacecolor=TIANJI,
+                linestyle="none",
+                label="Tianji (physics)",
+            ),
+        ],
+        loc="upper center",
+        bbox_to_anchor=(0.60, 0.995),
+        ncol=2,
+        handletextpad=0.4,
+        columnspacing=1.2,
+    )
 
-        stem = f"{args.figure_stem}_{suffix}"
-        export(fig, out_dir, stem, args.dpi)
-        plt.close(fig)
-        pd.concat(source_frames, ignore_index=True, sort=False).to_csv(
-            out_dir / f"{stem}_source_data.csv",
-            index=False,
-            float_format="%.8f",
-        )
-        rendered.append(str(out_dir / f"{stem}.pdf"))
+    export(fig, out_dir, args.figure_stem, args.dpi)
+    plt.close(fig)
+    pd.concat(source_frames, ignore_index=True, sort=False).to_csv(
+        out_dir / f"{args.figure_stem}_source_data.csv",
+        index=False,
+        float_format="%.8f",
+    )
+    rendered = [str(out_dir / f"{args.figure_stem}.pdf")]
 
     manifest = {
         "analysis_dir": str(analysis_dir),
         "endpoint_dir": str(endpoint_dir),
-        "upper_air_dir": str(upper_air_dir),
         "paired_quality_dir": str(paired_quality_dir),
         "tail_analysis_dir": str(tail_analysis_dir),
         "figures": rendered,
-        "bias_layouts": [item[1] for item in variants],
+        "panels": {
+            "a-c": "forecast-source endpoint skill",
+            "d-e": "paired RMSE ratios for all and observed Low-vis samples",
+            "f": "task-tail placement",
+            "g-h": "joint-tail recovery for all and observed Low-vis samples",
+        },
+        "task_tail_directions": directions,
+        "direction_mismatches": direction_mismatches,
         "rendering": "all panels redrawn from source tables on one canvas",
     }
     (out_dir / f"{args.figure_stem}_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
