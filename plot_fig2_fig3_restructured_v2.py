@@ -63,6 +63,8 @@ FIG2_GRID = dict(
 )
 FIG2_OPERATOR_WSPACE = 0.42
 FIG2_CV_WSPACE = 0.24
+FIG2_OPERATOR_WIDTH_RATIOS = [1.0, 1.0, 1.0]
+FIG2_CV_WIDTH_RATIOS = [1.0, 1.0, 1.0, 1.0]
 
 # --------------------------------------------------------------------------
 # Fig. 3 geometry
@@ -77,6 +79,7 @@ FIG3_GRID = dict(
     hspace=0.55,
 )
 FIG3_ROW2_WSPACE = 0.24
+FIG3_ROW2_WIDTH_RATIOS = [1.0, 1.15]
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,8 +205,12 @@ def draw_fig2(
     model_labels: Dict[str, str],
 ) -> pd.DataFrame:
     outer = fig.add_gridspec(2, 1, **FIG2_GRID)
-    operator_grid = outer[0].subgridspec(1, 3, wspace=FIG2_OPERATOR_WSPACE)
-    cv_grid = outer[1].subgridspec(1, 4, wspace=FIG2_CV_WSPACE)
+    operator_grid = outer[0].subgridspec(
+        1, 3, width_ratios=FIG2_OPERATOR_WIDTH_RATIOS, wspace=FIG2_OPERATOR_WSPACE
+    )
+    cv_grid = outer[1].subgridspec(
+        1, 4, width_ratios=FIG2_CV_WIDTH_RATIOS, wspace=FIG2_CV_WSPACE
+    )
     operator_axes = [fig.add_subplot(operator_grid[0, index]) for index in range(3)]
     cv_axes = [fig.add_subplot(cv_grid[0, index]) for index in range(4)]
 
@@ -332,7 +339,9 @@ def draw_fig3(
     source_frames = [draw_endpoint_ap_recall_panel(a_ax, metrics)]
     composite.panel_label(a_ax, "a")
 
-    row2 = outer[1].subgridspec(1, 2, width_ratios=[1.0, 1.15], wspace=FIG3_ROW2_WSPACE)
+    row2 = outer[1].subgridspec(
+        1, 2, width_ratios=FIG3_ROW2_WIDTH_RATIOS, wspace=FIG3_ROW2_WSPACE
+    )
     d_ax = fig.add_subplot(row2[0, 0])
     f_ax = fig.add_subplot(row2[0, 1])
 
