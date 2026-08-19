@@ -52,17 +52,17 @@ INK = "#17191B"
 # --------------------------------------------------------------------------
 # Fig. 2 geometry
 # --------------------------------------------------------------------------
-FIG2_SIZE = (7.60, 5)
+FIG2_SIZE = (7.80, 5)
 FIG2_GRID = dict(
     height_ratios=[0.85, 0.85],
     left=0.105,
     right=0.985,
     top=0.920,
     bottom=0.085,
-    hspace=0.3,
+    hspace=0.4,
 )
 FIG2_OPERATOR_WSPACE = 0.42
-FIG2_CV_WSPACE = 0.1
+FIG2_CV_WSPACE = 0.12
 FIG2_OPERATOR_WIDTH_RATIOS = [1.0, 1.0, 1.0]
 FIG2_CV_WIDTH_RATIOS = [1.0, 1.0, 1.0, 1.0]
 
@@ -327,8 +327,9 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
         rows.append({"metric": key, "label": label, "source": "Tianji", "value": tianji_mean})
     ax.set_xticks(x, [label for _, label in specs])
     ax.set_xlim(-0.55, len(specs) - 0.45)
-    ax.set_ylim(0.0, min(1.0, maxima * 1.22))
+    ax.set_ylim(0.25, min(1.0, max(0.40, maxima * 1.22)))
     ax.set_ylabel("Score")
+    ax.set_xlabel("Skill")
     ax.legend(loc="upper left", frameon=False)
     composite.style_axis(ax)
     return pd.DataFrame(rows)
