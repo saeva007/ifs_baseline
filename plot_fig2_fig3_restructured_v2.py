@@ -390,7 +390,7 @@ def draw_fig3(
         ["T2m", "WS10m", "SLP", "T925", "Q1000", "Q925", "UV925"]
     )
     d_ax.axhline(2.5, color=INK, linestyle="--", linewidth=0.9, zorder=1)
-    composite.panel_label(d_ax, "d")
+    composite.panel_label(d_ax, "c")
     source_frames.append(
         quality_source[quality_source["scope"] == quality_plot.SCOPES[0]].assign(
             panel_metric="rmse_all_paired"
@@ -410,7 +410,7 @@ def draw_fig3(
         xlabel="Δ task-tail CSI (Tianji − Pangu)",
     )
     f_ax.spines["left"].set_visible(True)
-    composite.panel_label(f_ax, "f", dx=0.14, dy_frac=0.04)
+    composite.panel_label(f_ax, "d", dx=0.14, dy_frac=0.04)
     source_frames.append(placement.assign(panel_metric="task_tail_placement"))
 
     g_ax = fig.add_subplot(outer[2, 0])
@@ -424,7 +424,7 @@ def draw_fig3(
             True,
         ).assign(panel_metric="joint_tail_all_paired")
     )
-    composite.panel_label(g_ax, "g")
+    composite.panel_label(g_ax, "e")
     return pd.concat(source_frames, ignore_index=True, sort=False)
 
 
@@ -629,10 +629,10 @@ def main() -> None:
                     "panels": {
                         "a": "AP and recall, Pangu versus Tianji",
                         "b": "bootstrap differences",
-                        "d": "paired RMSE ratio, all samples",
-                        "f": "task-tail placement",
-                        "g": "joint-tail recovery, all paired samples",
-                        "removed": {"c": "supplement", "e": "RMSE low-vis", "h": "joint low-vis"},
+                        "c": "paired RMSE ratio, all samples",
+                        "d": "task-tail placement",
+                        "e": "joint-tail recovery, all paired samples",
+                        "removed": {"f": "supplement (old c)", "g": "RMSE low-vis (old e)", "h": "joint low-vis"},
                     },
                     "task_tail_directions": directions,
                     "outputs": fig3_outputs,
