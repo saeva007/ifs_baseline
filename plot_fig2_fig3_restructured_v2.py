@@ -351,12 +351,11 @@ def draw_fig3(
     composite.panel_label(a_ax, "a")
     b_ax = fig.add_subplot(row1[0, 1])
     source_frames.append(
-        controlled.draw_delta_panel(b_ax, metrics, gap).assign(
+        controlled.draw_delta_panel(b_ax, metrics, gap, title=None).assign(
             panel_metric="bootstrap_differences"
         )
     )
-    b_ax.set_title("")
-    composite.panel_label(b_ax, "b")
+    composite.panel_label(b_ax, "b", dx=0.14, dy_frac=0.04)
 
     row2 = outer[1].subgridspec(
         1, 2, width_ratios=FIG3_ROW2_WIDTH_RATIOS, wspace=FIG3_ROW2_WSPACE
@@ -398,7 +397,7 @@ def draw_fig3(
         xlabel="Δ task-tail CSI (Tianji − Pangu)",
     )
     f_ax.spines["left"].set_visible(True)
-    composite.panel_label(f_ax, "f")
+    composite.panel_label(f_ax, "f", dx=0.14, dy_frac=0.04)
     source_frames.append(placement.assign(panel_metric="task_tail_placement"))
 
     g_ax = fig.add_subplot(outer[2, 0])

@@ -459,12 +459,13 @@ def draw_tail_placement_panel(
         if xlabel is not None
         else "Δ quantile-matched task-tail CSI  (Tianji − Pangu; 95% CI)"
     )
-    ax.set_title(
-        title if title is not None else "Tail-placement gains concentrate in temperature and wind",
-        loc="left",
-        fontweight="bold",
-        pad=12,
-    )
+    if title is not None:
+        ax.set_title(
+            title,
+            loc="left",
+            fontweight="bold",
+            pad=12,
+        )
     if show_direction_labels:
         ax.text(
             0.01,
@@ -499,7 +500,11 @@ def draw_tail_placement(
     dpi: int,
 ) -> pd.DataFrame:
     fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 4.55))
-    source = draw_tail_placement_panel(ax, selected)
+    source = draw_tail_placement_panel(
+        ax,
+        selected,
+        title="Tail-placement gains concentrate in temperature and wind",
+    )
     fig.subplots_adjust(left=0.335, right=0.985, top=0.83, bottom=0.16)
     export_figure(fig, out_dir, stem, dpi)
     return source

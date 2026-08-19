@@ -265,7 +265,7 @@ def load_tail_inputs(tail_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return ci, metrics
 
 
-def panel_label(ax, letter: str) -> None:
+def panel_label(ax, letter: str, dx: float = 0.22, dy_frac: float = 0.08) -> None:
     """Draw the panel letter at a fixed absolute distance from the axes corner.
 
     The horizontal gap is constant in inches for every panel so letters line
@@ -275,8 +275,8 @@ def panel_label(ax, letter: str) -> None:
     bbox = ax.get_position()
     fig = ax.figure
     fig.text(
-        bbox.x0 - 0.22 / FIGURE_WIDTH,
-        bbox.y1 + 0.08 * bbox.height,
+        bbox.x0 - dx / FIGURE_WIDTH,
+        bbox.y1 + dy_frac * bbox.height,
         letter,
         ha="right",
         va="bottom",

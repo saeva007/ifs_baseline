@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import matplotlib
 
@@ -210,7 +210,13 @@ def bootstrap_interval(gap: pd.DataFrame, metric: str) -> tuple[float, float]:
     return tuple(np.percentile(draws.to_numpy(dtype=float), [2.5, 97.5]))
 
 
-def draw_delta_panel(ax: plt.Axes, metrics: pd.DataFrame, gap: pd.DataFrame) -> pd.DataFrame:
+def draw_delta_panel(
+    ax: plt.Axes,
+    metrics: pd.DataFrame,
+    gap: pd.DataFrame,
+    *,
+    title: Optional[str] = "Bootstrap differences",
+) -> pd.DataFrame:
     specs = [
         ("low_vis_ap", "Low-vis AP"),
         ("low_vis_recall_matched_fpr", "Matched-FPR recall"),
@@ -252,7 +258,8 @@ def draw_delta_panel(ax: plt.Axes, metrics: pd.DataFrame, gap: pd.DataFrame) -> 
     extent = max(abs(float(source["ci_low"].min())), abs(float(source["ci_high"].max())))
     ax.set_xlim(min(-0.01, -0.18 * extent), 1.12 * extent)
     ax.set_xlabel("Difference (Tianji − Pangu)")
-    ax.set_title("Bootstrap differences", loc="left", fontweight="bold", pad=7)
+    if title is not None:
+        ax.set_title(title, loc="left", fontweight="bold", pad=7)
     style_axis(ax)
     return source.assign(comparison="input_bootstrap")
 
