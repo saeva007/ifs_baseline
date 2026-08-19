@@ -447,6 +447,7 @@ def draw_tail_placement_panel(
     if not show_y:
         ax.spines["left"].set_visible(False)
     ax.invert_yaxis()
+    ax.set_ylim(len(FEATURE_ORDER) - 0.5, -0.5)
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel(
         xlabel

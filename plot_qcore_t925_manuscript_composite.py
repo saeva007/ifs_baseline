@@ -35,7 +35,7 @@ import plot_q_core_task_tail_fidelity_preview as tail_plot
 import plot_viscast_controlled_attribution_composite as controlled_plot
 
 
-FIGURE_WIDTH = 9.00
+FIGURE_WIDTH = 9.40
 TIANJI = SOURCE_COLORS["tianji"]
 PANGU = SOURCE_COLORS["pangu"]
 TIANJI_DARK = SOURCE_DARK_COLORS["tianji"]
@@ -56,12 +56,12 @@ PACKAGE_COLORS = {
 # Figure geometry.  No aspect-ratio locking: the grid is edited directly so
 # individual panels can be widened as the manuscript layout requires.
 FIGURE_HEIGHT = 9.35
-GRID_LEFT = 0.185
-GRID_RIGHT = 0.985
+GRID_LEFT = 0.160
+GRID_RIGHT = 0.990
 GRID_TOP = 0.920
 GRID_BOTTOM = 0.058
 GRID_HSPACE = 0.55
-OUTER_HEIGHT_RATIOS = [0.78, 1.32, 0.92]
+OUTER_HEIGHT_RATIOS = [0.78, 1.12, 0.92]
 SKILL_WSPACE = 0.48
 ROW2_WIDTH_RATIOS = [1.25, 1.25, 1.40]
 ROW2_WSPACE = 0.18
@@ -707,7 +707,7 @@ def main() -> None:
             show_direction_labels=False,
             title_text="",
         )
-        axis.set_title(title_text, loc="left", pad=7)
+        axis.set_title(title_text, loc="left", fontweight="bold", pad=7)
         axis.set_xlabel("Tianji / Pangu RMSE")
         panel_label(axis, letter)
         source_frames.append(
@@ -742,7 +742,7 @@ def main() -> None:
             xlabel="Δ task-tail CSI (Tianji − Pangu)",
         ).assign(panel_metric="task_tail_placement")
     )
-    tail_axis.set_title("Task-tail placement gains", loc="left", pad=7)
+    tail_axis.set_title("Task-tail placement gains", loc="left", fontweight="bold", pad=7)
     panel_label(tail_axis, "f")
     source_frames.extend(
         [
