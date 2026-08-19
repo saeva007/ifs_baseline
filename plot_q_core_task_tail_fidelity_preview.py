@@ -444,6 +444,8 @@ def draw_tail_placement_panel(
         )
 
     ax.set_yticks(y, labels if show_y else [])
+    if not show_y:
+        ax.spines["left"].set_visible(False)
     ax.invert_yaxis()
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel(

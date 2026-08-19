@@ -35,7 +35,7 @@ import plot_q_core_task_tail_fidelity_preview as tail_plot
 import plot_viscast_controlled_attribution_composite as controlled_plot
 
 
-FIGURE_WIDTH = 8.80
+FIGURE_WIDTH = 9.00
 TIANJI = SOURCE_COLORS["tianji"]
 PANGU = SOURCE_COLORS["pangu"]
 TIANJI_DARK = SOURCE_DARK_COLORS["tianji"]
@@ -53,69 +53,19 @@ PACKAGE_COLORS = {
 }
 
 
-# Figure geometry.  Each panel keeps the aspect ratio of its standalone
-# figure; the grid solves row heights from the target aspects so the layout
-# can be changed by editing the canvas size and spacing only.
-_LAYOUT = {
-    "left": 0.185,
-    "right": 0.985,
-    "top": 0.920,
-    "bottom": 0.058,
-    "skill_wspace": 0.48,
-    "row2_wspace": 0.20,
-    "joint_wspace": 0.28,
-    "hspace": 0.55,
-    "skill_aspect": 1.05,
-    "rmse_aspect": 1.19,
-    "tail_aspect": 1.62,
-    "joint_aspect": 1.30,
-}
-
-
-def figure_layout() -> Dict[str, object]:
-    layout = _LAYOUT
-    left, right, top, bottom = (
-        layout["left"],
-        layout["right"],
-        layout["top"],
-        layout["bottom"],
-    )
-    avail_width = FIGURE_WIDTH * (right - left)
-
-    skill_unit = avail_width / (3 + 2 * layout["skill_wspace"])
-    skill_height = skill_unit / layout["skill_aspect"]
-
-    row2_sum = 2 * layout["rmse_aspect"] + layout["tail_aspect"]
-    row2_mean = row2_sum / 3
-    row2_unit = avail_width / (row2_sum + 2 * layout["row2_wspace"] * row2_mean)
-    row2_height = row2_unit
-
-    joint_unit = avail_width / (2 + layout["joint_wspace"])
-    joint_height = joint_unit / layout["joint_aspect"]
-
-    heights = [skill_height, row2_height, joint_height]
-    average_height = sum(heights) / len(heights)
-    figure_height = (
-        sum(heights) + (len(heights) - 1) * layout["hspace"] * average_height
-    ) / (top - bottom)
-
-    return {
-        "left": left,
-        "right": right,
-        "top": top,
-        "bottom": bottom,
-        "hspace": layout["hspace"],
-        "skill_wspace": layout["skill_wspace"],
-        "row2_wspace": layout["row2_wspace"],
-        "joint_wspace": layout["joint_wspace"],
-        "height_ratios": heights,
-        "row2_width_ratios": [
-            layout["rmse_aspect"],
-            layout["rmse_aspect"],
-            layout["tail_aspect"],
-        ],
-        "figure_height": figure_height,
-    }
+# Figure geometry.  No aspect-ratio locking: the grid is edited directly so
+# individual panels can be widened as the manuscript layout requires.
+FIGURE_HEIGHT = 9.35
+GRID_LEFT = 0.185
+GRID_RIGHT = 0.985
+GRID_TOP = 0.920
+GRID_BOTTOM = 0.058
+GRID_HSPACE = 0.55
+OUTER_HEIGHT_RATIOS = [0.78, 1.32, 0.92]
+SKILL_WSPACE = 0.48
+ROW2_WIDTH_RATIOS = [1.25, 1.25, 1.40]
+ROW2_WSPACE = 0.18
+JOINT_WSPACE = 0.28
 
 
 def parse_args() -> argparse.Namespace:
@@ -325,7 +275,7 @@ def panel_label(ax, letter: str) -> None:
     bbox = ax.get_position()
     fig = ax.figure
     fig.text(
-        bbox.x0 - 0.45 / FIGURE_WIDTH,
+        bbox.x0 - 0.22 / FIGURE_WIDTH,
         bbox.y1 + 0.08 * bbox.height,
         letter,
         ha="right",
@@ -704,26 +654,25 @@ def main() -> None:
         directions[feature] = tails[0]
     placement = tail_plot.select_placement_rows(placement_ci, directions)
 
-    layout = figure_layout()
-    fig = plt.figure(figsize=(FIGURE_WIDTH, float(layout["figure_height"])))
+    fig = plt.figure(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
     outer = fig.add_gridspec(
         3,
         1,
-        height_ratios=layout["height_ratios"],
-        left=layout["left"],
-        right=layout["right"],
-        top=layout["top"],
-        bottom=layout["bottom"],
-        hspace=layout["hspace"],
+        height_ratios=OUTER_HEIGHT_RATIOS,
+        left=GRID_LEFT,
+        right=GRID_RIGHT,
+        top=GRID_TOP,
+        bottom=GRID_BOTTOM,
+        hspace=GRID_HSPACE,
     )
-    skill_grid = outer[0].subgridspec(1, 3, wspace=layout["skill_wspace"])
+    skill_grid = outer[0].subgridspec(1, 3, wspace=SKILL_WSPACE)
     rmse_grid = outer[1].subgridspec(
         1,
         3,
-        width_ratios=layout["row2_width_ratios"],
-        wspace=layout["row2_wspace"],
+        width_ratios=ROW2_WIDTH_RATIOS,
+        wspace=ROW2_WSPACE,
     )
-    joint_grid = outer[2].subgridspec(1, 2, wspace=layout["joint_wspace"])
+    joint_grid = outer[2].subgridspec(1, 2, wspace=JOINT_WSPACE)
     skill_axes = [fig.add_subplot(skill_grid[0, index]) for index in range(3)]
     rmse_axes = [fig.add_subplot(rmse_grid[0, index]) for index in range(2)]
     tail_axis = fig.add_subplot(rmse_grid[0, 2])
