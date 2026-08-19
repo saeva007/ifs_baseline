@@ -35,7 +35,7 @@ import plot_q_core_task_tail_fidelity_preview as tail_plot
 import plot_viscast_controlled_attribution_composite as controlled_plot
 
 
-FIGURE_WIDTH = 8.20
+FIGURE_WIDTH = 8.80
 TIANJI = SOURCE_COLORS["tianji"]
 PANGU = SOURCE_COLORS["pangu"]
 TIANJI_DARK = SOURCE_DARK_COLORS["tianji"]
@@ -62,7 +62,7 @@ _LAYOUT = {
     "top": 0.920,
     "bottom": 0.058,
     "skill_wspace": 0.48,
-    "row2_wspace": 0.16,
+    "row2_wspace": 0.20,
     "joint_wspace": 0.28,
     "hspace": 0.55,
     "skill_aspect": 1.05,
@@ -316,14 +316,32 @@ def load_tail_inputs(tail_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def panel_label(ax, letter: str) -> None:
-    ax.text(-0.16, 1.08, letter, transform=ax.transAxes, ha="left", va="bottom", fontsize=10, fontweight="bold", color=INK)
+    """Draw the panel letter at a fixed absolute distance from the axes corner.
+
+    The horizontal gap is constant in inches for every panel so letters line
+    up regardless of how wide each panel is.
+    """
+
+    bbox = ax.get_position()
+    fig = ax.figure
+    fig.text(
+        bbox.x0 - 0.45 / FIGURE_WIDTH,
+        bbox.y1 + 0.08 * bbox.height,
+        letter,
+        ha="right",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color=INK,
+    )
 
 
 def style_axis(ax, xgrid: bool = False, ygrid: bool = True) -> None:
     ax.grid(False)
-    for spine in ax.spines.values():
-        spine.set_color("#31363B")
-        spine.set_linewidth(0.75)
+    ax.tick_params(length=2.7, width=0.75, color=INK, pad=2.0)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(INK)
+        ax.spines[side].set_linewidth(0.75)
 
 
 def endpoint_rows(metrics: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
@@ -723,11 +741,11 @@ def main() -> None:
         controlled_plot.draw_delta_panel(skill_axes[2], metrics, gap),
     ]
     for letter, axis in zip("abc", skill_axes):
-        controlled_plot.panel_label(axis, letter, x=-0.24)
+        panel_label(axis, letter)
 
-    for axis, scope, letter, show_y in (
-        (rmse_axes[0], quality_plot.SCOPES[0], "d", True),
-        (rmse_axes[1], quality_plot.SCOPES[1], "e", False),
+    for axis, scope, letter, show_y, title_text in (
+        (rmse_axes[0], quality_plot.SCOPES[0], "d", True, "RMSE · All samples"),
+        (rmse_axes[1], quality_plot.SCOPES[1], "e", False, "RMSE · Low-vis"),
     ):
         quality_plot.rmse_ratio_panel(
             axis,
@@ -736,13 +754,13 @@ def main() -> None:
             letter,
             show_y,
             show_reference_labels=False,
-            title_text=(
-                "RMSE · All samples"
-                if scope == quality_plot.SCOPES[0]
-                else "RMSE · Low-vis"
-            ),
+            show_label=False,
+            show_direction_labels=False,
+            title_text="",
         )
+        axis.set_title(title_text, loc="left", pad=7)
         axis.set_xlabel("Tianji / Pangu RMSE")
+        panel_label(axis, letter)
         source_frames.append(
             quality_source[quality_source["scope"] == scope].assign(
                 panel_metric=f"rmse_{scope}"
@@ -770,10 +788,12 @@ def main() -> None:
             show_y=False,
             show_values=False,
             shading="family",
+            xgrid=False,
             title="Task-tail placement gains",
             xlabel="Δ task-tail CSI (Tianji − Pangu)",
         ).assign(panel_metric="task_tail_placement")
     )
+    tail_axis.set_title("Task-tail placement gains", loc="left", pad=7)
     panel_label(tail_axis, "f")
     source_frames.extend(
         [

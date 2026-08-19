@@ -31,6 +31,12 @@ from paper_source_palette import (
     SOURCE_DARK_COLORS,
     SOURCE_PALE_COLORS,
 )
+from paper_figure_geometry import (
+    INTERVAL_CAPSIZE,
+    INTERVAL_CAPTHICK,
+    INTERVAL_LINEWIDTH,
+    INTERVAL_MARKERSIZE,
+)
 
 
 FIGURE_WIDTH = 7.60
@@ -133,9 +139,10 @@ def style_axis(ax, xgrid: bool = True, ygrid: bool = False) -> None:
         ax.grid(axis="x", color=GRID, linewidth=0.6, zorder=0)
     if ygrid:
         ax.grid(axis="y", color=GRID, linewidth=0.6, zorder=0)
-    for spine in ax.spines.values():
-        spine.set_color("#31363B")
-        spine.set_linewidth(0.75)
+    ax.tick_params(length=2.7, width=0.75, color=INK, pad=2.0)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(INK)
+        ax.spines[side].set_linewidth(0.75)
 
 
 def panel_label(ax, letter: str) -> None:
@@ -366,6 +373,7 @@ def draw_tail_placement_panel(
     show_y: bool = True,
     show_values: bool = True,
     shading: str = "sign",
+    xgrid: bool = True,
     title: Optional[str] = None,
     xlabel: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -389,7 +397,7 @@ def draw_tail_placement_panel(
         ax.axvspan(0.0, xmax, color=SOURCE_PALE_COLORS["tianji"], alpha=0.72, zorder=-5)
     else:
         raise ValueError(f"Unknown tail-placement shading: {shading}")
-    ax.axvline(0.0, color=INK, linewidth=1.0, zorder=1)
+    ax.axvline(0.0, color=INK, linewidth=1.0, zorder=3)
     ax.axhline(2.5, color="#D7DBDE", linewidth=0.8, zorder=0)
 
     labels = []
@@ -397,16 +405,21 @@ def draw_tail_placement_panel(
         value = float(row["delta_tianji_minus_pangu"])
         lo = float(row["delta_tianji_minus_pangu_ci_low"])
         hi = float(row["delta_tianji_minus_pangu_ci_high"])
-        color, marker = significance_style(row)
-        ax.plot([lo, hi], [yi, yi], color=color, linewidth=2.2, solid_capstyle="round", zorder=2)
-        ax.scatter(
+        color, _marker = significance_style(row)
+        ax.errorbar(
             value,
             yi,
-            s=55,
-            marker=marker,
+            xerr=[[value - lo], [hi - value]],
+            fmt="o",
+            markersize=INTERVAL_MARKERSIZE,
             color=color,
-            edgecolor="white",
-            linewidth=0.7,
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markeredgewidth=0.65,
+            ecolor=color,
+            elinewidth=INTERVAL_LINEWIDTH,
+            capsize=INTERVAL_CAPSIZE,
+            capthick=INTERVAL_CAPTHICK,
             zorder=3,
         )
         if show_values:
@@ -431,9 +444,6 @@ def draw_tail_placement_panel(
         )
 
     ax.set_yticks(y, labels if show_y else [])
-    if not show_y:
-        ax.spines["left"].set_visible(False)
-        ax.tick_params(axis="y", length=0)
     ax.invert_yaxis()
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel(
@@ -470,7 +480,7 @@ def draw_tail_placement_panel(
             fontsize=7.4,
             fontweight="bold",
         )
-    style_axis(ax)
+    style_axis(ax, xgrid=xgrid)
     return selected.assign(panel="task_tail_placement")
 
 
