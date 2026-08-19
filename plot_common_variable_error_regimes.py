@@ -468,6 +468,7 @@ def rmse_ratio_panel(
     show_label: bool = True,
     title_text: Optional[str] = None,
     show_direction_labels: bool = True,
+    show_bands: bool = True,
 ) -> None:
     if show_label:
         panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
@@ -575,7 +576,8 @@ def rmse_ratio_panel(
             fontweight="bold",
             color=SOURCE_DARK_COLORS["pangu"],
         )
-    add_family_bands(ax, show_reference_labels=show_reference_labels)
+    if show_bands:
+        add_family_bands(ax, show_reference_labels=show_reference_labels)
     style_axis(ax)
 
 

@@ -395,10 +395,15 @@ def draw_tail_placement_panel(
     elif shading == "sign":
         ax.axvspan(xmin, 0.0, color=SOURCE_PALE_COLORS["pangu"], alpha=0.72, zorder=-5)
         ax.axvspan(0.0, xmax, color=SOURCE_PALE_COLORS["tianji"], alpha=0.72, zorder=-5)
+    elif shading == "none":
+        pass
     else:
         raise ValueError(f"Unknown tail-placement shading: {shading}")
     ax.axvline(0.0, color=INK, linewidth=1.0, zorder=3)
-    ax.axhline(2.5, color="#D7DBDE", linewidth=0.8, zorder=0)
+    if shading == "none":
+        ax.axhline(2.5, color=INK, linestyle="--", linewidth=0.9, zorder=1)
+    else:
+        ax.axhline(2.5, color="#D7DBDE", linewidth=0.8, zorder=0)
 
     labels = []
     for yi, row in selected.iterrows():
