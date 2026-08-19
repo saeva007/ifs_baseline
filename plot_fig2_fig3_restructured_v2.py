@@ -62,7 +62,7 @@ FIG2_GRID = dict(
     hspace=0.3,
 )
 FIG2_OPERATOR_WSPACE = 0.42
-FIG2_CV_WSPACE = 0.24
+FIG2_CV_WSPACE = 0.1
 FIG2_OPERATOR_WIDTH_RATIOS = [1.0, 1.0, 1.0]
 FIG2_CV_WIDTH_RATIOS = [1.0, 1.0, 1.0, 1.0]
 
@@ -78,6 +78,8 @@ FIG3_GRID = dict(
     bottom=0.065,
     hspace=0.55,
 )
+FIG3_ROW1_WIDTH_RATIOS = [1.15, 1.0]
+FIG3_ROW1_WSPACE = 0.30
 FIG3_ROW2_WSPACE = 0.24
 FIG3_ROW2_WIDTH_RATIOS = [1.0, 1.15]
 
@@ -341,9 +343,20 @@ def draw_fig3(
     quality_source: pd.DataFrame,
 ) -> pd.DataFrame:
     outer = fig.add_gridspec(3, 1, **FIG3_GRID)
-    a_ax = fig.add_subplot(outer[0, 0])
+    row1 = outer[0].subgridspec(
+        1, 2, width_ratios=FIG3_ROW1_WIDTH_RATIOS, wspace=FIG3_ROW1_WSPACE
+    )
+    a_ax = fig.add_subplot(row1[0, 0])
     source_frames = [draw_endpoint_ap_recall_panel(a_ax, metrics)]
     composite.panel_label(a_ax, "a")
+    b_ax = fig.add_subplot(row1[0, 1])
+    source_frames.append(
+        controlled.draw_delta_panel(b_ax, metrics, gap).assign(
+            panel_metric="bootstrap_differences"
+        )
+    )
+    b_ax.set_title("")
+    composite.panel_label(b_ax, "b")
 
     row2 = outer[1].subgridspec(
         1, 2, width_ratios=FIG3_ROW2_WIDTH_RATIOS, wspace=FIG3_ROW2_WSPACE
@@ -384,6 +397,7 @@ def draw_fig3(
         title=None,
         xlabel="Δ task-tail CSI (Tianji − Pangu)",
     )
+    f_ax.spines["left"].set_visible(True)
     composite.panel_label(f_ax, "f")
     source_frames.append(placement.assign(panel_metric="task_tail_placement"))
 
@@ -602,6 +616,7 @@ def main() -> None:
                 {
                     "panels": {
                         "a": "AP and recall, Pangu versus Tianji",
+                        "b": "bootstrap differences",
                         "d": "paired RMSE ratio, all samples",
                         "f": "task-tail placement",
                         "g": "joint-tail recovery, all paired samples",
