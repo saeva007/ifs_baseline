@@ -357,6 +357,7 @@ def draw_fig3(
             panel_metric="bootstrap_differences"
         )
     )
+    b_ax.set_yticklabels(["AP", "Recall"])
     composite.panel_label(b_ax, "b", dx=0.14, dy_frac=0.04)
 
     row2 = outer[1].subgridspec(
@@ -378,6 +379,9 @@ def draw_fig3(
         show_bands=False,
     )
     d_ax.set_xlabel("Tianji / Pangu RMSE")
+    d_ax.set_yticklabels(
+        ["T2m", "WS10m", "SLP", "T925", "Q1000", "Q925", "UV925"]
+    )
     d_ax.axhline(2.5, color=INK, linestyle="--", linewidth=0.9, zorder=1)
     composite.panel_label(d_ax, "d")
     source_frames.append(
