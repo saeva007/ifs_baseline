@@ -18,7 +18,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -36,7 +35,7 @@ import plot_q_core_task_tail_fidelity_preview as tail_plot
 import plot_viscast_controlled_attribution_composite as controlled_plot
 
 
-FIGURE_WIDTH = 7.60
+FIGURE_WIDTH = 8.20
 TIANJI = SOURCE_COLORS["tianji"]
 PANGU = SOURCE_COLORS["pangu"]
 TIANJI_DARK = SOURCE_DARK_COLORS["tianji"]
@@ -63,7 +62,7 @@ _LAYOUT = {
     "top": 0.920,
     "bottom": 0.058,
     "skill_wspace": 0.48,
-    "row2_wspace": 0.28,
+    "row2_wspace": 0.16,
     "joint_wspace": 0.28,
     "hspace": 0.55,
     "skill_aspect": 1.05,
@@ -316,25 +315,8 @@ def load_tail_inputs(tail_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return ci, metrics
 
 
-def panel_letter(fig, ax, letter: str) -> None:
-    """Hug a manuscript panel letter to the axes' top-left corner.
-
-    The letter extends left into the column gap so it can never collide with
-    the above-axes title, which starts at the axes' left edge, or with the
-    y tick labels, which sit at least one tick below the top edge.
-    """
-
-    bbox = ax.get_position()
-    fig.text(
-        bbox.x0 - 0.010,
-        bbox.y1 - 0.004,
-        letter,
-        ha="right",
-        va="top",
-        fontsize=10,
-        fontweight="bold",
-        color=INK,
-    )
+def panel_label(ax, letter: str) -> None:
+    ax.text(-0.16, 1.08, letter, transform=ax.transAxes, ha="left", va="bottom", fontsize=10, fontweight="bold", color=INK)
 
 
 def style_axis(ax, xgrid: bool = False, ygrid: bool = True) -> None:
@@ -740,9 +722,11 @@ def main() -> None:
         ),
         controlled_plot.draw_delta_panel(skill_axes[2], metrics, gap),
     ]
+    for letter, axis in zip("abc", skill_axes):
+        controlled_plot.panel_label(axis, letter, x=-0.24)
 
     for axis, scope, letter, show_y in (
-        (rmse_axes[0], quality_plot.SCOPES[0], "d", False),
+        (rmse_axes[0], quality_plot.SCOPES[0], "d", True),
         (rmse_axes[1], quality_plot.SCOPES[1], "e", False),
     ):
         quality_plot.rmse_ratio_panel(
@@ -752,13 +736,11 @@ def main() -> None:
             letter,
             show_y,
             show_reference_labels=False,
-            show_label=False,
             title_text=(
                 "RMSE · All samples"
                 if scope == quality_plot.SCOPES[0]
                 else "RMSE · Low-vis"
             ),
-            show_direction_labels=False,
         )
         axis.set_xlabel("Tianji / Pangu RMSE")
         source_frames.append(
@@ -785,10 +767,14 @@ def main() -> None:
             placement,
             show_tail_direction=False,
             show_direction_labels=False,
+            show_y=False,
+            show_values=False,
+            shading="family",
             title="Task-tail placement gains",
             xlabel="Δ task-tail CSI (Tianji − Pangu)",
         ).assign(panel_metric="task_tail_placement")
     )
+    panel_label(tail_axis, "f")
     source_frames.extend(
         [
             draw_joint_scope(
@@ -809,45 +795,8 @@ def main() -> None:
             ).assign(panel_metric="joint_tail_low_visibility"),
         ]
     )
-    for letter, axis in [
-        ("a", skill_axes[0]),
-        ("b", skill_axes[1]),
-        ("c", skill_axes[2]),
-        ("d", rmse_axes[0]),
-        ("e", rmse_axes[1]),
-        ("f", tail_axis),
-        ("g", joint_axes[0]),
-        ("h", joint_axes[1]),
-    ]:
-        panel_letter(fig, axis, letter)
-
-    fig.legend(
-        handles=[
-            Line2D(
-                [0],
-                [0],
-                marker="D",
-                color=PANGU,
-                markerfacecolor=PANGU,
-                linestyle="none",
-                label="Pangu (AI)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color=TIANJI,
-                markerfacecolor=TIANJI,
-                linestyle="none",
-                label="Tianji (physics)",
-            ),
-        ],
-        loc="upper center",
-        bbox_to_anchor=(0.60, 0.995),
-        ncol=2,
-        handletextpad=0.4,
-        columnspacing=1.2,
-    )
+    for letter, axis in zip("gh", joint_axes):
+        panel_label(axis, letter)
 
     export(fig, out_dir, args.figure_stem, args.dpi)
     plt.close(fig)

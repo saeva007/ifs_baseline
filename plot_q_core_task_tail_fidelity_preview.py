@@ -44,6 +44,13 @@ GRID = "#E8EAEB"
 CONNECTOR = "#CDD2D6"
 SURFACE_BAND = "#F3F6F8"
 UPPER_AIR_BAND = "#F5F2F8"
+# Band colors shared with plot_common_variable_error_regimes so the manuscript
+# row d/e/f uses one consistent family shading scheme.
+FAMILY_SURFACE_BAND = "#F5F8FA"
+FAMILY_PRESSURE_BAND = "#F7F4FA"
+# FEATURE_ORDER matches plot_common_variable_error_regimes.FEATURE_ORDER; the
+# first three rows are station-observation references, the rest are ERA5.
+SURFACE_SPLIT = 3
 
 FEATURE_ORDER = [
     "T2M",
@@ -356,6 +363,9 @@ def draw_tail_placement_panel(
     *,
     show_tail_direction: bool = True,
     show_direction_labels: bool = True,
+    show_y: bool = True,
+    show_values: bool = True,
+    shading: str = "sign",
     title: Optional[str] = None,
     xlabel: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -366,9 +376,20 @@ def draw_tail_placement_panel(
     high = selected["delta_tianji_minus_pangu_ci_high"].astype(float).to_numpy()
     xmin = min(-0.08, np.floor((float(np.nanmin(low)) - 0.012) / 0.02) * 0.02)
     xmax = max(0.18, np.ceil((float(np.nanmax(high)) + 0.012) / 0.02) * 0.02)
-    ax.axvspan(xmin, 0.0, color=SOURCE_PALE_COLORS["pangu"], alpha=0.72, zorder=-5)
-    ax.axvspan(0.0, xmax, color=SOURCE_PALE_COLORS["tianji"], alpha=0.72, zorder=-5)
-    ax.axvline(0.0, color=INK, linewidth=0.85, zorder=0)
+    if shading == "family":
+        ax.axhspan(-0.5, SURFACE_SPLIT - 0.5, color=FAMILY_SURFACE_BAND, zorder=-6)
+        ax.axhspan(
+            SURFACE_SPLIT - 0.5,
+            len(FEATURE_ORDER) - 0.5,
+            color=FAMILY_PRESSURE_BAND,
+            zorder=-6,
+        )
+    elif shading == "sign":
+        ax.axvspan(xmin, 0.0, color=SOURCE_PALE_COLORS["pangu"], alpha=0.72, zorder=-5)
+        ax.axvspan(0.0, xmax, color=SOURCE_PALE_COLORS["tianji"], alpha=0.72, zorder=-5)
+    else:
+        raise ValueError(f"Unknown tail-placement shading: {shading}")
+    ax.axvline(0.0, color=INK, linewidth=1.0, zorder=1)
     ax.axhline(2.5, color="#D7DBDE", linewidth=0.8, zorder=0)
 
     labels = []
@@ -388,18 +409,19 @@ def draw_tail_placement_panel(
             linewidth=0.7,
             zorder=3,
         )
-        ax.annotate(
-            f"{value:+.3f}",
-            xy=(value, yi),
-            xytext=(0, 8),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            color=color,
-            fontsize=7.2,
-            fontweight="bold",
-            annotation_clip=False,
-        )
+        if show_values:
+            ax.annotate(
+                f"{value:+.3f}",
+                xy=(value, yi),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                color=color,
+                fontsize=7.2,
+                fontweight="bold",
+                annotation_clip=False,
+            )
         direction = str(row["selected_task_tail_direction"])
         feature_label = FEATURE_LABELS[str(row["feature"])]
         labels.append(
@@ -408,7 +430,10 @@ def draw_tail_placement_panel(
             else feature_label
         )
 
-    ax.set_yticks(y, labels)
+    ax.set_yticks(y, labels if show_y else [])
+    if not show_y:
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
     ax.invert_yaxis()
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel(
