@@ -244,10 +244,11 @@ def draw_fig2(
             controlled.draw_operator_panel(
                 axis,
                 matched,
-                title,
+                None,
                 specs,
                 show_ylabel=(index == 0),
                 show_legend=(index == 0),
+                bottom_title=f"{title} skill",
             )
         )
     for letter, axis in zip("abc", operator_axes):
@@ -309,7 +310,7 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
             linewidth=0.7,
             label="Pangu" if xi == 0 else None,
             yerr=[[pangu_mean - float(np.min(pangu))], [float(np.max(pangu)) - pangu_mean]],
-            error_kw=dict(elinewidth=1.0, ecolor=PANGU_DARK, capsize=2.5),
+            error_kw=dict(elinewidth=1.0, ecolor=PANGU_DARK, capsize=0),
         )
         ax.bar(
             xi + width / 2,
@@ -320,7 +321,7 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
             linewidth=0.7,
             label="Tianji" if xi == 0 else None,
             yerr=[[tianji_mean - float(np.min(tianji))], [float(np.max(tianji)) - tianji_mean]],
-            error_kw=dict(elinewidth=1.0, ecolor=TIANJI_DARK, capsize=2.5),
+            error_kw=dict(elinewidth=1.0, ecolor=TIANJI_DARK, capsize=0),
         )
         rows.append({"metric": key, "label": label, "source": "Pangu", "value": pangu_mean})
         rows.append({"metric": key, "label": label, "source": "Tianji", "value": tianji_mean})

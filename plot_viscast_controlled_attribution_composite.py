@@ -131,11 +131,12 @@ def endpoint_distributions(metrics: pd.DataFrame, metric: str) -> tuple[np.ndarr
 def draw_operator_panel(
     ax: plt.Axes,
     matched: pd.DataFrame,
-    title: str,
+    title: Optional[str],
     specs: list[tuple[str, str]],
     *,
     show_ylabel: bool,
     show_legend: bool,
+    bottom_title: Optional[str] = None,
 ) -> pd.DataFrame:
     indexed = matched.set_index(matched["source"].astype(str).str.lower())
     if "ifs" not in indexed.index or "ifs_diagnostic" not in indexed.index:
@@ -152,7 +153,10 @@ def draw_operator_panel(
     ax.set_ylim(0.0, min(1.0, max(model_values.max(), diagnostic_values.max()) * 1.22))
     if show_ylabel:
         ax.set_ylabel("Score")
-    ax.set_title(title, loc="left", fontweight="bold", pad=7)
+    if title is not None:
+        ax.set_title(title, loc="left", fontweight="bold", pad=7)
+    if bottom_title is not None:
+        ax.set_xlabel(bottom_title)
     if show_legend:
         ax.legend(loc="upper left", fontsize=6.6)
     style_axis(ax)
