@@ -69,14 +69,14 @@ FIG2_CV_WIDTH_RATIOS = [1.0, 1.0, 1.0, 1.0]
 # --------------------------------------------------------------------------
 # Fig. 3 geometry
 # --------------------------------------------------------------------------
-FIG3_SIZE = (8.00, 7.10)
+FIG3_SIZE = (6.15, 5.46)
 FIG3_GRID = dict(
     height_ratios=[0.62, 1.34, 0.74],
     left=0.175,
     right=0.985,
     top=0.955,
     bottom=0.065,
-    hspace=0.3,
+    hspace=0.35,
 )
 FIG3_ROW1_WIDTH_RATIOS = [1.15, 1.0]
 FIG3_ROW1_WSPACE = 0.2
@@ -327,7 +327,14 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
         rows.append({"metric": key, "label": label, "source": "Tianji", "value": tianji_mean})
     ax.set_xticks(x, [label for _, label in specs])
     ax.set_xlim(-0.55, len(specs) - 0.45)
-    ax.set_ylim(0.25, min(1.0, max(0.40, maxima * 1.22)))
+    top = min(1.0, max(0.40, maxima * 1.22))
+    ax.set_ylim(0.25, top)
+    y_ticks = [0.25]
+    next_tick = 0.40
+    while next_tick <= top:
+        y_ticks.append(next_tick)
+        next_tick += 0.15
+    ax.set_yticks(y_ticks)
     ax.set_ylabel("Score")
     ax.set_xlabel("Skill")
     ax.legend(loc="upper left", frameon=False)
