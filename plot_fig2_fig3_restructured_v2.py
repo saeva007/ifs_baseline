@@ -76,11 +76,11 @@ FIG3_GRID = dict(
     right=0.985,
     top=0.955,
     bottom=0.065,
-    hspace=0.55,
+    hspace=0.3,
 )
 FIG3_ROW1_WIDTH_RATIOS = [1.15, 1.0]
-FIG3_ROW1_WSPACE = 0.30
-FIG3_ROW2_WSPACE = 0.24
+FIG3_ROW1_WSPACE = 0.2
+FIG3_ROW2_WSPACE = 0.12
 FIG3_ROW2_WIDTH_RATIOS = [1.0, 1.15]
 
 
