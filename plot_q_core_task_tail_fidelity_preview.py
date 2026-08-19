@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -350,7 +350,15 @@ def significance_style(row: pd.Series) -> Tuple[str, str]:
     return NEUTRAL, "D"
 
 
-def draw_tail_placement_panel(ax, selected: pd.DataFrame) -> pd.DataFrame:
+def draw_tail_placement_panel(
+    ax,
+    selected: pd.DataFrame,
+    *,
+    show_tail_direction: bool = True,
+    show_direction_labels: bool = True,
+    title: Optional[str] = None,
+    xlabel: Optional[str] = None,
+) -> pd.DataFrame:
     """Draw the established task-tail placement panel on a supplied axis."""
 
     y = np.arange(len(FEATURE_ORDER), dtype=float)
@@ -393,40 +401,50 @@ def draw_tail_placement_panel(ax, selected: pd.DataFrame) -> pd.DataFrame:
             annotation_clip=False,
         )
         direction = str(row["selected_task_tail_direction"])
-        labels.append(f"{FEATURE_LABELS[str(row['feature'])]}  ({direction})")
+        feature_label = FEATURE_LABELS[str(row["feature"])]
+        labels.append(
+            f"{feature_label}  ({direction})"
+            if show_tail_direction
+            else feature_label
+        )
 
     ax.set_yticks(y, labels)
     ax.invert_yaxis()
     ax.set_xlim(xmin, xmax)
-    ax.set_xlabel("Δ quantile-matched task-tail CSI  (Tianji − Pangu; 95% CI)")
+    ax.set_xlabel(
+        xlabel
+        if xlabel is not None
+        else "Δ quantile-matched task-tail CSI  (Tianji − Pangu; 95% CI)"
+    )
     ax.set_title(
-        "Tail-placement gains concentrate in temperature and wind",
+        title if title is not None else "Tail-placement gains concentrate in temperature and wind",
         loc="left",
         fontweight="bold",
         pad=12,
     )
-    ax.text(
-        0.01,
-        1.025,
-        "Pangu higher",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        color=PANGU_DARK,
-        fontsize=7.4,
-        fontweight="bold",
-    )
-    ax.text(
-        0.99,
-        1.025,
-        "Tianji higher",
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        color=TIANJI_DARK,
-        fontsize=7.4,
-        fontweight="bold",
-    )
+    if show_direction_labels:
+        ax.text(
+            0.01,
+            1.025,
+            "Pangu higher",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            color=PANGU_DARK,
+            fontsize=7.4,
+            fontweight="bold",
+        )
+        ax.text(
+            0.99,
+            1.025,
+            "Tianji higher",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            color=TIANJI_DARK,
+            fontsize=7.4,
+            fontweight="bold",
+        )
     style_axis(ax)
     return selected.assign(panel="task_tail_placement")
 

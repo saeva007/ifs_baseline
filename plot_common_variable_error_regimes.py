@@ -18,7 +18,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -465,9 +465,16 @@ def rmse_ratio_panel(
     label: str,
     show_y: bool,
     show_reference_labels: bool = False,
+    show_label: bool = True,
+    title_text: Optional[str] = None,
+    show_direction_labels: bool = True,
 ) -> None:
-    panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
-    title(ax, f"RMSE · {SCOPE_LABELS[scope]}", x=0.02, y=1.08)
+    if show_label:
+        panel_label(ax, label, x=-0.16 if show_y else -0.08, y=1.08)
+    effective_title = (
+        title_text if title_text is not None else f"RMSE · {SCOPE_LABELS[scope]}"
+    )
+    title(ax, effective_title, x=0.02, y=1.08)
     part = (
         source[(source["scope"] == scope) & (source["source"] == "pangu")]
         .set_index("feature")
@@ -545,28 +552,29 @@ def rmse_ratio_panel(
         ax.spines["left"].set_visible(False)
         ax.tick_params(axis="y", length=0)
     ax.set_xlabel("Tianji RMSE / Pangu RMSE")
-    ax.text(
-        0.01,
-        1.01,
-        "← Tianji closer",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=6.2,
-        fontweight="bold",
-        color=SOURCE_DARK_COLORS["tianji"],
-    )
-    ax.text(
-        0.99,
-        1.01,
-        "Pangu closer →",
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=6.2,
-        fontweight="bold",
-        color=SOURCE_DARK_COLORS["pangu"],
-    )
+    if show_direction_labels:
+        ax.text(
+            0.01,
+            1.01,
+            "← Tianji closer",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=6.2,
+            fontweight="bold",
+            color=SOURCE_DARK_COLORS["tianji"],
+        )
+        ax.text(
+            0.99,
+            1.01,
+            "Pangu closer →",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=6.2,
+            fontweight="bold",
+            color=SOURCE_DARK_COLORS["pangu"],
+        )
     add_family_bands(ax, show_reference_labels=show_reference_labels)
     style_axis(ax)
 

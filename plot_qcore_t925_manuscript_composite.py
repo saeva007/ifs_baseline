@@ -54,6 +54,71 @@ PACKAGE_COLORS = {
 }
 
 
+# Figure geometry.  Each panel keeps the aspect ratio of its standalone
+# figure; the grid solves row heights from the target aspects so the layout
+# can be changed by editing the canvas size and spacing only.
+_LAYOUT = {
+    "left": 0.185,
+    "right": 0.985,
+    "top": 0.920,
+    "bottom": 0.058,
+    "skill_wspace": 0.48,
+    "row2_wspace": 0.28,
+    "joint_wspace": 0.28,
+    "hspace": 0.55,
+    "skill_aspect": 1.05,
+    "rmse_aspect": 1.19,
+    "tail_aspect": 1.62,
+    "joint_aspect": 1.30,
+}
+
+
+def figure_layout() -> Dict[str, object]:
+    layout = _LAYOUT
+    left, right, top, bottom = (
+        layout["left"],
+        layout["right"],
+        layout["top"],
+        layout["bottom"],
+    )
+    avail_width = FIGURE_WIDTH * (right - left)
+
+    skill_unit = avail_width / (3 + 2 * layout["skill_wspace"])
+    skill_height = skill_unit / layout["skill_aspect"]
+
+    row2_sum = 2 * layout["rmse_aspect"] + layout["tail_aspect"]
+    row2_mean = row2_sum / 3
+    row2_unit = avail_width / (row2_sum + 2 * layout["row2_wspace"] * row2_mean)
+    row2_height = row2_unit
+
+    joint_unit = avail_width / (2 + layout["joint_wspace"])
+    joint_height = joint_unit / layout["joint_aspect"]
+
+    heights = [skill_height, row2_height, joint_height]
+    average_height = sum(heights) / len(heights)
+    figure_height = (
+        sum(heights) + (len(heights) - 1) * layout["hspace"] * average_height
+    ) / (top - bottom)
+
+    return {
+        "left": left,
+        "right": right,
+        "top": top,
+        "bottom": bottom,
+        "hspace": layout["hspace"],
+        "skill_wspace": layout["skill_wspace"],
+        "row2_wspace": layout["row2_wspace"],
+        "joint_wspace": layout["joint_wspace"],
+        "height_ratios": heights,
+        "row2_width_ratios": [
+            layout["rmse_aspect"],
+            layout["rmse_aspect"],
+            layout["tail_aspect"],
+        ],
+        "figure_height": figure_height,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -251,8 +316,25 @@ def load_tail_inputs(tail_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return ci, metrics
 
 
-def panel_label(ax, letter: str) -> None:
-    ax.text(-0.16, 1.08, letter, transform=ax.transAxes, ha="left", va="bottom", fontsize=10, fontweight="bold", color=INK)
+def panel_letter(fig, ax, letter: str) -> None:
+    """Hug a manuscript panel letter to the axes' top-left corner.
+
+    The letter extends left into the column gap so it can never collide with
+    the above-axes title, which starts at the axes' left edge, or with the
+    y tick labels, which sit at least one tick below the top edge.
+    """
+
+    bbox = ax.get_position()
+    fig.text(
+        bbox.x0 - 0.010,
+        bbox.y1 - 0.004,
+        letter,
+        ha="right",
+        va="top",
+        fontsize=10,
+        fontweight="bold",
+        color=INK,
+    )
 
 
 def style_axis(ax, xgrid: bool = False, ygrid: bool = True) -> None:
@@ -622,40 +704,45 @@ def main() -> None:
         directions[feature] = tails[0]
     placement = tail_plot.select_placement_rows(placement_ci, directions)
 
-    fig = plt.figure(figsize=(FIGURE_WIDTH, 9.45))
+    layout = figure_layout()
+    fig = plt.figure(figsize=(FIGURE_WIDTH, float(layout["figure_height"])))
     outer = fig.add_gridspec(
         3,
         1,
-        height_ratios=[0.86, 1.16, 1.18],
-        left=0.185,
-        right=0.985,
-        top=0.955,
-        bottom=0.065,
-        hspace=0.59,
+        height_ratios=layout["height_ratios"],
+        left=layout["left"],
+        right=layout["right"],
+        top=layout["top"],
+        bottom=layout["bottom"],
+        hspace=layout["hspace"],
     )
-    skill_grid = outer[0].subgridspec(1, 3, wspace=0.48)
-    rmse_grid = outer[1].subgridspec(1, 2, wspace=0.19)
-    tail_grid = outer[2].subgridspec(1, 3, width_ratios=[1.18, 1.0, 1.0], wspace=0.45)
+    skill_grid = outer[0].subgridspec(1, 3, wspace=layout["skill_wspace"])
+    rmse_grid = outer[1].subgridspec(
+        1,
+        3,
+        width_ratios=layout["row2_width_ratios"],
+        wspace=layout["row2_wspace"],
+    )
+    joint_grid = outer[2].subgridspec(1, 2, wspace=layout["joint_wspace"])
     skill_axes = [fig.add_subplot(skill_grid[0, index]) for index in range(3)]
     rmse_axes = [fig.add_subplot(rmse_grid[0, index]) for index in range(2)]
-    tail_axes = [fig.add_subplot(tail_grid[0, index]) for index in range(3)]
+    tail_axis = fig.add_subplot(rmse_grid[0, 2])
+    joint_axes = [fig.add_subplot(joint_grid[0, index]) for index in range(2)]
 
     metrics = endpoint_tables["metrics"]
     gap = endpoint_tables["gap"]
     source_frames = [
         controlled_plot.draw_endpoint_panel(
-            skill_axes[0], metrics, "low_vis_ap", "Low-vis average precision", "Average precision"
+            skill_axes[0], metrics, "low_vis_ap", "Low-vis AP", "Average precision"
         ),
         controlled_plot.draw_endpoint_panel(
-            skill_axes[1], metrics, "low_vis_recall_matched_fpr", "Recall at matched FPR", "Low-vis recall"
+            skill_axes[1], metrics, "low_vis_recall_matched_fpr", "Matched-FPR recall", "Low-vis recall"
         ),
         controlled_plot.draw_delta_panel(skill_axes[2], metrics, gap),
     ]
-    for letter, axis in zip("abc", skill_axes):
-        controlled_plot.panel_label(axis, letter, x=-0.24)
 
     for axis, scope, letter, show_y in (
-        (rmse_axes[0], quality_plot.SCOPES[0], "d", True),
+        (rmse_axes[0], quality_plot.SCOPES[0], "d", False),
         (rmse_axes[1], quality_plot.SCOPES[1], "e", False),
     ):
         quality_plot.rmse_ratio_panel(
@@ -665,7 +752,15 @@ def main() -> None:
             letter,
             show_y,
             show_reference_labels=False,
+            show_label=False,
+            title_text=(
+                "RMSE · All samples"
+                if scope == quality_plot.SCOPES[0]
+                else "RMSE · Low-vis"
+            ),
+            show_direction_labels=False,
         )
+        axis.set_xlabel("Tianji / Pangu RMSE")
         source_frames.append(
             quality_source[quality_source["scope"] == scope].assign(
                 panel_metric=f"rmse_{scope}"
@@ -685,15 +780,19 @@ def main() -> None:
         axis.set_xticks(rmse_ticks, [f"{value:g}" for value in rmse_ticks])
 
     source_frames.append(
-        tail_plot.draw_tail_placement_panel(tail_axes[0], placement).assign(
-            panel_metric="task_tail_placement"
-        )
+        tail_plot.draw_tail_placement_panel(
+            tail_axis,
+            placement,
+            show_tail_direction=False,
+            show_direction_labels=False,
+            title="Task-tail placement gains",
+            xlabel="Δ task-tail CSI (Tianji − Pangu)",
+        ).assign(panel_metric="task_tail_placement")
     )
-    panel_label(tail_axes[0], "f")
     source_frames.extend(
         [
             draw_joint_scope(
-                tail_axes[1],
+                joint_axes[0],
                 joint_ci,
                 joint_metrics,
                 "all_paired",
@@ -701,7 +800,7 @@ def main() -> None:
                 True,
             ).assign(panel_metric="joint_tail_all_paired"),
             draw_joint_scope(
-                tail_axes[2],
+                joint_axes[1],
                 joint_ci,
                 joint_metrics,
                 "true_low_visibility",
@@ -710,8 +809,17 @@ def main() -> None:
             ).assign(panel_metric="joint_tail_low_visibility"),
         ]
     )
-    for letter, axis in zip("gh", tail_axes[1:]):
-        panel_label(axis, letter)
+    for letter, axis in [
+        ("a", skill_axes[0]),
+        ("b", skill_axes[1]),
+        ("c", skill_axes[2]),
+        ("d", rmse_axes[0]),
+        ("e", rmse_axes[1]),
+        ("f", tail_axis),
+        ("g", joint_axes[0]),
+        ("h", joint_axes[1]),
+    ]:
+        panel_letter(fig, axis, letter)
 
     fig.legend(
         handles=[
@@ -758,8 +866,7 @@ def main() -> None:
         "figures": rendered,
         "panels": {
             "a-c": "forecast-source endpoint skill",
-            "d-e": "paired RMSE ratios for all and observed Low-vis samples",
-            "f": "task-tail placement",
+            "d-f": "paired RMSE ratios for all and observed Low-vis samples and task-tail placement",
             "g-h": "joint-tail recovery for all and observed Low-vis samples",
         },
         "task_tail_directions": directions,
