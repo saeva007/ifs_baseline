@@ -52,14 +52,14 @@ INK = "#17191B"
 # --------------------------------------------------------------------------
 # Fig. 2 geometry
 # --------------------------------------------------------------------------
-FIG2_SIZE = (7.60, 6.35)
+FIG2_SIZE = (7.60, 5)
 FIG2_GRID = dict(
-    height_ratios=[0.72, 1.18],
+    height_ratios=[0.85, 0.85],
     left=0.105,
     right=0.985,
-    top=0.955,
+    top=0.920,
     bottom=0.085,
-    hspace=0.48,
+    hspace=0.3,
 )
 FIG2_OPERATOR_WSPACE = 0.42
 FIG2_CV_WSPACE = 0.24
@@ -212,7 +212,11 @@ def draw_fig2(
         1, 4, width_ratios=FIG2_CV_WIDTH_RATIOS, wspace=FIG2_CV_WSPACE
     )
     operator_axes = [fig.add_subplot(operator_grid[0, index]) for index in range(3)]
-    cv_axes = [fig.add_subplot(cv_grid[0, index]) for index in range(4)]
+    cv_axes = [fig.add_subplot(cv_grid[0, 0])]
+    cv_axes.extend(
+        fig.add_subplot(cv_grid[0, index], sharey=cv_axes[0])
+        for index in range(1, 4)
+    )
 
     operator_panels = [
         (
@@ -266,6 +270,8 @@ def draw_fig2(
             model_order=model_order,
             model_labels=model_labels,
         )
+    for axis in cv_axes[1:]:
+        axis.tick_params(axis="y", labelleft=False)
     cv_axes[0].legend(
         loc="upper left",
         handlelength=1.8,
