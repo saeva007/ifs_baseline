@@ -350,6 +350,8 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
     ax.set_xlabel("Skill")
     ax.legend(loc="upper left", frameon=False)
     composite.style_axis(ax)
+    ax.grid(axis="y", color="#E8EAEB", linewidth=0.6, zorder=0)
+    ax.set_axisbelow(True)
     return pd.DataFrame(rows)
 
 
@@ -371,6 +373,8 @@ def draw_leadtime_rmse_panel(
     for i, (feature, label) in enumerate(feature_specs):
         top = 1.0 - i / n
         strip = ax.inset_axes([0.0, top - 1.0 / n, 1.0, 1.0 / n], zorder=2)
+        strip.tick_params(length=2.7, width=0.75, color=INK, pad=2.0)
+        strip.tick_params(labelsize=7.5)
         part = table[table["feature"].astype(str) == feature].copy()
         part["lead_hour"] = pd.to_numeric(part["lead_hour"], errors="coerce")
         for source, color in LEAD_SOURCE_COLORS.items():
@@ -389,17 +393,17 @@ def draw_leadtime_rmse_panel(
         if i < n - 1:
             strip.tick_params(labelbottom=False)
         else:
-            strip.set_xlabel(xlabel, fontsize=7.5)
-        strip.tick_params(labelsize=6.5)
+            strip.set_xlabel(xlabel, fontsize=8.5)
         strip.set_yticks([])
-        strip.set_ylabel(label, fontsize=7.5, rotation=0, ha="right", va="center", labelpad=4)
+        strip.set_ylabel(label, fontsize=8.0, rotation=0, ha="right", va="center", labelpad=4)
         values = pd.to_numeric(part["rmse"], errors="coerce").dropna()
         vmax = float(values.max()) if len(values) else 1.0
         strip.set_ylim(0.0, vmax * 1.2 if vmax > 0 else 1.0)
-        strip.grid(axis="x", color="#E8EAEB", linewidth=0.5)
+        strip.grid(axis="y", color="#E8EAEB", linewidth=0.6, zorder=0)
+        strip.set_axisbelow(True)
         for spine in strip.spines.values():
-            spine.set_color("#CBD1D8")
-            spine.set_linewidth(0.5)
+            spine.set_color(INK)
+            spine.set_linewidth(0.75)
         strips.append(strip)
     if strips:
         strips[0].legend(loc="upper right", fontsize=6.5, frameon=False)
@@ -429,6 +433,8 @@ def draw_fig3(
         )
     )
     b_ax.set_yticklabels(["AP", "Recall"])
+    b_ax.grid(axis="y", color="#E8EAEB", linewidth=0.6, zorder=0)
+    b_ax.set_axisbelow(True)
     composite.panel_label(b_ax, "b", dx=0.14, dy_frac=0.04)
 
     row2 = outer[1].subgridspec(
@@ -436,9 +442,9 @@ def draw_fig3(
     )
     c_ax = fig.add_subplot(row2[0, 0])
     d_ax = fig.add_subplot(row2[0, 1])
-    draw_leadtime_rmse_panel(c_ax, station_lead, STATION_LEAD_FEATURES, "Lead time (h)")
+    draw_leadtime_rmse_panel(c_ax, station_lead, STATION_LEAD_FEATURES, "RMSE · Lead time (h)")
     composite.panel_label(c_ax, "c")
-    draw_leadtime_rmse_panel(d_ax, era5_lead, ERA5_LEAD_FEATURES, "Lead time (h)")
+    draw_leadtime_rmse_panel(d_ax, era5_lead, ERA5_LEAD_FEATURES, "RMSE · Lead time (h)")
     composite.panel_label(d_ax, "d")
     source_frames.append(station_lead.assign(panel_metric="station_lead_rmse"))
     source_frames.append(era5_lead.assign(panel_metric="era5_lead_rmse"))
@@ -453,14 +459,18 @@ def draw_fig3(
         placement,
         show_tail_direction=False,
         show_direction_labels=False,
-        show_y=False,
+        show_y=True,
         show_values=False,
         shading="none",
         xgrid=False,
         title=None,
         xlabel="Δ task-tail CSI (Tianji − Pangu)",
     )
-    e_ax.spines["left"].set_visible(True)
+    e_ax.set_yticklabels(
+        ["T2m", "WS10m", "SLP", "T925", "Q1000", "Q925", "UV925"]
+    )
+    e_ax.grid(axis="y", color="#E8EAEB", linewidth=0.6, zorder=0)
+    e_ax.set_axisbelow(True)
     composite.panel_label(e_ax, "e", dx=0.14, dy_frac=0.04)
     source_frames.append(placement.assign(panel_metric="task_tail_placement"))
     source_frames.append(
@@ -473,6 +483,8 @@ def draw_fig3(
             True,
         ).assign(panel_metric="joint_tail_all_paired")
     )
+    f_ax.grid(axis="y", color="#E8EAEB", linewidth=0.6, zorder=0)
+    f_ax.set_axisbelow(True)
     composite.panel_label(f_ax, "f")
     return pd.concat(source_frames, ignore_index=True, sort=False)
 
