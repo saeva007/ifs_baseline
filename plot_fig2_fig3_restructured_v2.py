@@ -357,6 +357,19 @@ LEAD_SOURCE_COLORS = {"pangu": PANGU, "tianji": TIANJI}
 LEAD_SOURCE_LABELS = {"pangu": "Pangu", "tianji": "Tianji"}
 
 
+def _nice_strip_ticks(vmax: float) -> list:
+    top = max(1.0, float(np.ceil(vmax)))
+    step = 1.0 if top <= 5 else 2.0 if top <= 12 else 5.0
+    ticks = [0.0]
+    value = step
+    while value < top - 1e-9:
+        ticks.append(value)
+        value += step
+    if not np.isclose(ticks[-1], top):
+        ticks.append(top)
+    return ticks
+
+
 def draw_leadtime_rmse_panel(
     ax,
     table: pd.DataFrame,
@@ -396,8 +409,9 @@ def draw_leadtime_rmse_panel(
         values = pd.to_numeric(part["rmse"], errors="coerce").dropna()
         vmax = float(values.max()) if len(values) else 1.0
         strip.set_ylim(0.0, vmax * 1.2 if vmax > 0 else 1.0)
-        strip.set_yticks([0.0, vmax * 0.5, vmax])
-        strip.set_yticklabels([f"{0.0:g}", f"{vmax * 0.5:g}", f"{vmax:g}"])
+        ticks = _nice_strip_ticks(vmax)
+        strip.set_yticks(ticks)
+        strip.set_yticklabels([f"{value:g}" for value in ticks])
         strip.tick_params(labelsize=6.8)
         for spine in strip.spines.values():
             spine.set_color(INK)
