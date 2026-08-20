@@ -32,6 +32,7 @@ LOW_VIS_THRESHOLD_M="${LOW_VIS_THRESHOLD_M:-1000}"
 PYTHON_BIN="${PYTHON_BIN:-/public/home/jarvis226/miniconda3/envs/torch/bin/python}"
 PLOT_ERROR_REGIMES="${PLOT_ERROR_REGIMES:-1}"
 PLOT_SCRIPT="${PLOT_SCRIPT:-${BASELINE_DIR}/plot_common_variable_error_regimes.py}"
+ANALYSIS_SCRIPT="${ANALYSIS_SCRIPT:-${BASELINE_DIR}/analyze_q_core_paired_source_quality.py}"
 
 mkdir -p "${BASELINE_DIR}/logs" "${OUT_DIR}" "${FIGURE_OUT_DIR}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
@@ -43,7 +44,7 @@ export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
 
 CMD=(
-  "${PYTHON_BIN}" "${BASELINE_DIR}/analyze_q_core_paired_source_quality.py"
+  "${PYTHON_BIN}" "${ANALYSIS_SCRIPT}"
   --pangu-dir "${PANGU_DATA_DIR}"
   --tianji-dir "${TIANJI_DATA_DIR}"
   --era5-dir "${ERA5_DATA_DIR}"

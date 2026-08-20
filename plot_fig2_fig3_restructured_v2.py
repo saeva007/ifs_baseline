@@ -69,19 +69,29 @@ FIG2_CV_WIDTH_RATIOS = [1.0, 1.0, 1.0, 1.0]
 # --------------------------------------------------------------------------
 # Fig. 3 geometry
 # --------------------------------------------------------------------------
-FIG3_SIZE = (6.15, 5.46)
+FIG3_SIZE = (7.60, 7.60)
 FIG3_GRID = dict(
-    height_ratios=[0.62, 1.34, 0.74],
-    left=0.175,
+    height_ratios=[0.62, 1.45, 0.85],
+    left=0.170,
     right=0.985,
     top=0.955,
     bottom=0.065,
-    hspace=0.35,
+    hspace=0.45,
 )
-FIG3_ROW1_WIDTH_RATIOS = [1.15, 1.0]
-FIG3_ROW1_WSPACE = 0.2
-FIG3_ROW2_WSPACE = 0.12
-FIG3_ROW2_WIDTH_RATIOS = [1.0, 1.15]
+FIG3_ROW1_WIDTH_RATIOS = [1.0, 1.0]
+FIG3_ROW1_WSPACE = 0.28
+FIG3_ROW2_WIDTH_RATIOS = [1.0, 1.0]
+FIG3_ROW2_WSPACE = 0.28
+FIG3_ROW3_WIDTH_RATIOS = [1.0, 1.0]
+FIG3_ROW3_WSPACE = 0.28
+
+STATION_LEAD_FEATURES = [("T2M", "T2m"), ("WSPD10", "WS10m"), ("MSLP", "SLP")]
+ERA5_LEAD_FEATURES = [
+    ("T_925", "T925"),
+    ("Q_1000", "Q1000"),
+    ("Q_925", "Q925"),
+    ("UV_925_VECTOR", "UV925"),
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,6 +111,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fig3-analysis-dir", type=Path)
     parser.add_argument("--fig3-endpoint-dir", type=Path)
     parser.add_argument("--fig3-tail-analysis-dir", type=Path)
+    parser.add_argument("--fig3-leadtime-dir", type=Path)
     parser.add_argument("--fig3-paired-quality-dir", type=Path)
     parser.add_argument("--fig3-stem", default="fig3_restructured_v2")
     return parser.parse_args()
@@ -342,6 +353,58 @@ def draw_endpoint_ap_recall_panel(ax, metrics: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+LEAD_SOURCE_COLORS = {"pangu": PANGU, "tianji": TIANJI}
+LEAD_SOURCE_LABELS = {"pangu": "Pangu", "tianji": "Tianji"}
+
+
+def draw_leadtime_rmse_panel(
+    ax,
+    table: pd.DataFrame,
+    feature_specs: Sequence[Tuple[str, str]],
+    xlabel: str,
+) -> None:
+    """Stack one RMSE-vs-leadtime line chart per variable inside the panel."""
+
+    ax.set_axis_off()
+    n = len(feature_specs)
+    strips = []
+    for i, (feature, label) in enumerate(feature_specs):
+        top = 1.0 - i / n
+        strip = ax.inset_axes([0.0, top - 1.0 / n, 1.0, 1.0 / n], zorder=2)
+        part = table[table["feature"].astype(str) == feature].copy()
+        part["lead_hour"] = pd.to_numeric(part["lead_hour"], errors="coerce")
+        for source, color in LEAD_SOURCE_COLORS.items():
+            sub = part[part["source"].astype(str) == source].sort_values("lead_hour")
+            if sub.empty:
+                continue
+            strip.plot(
+                sub["lead_hour"],
+                pd.to_numeric(sub["rmse"], errors="coerce"),
+                color=color,
+                linewidth=1.5,
+                label=LEAD_SOURCE_LABELS[source] if i == 0 else None,
+            )
+        strip.set_xlim(11.5, 24.5)
+        strip.set_xticks([12, 16, 20, 24])
+        if i < n - 1:
+            strip.tick_params(labelbottom=False)
+        else:
+            strip.set_xlabel(xlabel, fontsize=7.5)
+        strip.tick_params(labelsize=6.5)
+        strip.set_yticks([])
+        strip.set_ylabel(label, fontsize=7.5, rotation=0, ha="right", va="center", labelpad=4)
+        values = pd.to_numeric(part["rmse"], errors="coerce").dropna()
+        vmax = float(values.max()) if len(values) else 1.0
+        strip.set_ylim(0.0, vmax * 1.2 if vmax > 0 else 1.0)
+        strip.grid(axis="x", color="#E8EAEB", linewidth=0.5)
+        for spine in strip.spines.values():
+            spine.set_color("#CBD1D8")
+            spine.set_linewidth(0.5)
+        strips.append(strip)
+    if strips:
+        strips[0].legend(loc="upper right", fontsize=6.5, frameon=False)
+
+
 def draw_fig3(
     fig: plt.Figure,
     metrics: pd.DataFrame,
@@ -349,7 +412,8 @@ def draw_fig3(
     joint_ci: pd.DataFrame,
     joint_metrics: pd.DataFrame,
     placement: pd.DataFrame,
-    quality_source: pd.DataFrame,
+    station_lead: pd.DataFrame,
+    era5_lead: pd.DataFrame,
 ) -> pd.DataFrame:
     outer = fig.add_gridspec(3, 1, **FIG3_GRID)
     row1 = outer[0].subgridspec(
@@ -370,35 +434,22 @@ def draw_fig3(
     row2 = outer[1].subgridspec(
         1, 2, width_ratios=FIG3_ROW2_WIDTH_RATIOS, wspace=FIG3_ROW2_WSPACE
     )
-    d_ax = fig.add_subplot(row2[0, 0])
-    f_ax = fig.add_subplot(row2[0, 1])
+    c_ax = fig.add_subplot(row2[0, 0])
+    d_ax = fig.add_subplot(row2[0, 1])
+    draw_leadtime_rmse_panel(c_ax, station_lead, STATION_LEAD_FEATURES, "Lead time (h)")
+    composite.panel_label(c_ax, "c")
+    draw_leadtime_rmse_panel(d_ax, era5_lead, ERA5_LEAD_FEATURES, "Lead time (h)")
+    composite.panel_label(d_ax, "d")
+    source_frames.append(station_lead.assign(panel_metric="station_lead_rmse"))
+    source_frames.append(era5_lead.assign(panel_metric="era5_lead_rmse"))
 
-    quality_plot.rmse_ratio_panel(
-        d_ax,
-        quality_source,
-        quality_plot.SCOPES[0],
-        "d",
-        True,
-        show_reference_labels=False,
-        show_label=False,
-        show_direction_labels=False,
-        title_text="",
-        show_bands=False,
+    row3 = outer[2].subgridspec(
+        1, 2, width_ratios=FIG3_ROW3_WIDTH_RATIOS, wspace=FIG3_ROW3_WSPACE
     )
-    d_ax.set_xlabel("Tianji / Pangu RMSE")
-    d_ax.set_yticklabels(
-        ["T2m", "WS10m", "SLP", "T925", "Q1000", "Q925", "UV925"]
-    )
-    d_ax.axhline(2.5, color=INK, linestyle="--", linewidth=0.9, zorder=1)
-    composite.panel_label(d_ax, "c")
-    source_frames.append(
-        quality_source[quality_source["scope"] == quality_plot.SCOPES[0]].assign(
-            panel_metric="rmse_all_paired"
-        )
-    )
-
+    e_ax = fig.add_subplot(row3[0, 0])
+    f_ax = fig.add_subplot(row3[0, 1])
     tail_plot.draw_tail_placement_panel(
-        f_ax,
+        e_ax,
         placement,
         show_tail_direction=False,
         show_direction_labels=False,
@@ -409,14 +460,12 @@ def draw_fig3(
         title=None,
         xlabel="Δ task-tail CSI (Tianji − Pangu)",
     )
-    f_ax.spines["left"].set_visible(True)
-    composite.panel_label(f_ax, "d", dx=0.14, dy_frac=0.04)
+    e_ax.spines["left"].set_visible(True)
+    composite.panel_label(e_ax, "e", dx=0.14, dy_frac=0.04)
     source_frames.append(placement.assign(panel_metric="task_tail_placement"))
-
-    g_ax = fig.add_subplot(outer[2, 0])
     source_frames.append(
         composite.draw_joint_scope(
-            g_ax,
+            f_ax,
             joint_ci,
             joint_metrics,
             "all_paired",
@@ -424,7 +473,7 @@ def draw_fig3(
             True,
         ).assign(panel_metric="joint_tail_all_paired")
     )
-    composite.panel_label(g_ax, "e")
+    composite.panel_label(f_ax, "f")
     return pd.concat(source_frames, ignore_index=True, sort=False)
 
 
@@ -439,14 +488,17 @@ def load_fig3_tables(args: argparse.Namespace):
         if args.fig3_tail_analysis_dir
         else analysis_dir
     )
-    paired_dir = composite.resolve_paired_quality_dir(
-        analysis_dir,
-        endpoint_dir,
-        Path(args.fig3_paired_quality_dir) if args.fig3_paired_quality_dir else None,
-    )
+    if not args.fig3_leadtime_dir:
+        raise SystemExit(
+            "fig3 requires --fig3-leadtime-dir containing "
+            "station_reference_rmse_by_lead_hour.csv and "
+            "era5_reference_rmse_by_lead_hour.csv"
+        )
+    leadtime_dir = Path(args.fig3_leadtime_dir).expanduser().resolve()
+    station_lead = pd.read_csv(leadtime_dir / "station_reference_rmse_by_lead_hour.csv")
+    era5_lead = pd.read_csv(leadtime_dir / "era5_reference_rmse_by_lead_hour.csv")
     endpoint_tables = composite.load_inputs(endpoint_dir)
     joint_ci, joint_metrics = composite.load_tail_inputs(tail_dir)
-    quality_source = quality_plot.prepare_source(paired_dir)
     placement_metrics = tail_plot.load_table(
         tail_dir,
         "reference_tail_placement_metrics.csv",
@@ -500,7 +552,15 @@ def load_fig3_tables(args: argparse.Namespace):
             )
         directions[feature] = tails[0]
     placement = tail_plot.select_placement_rows(placement_ci, directions)
-    return endpoint_tables, joint_ci, joint_metrics, quality_source, placement, directions
+    return (
+        endpoint_tables,
+        joint_ci,
+        joint_metrics,
+        placement,
+        directions,
+        station_lead,
+        era5_lead,
+    )
 
 
 def main() -> None:
@@ -603,9 +663,15 @@ def main() -> None:
     if args.which in {"both", "fig3"}:
         if not (args.fig3_analysis_dir and args.fig3_endpoint_dir):
             raise SystemExit("fig3 requires --fig3-analysis-dir and --fig3-endpoint-dir")
-        endpoint_tables, joint_ci, joint_metrics, quality_source, placement, directions = load_fig3_tables(
-            args
-        )
+        (
+            endpoint_tables,
+            joint_ci,
+            joint_metrics,
+            placement,
+            directions,
+            station_lead,
+            era5_lead,
+        ) = load_fig3_tables(args)
         fig3 = plt.figure(figsize=FIG3_SIZE)
         fig3_source = draw_fig3(
             fig3,
@@ -614,7 +680,8 @@ def main() -> None:
             joint_ci,
             joint_metrics,
             placement,
-            quality_source,
+            station_lead,
+            era5_lead,
         )
         fig3_outputs = export(fig3, output_dir, args.fig3_stem, formats, args.dpi)
         plt.close(fig3)
@@ -629,10 +696,11 @@ def main() -> None:
                     "panels": {
                         "a": "AP and recall, Pangu versus Tianji",
                         "b": "bootstrap differences",
-                        "c": "paired RMSE ratio, all samples",
-                        "d": "task-tail placement",
-                        "e": "joint-tail recovery, all paired samples",
-                        "removed": {"f": "supplement (old c)", "g": "RMSE low-vis (old e)", "h": "joint low-vis"},
+                        "c": "station-reference RMSE by lead time (12-24 h)",
+                        "d": "ERA5-reference RMSE by lead time (12-24 h)",
+                        "e": "task-tail placement",
+                        "f": "joint-tail recovery, all paired samples",
+                        "removed": {"old-c": "mean RMSE ratio", "old-e": "RMSE low-vis", "old-h": "joint low-vis"},
                     },
                     "task_tail_directions": directions,
                     "outputs": fig3_outputs,
