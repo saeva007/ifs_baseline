@@ -24,7 +24,9 @@ ERA5_DATA_DIR="${ERA5_DATA_DIR:-${DATA_ROOT}/era5_2025}"
 OBS_ROOT="${OBS_ROOT:-${BASE}/auto_station}"
 PAPER_EVAL_DIR="${PAPER_EVAL_DIR:-${BASE}/paper_eval}"
 OUT_DIR="${OUT_DIR:-${BASE}/paper_eval_results_pm10_pm25_journal/q_core_task_tail_fidelity/${RUN_TAG}/analysis}"
-FEATURES="${FEATURES:-T2M,Q_1000}"
+# Keep the two figure features local to this script.  A comma-containing value
+# must not be transported through Slurm's comma-delimited --export argument.
+FEATURES="T2M,Q_1000"
 FIT_MAX_ROWS="${FIT_MAX_ROWS:-0}"
 TEST_MAX_ROWS="${TEST_MAX_ROWS:-0}"
 SELECTION_SEED="${SELECTION_SEED:-20260820}"

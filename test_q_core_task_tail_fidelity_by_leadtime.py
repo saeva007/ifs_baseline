@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,21 @@ import analyze_q_core_task_tail_fidelity_by_leadtime as target
 
 
 class TaskTailByLeadtimeTest(unittest.TestCase):
+    def test_launcher_does_not_export_comma_separated_features(self) -> None:
+        root = Path(__file__).resolve().parent
+        submit = (root / "submit_q_core_task_tail_fidelity_by_leadtime.sh").read_text(
+            encoding="utf-8"
+        )
+        slurm = (root / "sub_q_core_task_tail_fidelity_by_leadtime.slurm").read_text(
+            encoding="utf-8"
+        )
+        exports_line = next(
+            line for line in submit.splitlines() if line.startswith("EXPORTS=")
+        )
+        self.assertNotIn("FEATURES=", exports_line)
+        self.assertIn('FEATURES="T2M,Q_1000"', submit)
+        self.assertIn('FEATURES="T2M,Q_1000"', slurm)
+
     def test_lead_derivation_uses_00_12z_stitching(self) -> None:
         keys = pd.DataFrame(
             {
