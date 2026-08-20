@@ -42,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--paper-eval-dir", default="/public/home/putianshu/vis_mlp/paper_eval")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--test-max-rows", type=int, default=0)
+    ap.add_argument(
+        "--bootstrap-iters",
+        type=int,
+        default=1000,
+        help="Accepted for submit-script compatibility; this leadtime analysis emits point estimates only.",
+    )
     ap.add_argument("--bootstrap-seed", type=int, default=20260715)
     ap.add_argument("--low-vis-threshold-m", type=float, default=1000.0)
     return ap.parse_args()
